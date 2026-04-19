@@ -1,0 +1,17 @@
+[package]
+name = "export-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+core-domain = { path = "../core-domain" }
+serde_json = "1"
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+storyboard-pipeline = { path = "../storyboard-pipeline" }
+validators = { path = "../validators" }
+writer-pipeline = { path = "../writer-pipeline" }

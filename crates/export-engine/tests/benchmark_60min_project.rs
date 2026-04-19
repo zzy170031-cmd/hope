@@ -1,0 +1,253 @@
+mod benchmark_support;
+
+use std::{collections::HashMap, fs, path::Path};
+
+use benchmark_support::{EpisodeSpec, read_json, write_fixture};
+use export_engine::{
+    WEEK3_EXPORT_JSON_PATH, WEEK3_EXPORT_MARKDOWN_PATH, WEEK3_EXPORT_XLSX_PATH,
+    export_week3_from_fixtures,
+};
+use storyboard_pipeline::validate_render_segment_window;
+use validators::{
+    WEEK3_SHARED_FIXTURE_PATH, WEEK3_VALIDATION_REPORT_PATH, generate_week3_validation_report,
+    load_week3_shared_fixture, write_week3_validation_report,
+};
+use writer_pipeline::{
+    DurationPolicy, JsonDocument, ScreenplayInput, ScreenplayOutput, StalePropagation,
+    StaleTrigger, StoryInput, StoryOutput, StructuredOutputMode, SynopsisInput,
+};
+
+const PROJECT_BRIEF_PATH: &str = r"E:\codex\hope\tests\e2e\60min-project\project-brief.json";
+const SYNOPSIS_PATH: &str = r"E:\codex\hope\tests\e2e\60min-project\synopsis.json";
+const STORY_PATH: &str = r"E:\codex\hope\tests\e2e\60min-project\story.json";
+const SCREENPLAY_PATH: &str = r"E:\codex\hope\tests\e2e\60min-project\screenplay.json";
+
+#[test]
+fn benchmark_60min_project_runs_end_to_end() {
+    write_fixture(
+        "60min project",
+        60,
+        &[
+            EpisodeSpec {
+                episode_id: "episode-week3-001",
+                title: "第 1 集",
+                duration_minutes: 22,
+                scene_count: 7,
+            },
+            EpisodeSpec {
+                episode_id: "episode-week3-002",
+                title: "第 2 集",
+                duration_minutes: 22,
+                scene_count: 7,
+            },
+            EpisodeSpec {
+                episode_id: "episode-week3-003",
+                title: "第 3 集",
+                duration_minutes: 16,
+                scene_count: 5,
+            },
+        ],
+    );
+
+    let project_brief = read_json(PROJECT_BRIEF_PATH);
+    let synopsis_json = fs::read_to_string(SYNOPSIS_PATH).expect("synopsis fixture should exist");
+    let story_json = fs::read_to_string(STORY_PATH).expect("story fixture should exist");
+    let screenplay_json =
+        fs::read_to_string(SCREENPLAY_PATH).expect("screenplay fixture should exist");
+
+    let synopsis = SynopsisInput {
+        document: JsonDocument::new(synopsis_json.clone()),
+    };
+    let story_input = StoryInput {
+        synopsis: synopsis.clone(),
+        duration_policy: DurationPolicy::frozen(),
+    };
+    let story_output = StoryOutput {
+        document: JsonDocument::new(story_json),
+        stale: StalePropagation {
+            trigger: StaleTrigger::SynopsisChanged,
+        },
+    };
+    let _screenplay_input = ScreenplayInput {
+        story: story_output.clone(),
+    };
+    let screenplay = read_json(SCREENPLAY_PATH);
+    let screenplay_output = ScreenplayOutput {
+        narrative_scenes: screenplay["narrative_scenes"]
+            .as_array()
+            .expect("narrative_scenes should be an array")
+            .iter()
+            .map(|scene| writer_pipeline::NarrativeSceneDraft {
+                document: JsonDocument::new(scene.to_string()),
+            })
+            .collect(),
+        dialogue_turns: screenplay["dialogue_turns"]
+            .as_array()
+            .expect("dialogue_turns should be an array")
+            .iter()
+            .map(|turn| writer_pipeline::DialogueTurnDraft {
+                document: JsonDocument::new(turn.to_string()),
+            })
+            .collect(),
+        output_mode: StructuredOutputMode::JsonOnly,
+    };
+
+    assert_eq!(project_brief["project_duration_minutes"].as_u64(), Some(60));
+    assert!(synopsis.document.json.contains("60"));
+    assert_eq!(
+        story_input
+            .duration_policy
+            .render_segment_target_min_seconds,
+        30
+    );
+    assert_eq!(
+        story_input
+            .duration_policy
+            .render_segment_target_max_seconds,
+        90
+    );
+    assert_eq!(
+        screenplay_output.output_mode,
+        StructuredOutputMode::JsonOnly
+    );
+    assert_eq!(screenplay_output.narrative_scenes.len(), 2);
+    assert_eq!(screenplay_output.dialogue_turns.len(), 2);
+    assert_eq!(story_output.stale.trigger, StaleTrigger::SynopsisChanged);
+    assert!(screenplay_json.contains("第 3 集"));
+
+    let fixture =
+        load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH).expect("shared fixture should load");
+    assert_eq!(fixture.project_meta[0].target_duration_minutes, 60);
+    assert_eq!(fixture.episode_meta.len(), 3);
+    assert_eq!(fixture.narrative_scene.len(), 19);
+    assert_eq!(fixture.render_segment.len(), 57);
+    assert_eq!(fixture.cut.len(), 171);
+    assert_eq!(fixture.handoff_zone.len(), 57);
+    assert_eq!(fixture.prompt_package.len(), 114);
+    assert_eq!(fixture.stale_event.len(), 57);
+
+    let total_episode_minutes: u32 = fixture
+        .episode_meta
+        .iter()
+        .map(|episode| episode.target_duration_minutes as u32)
+        .sum();
+    assert_eq!(total_episode_minutes, 60);
+    assert!(fixture.episode_meta.len() > 1);
+    assert_eq!(fixture.episode_meta[0].target_duration_minutes, 22);
+    assert_eq!(fixture.episode_meta[1].target_duration_minutes, 22);
+    assert!(fixture.episode_meta[2].target_duration_minutes <= 24);
+
+    let scene_to_episode: HashMap<_, _> = fixture
+        .narrative_scene
+        .iter()
+        .map(|scene| (scene.narrative_scene_id.as_str(), scene.episode_id.as_str()))
+        .collect();
+    let segment_to_scene: HashMap<_, _> = fixture
+        .render_segment
+        .iter()
+        .map(|segment| {
+            (
+                segment.render_segment_id.as_str(),
+                segment.narrative_scene_id.as_str(),
+            )
+        })
+        .collect();
+
+    for render_segment in &fixture.render_segment {
+        validate_render_segment_window(
+            render_segment.target_duration_seconds as u16,
+            render_segment.start_shot_sequence_no,
+            render_segment.end_shot_sequence_no,
+        )
+        .expect("render segments should stay in the frozen duration window");
+        assert!(scene_to_episode.contains_key(render_segment.narrative_scene_id.as_str()));
+    }
+
+    for hard_lock in &fixture.hard_lock {
+        assert_eq!(hard_lock.scope, "project");
+        for episode in &fixture.episode_meta {
+            assert_eq!(hard_lock.project_id, episode.project_id);
+        }
+    }
+
+    for prompt in &fixture.prompt_package {
+        let referenced_segment = fixture
+            .render_segment
+            .iter()
+            .find(|segment| {
+                prompt
+                    .prompt_package_id
+                    .contains(segment.render_segment_id.as_str())
+            })
+            .expect("prompt package should trace to a render segment");
+        let narrative_scene_id = segment_to_scene
+            .get(referenced_segment.render_segment_id.as_str())
+            .expect("render segment should trace to a narrative scene");
+        let episode_id = scene_to_episode
+            .get(*narrative_scene_id)
+            .expect("narrative scene should trace to an episode");
+
+        assert!(prompt.prompt_package_id.contains(*episode_id));
+        assert!(
+            fixture
+                .cut
+                .iter()
+                .any(|cut| cut.render_segment_id == referenced_segment.render_segment_id)
+        );
+    }
+
+    write_week3_validation_report(WEEK3_VALIDATION_REPORT_PATH)
+        .expect("validation report file should be written");
+    let validation = generate_week3_validation_report(&fixture)
+        .expect("validation report should generate from shared fixture");
+    assert_eq!(validation.validation_report.len(), 457);
+    assert!(validation.validation_report.iter().all(|row| row.passed));
+    assert!(
+        validation
+            .validation_report
+            .iter()
+            .all(|row| row.problem_count == 0)
+    );
+
+    let export_bundle = export_week3_from_fixtures().expect("export should succeed");
+    assert_eq!(export_bundle.workbook.sheets.len(), 17);
+    assert!(Path::new(WEEK3_EXPORT_XLSX_PATH).exists());
+    assert!(Path::new(WEEK3_EXPORT_JSON_PATH).exists());
+    assert!(Path::new(WEEK3_EXPORT_MARKDOWN_PATH).exists());
+
+    let export_json = read_json(WEEK3_EXPORT_JSON_PATH);
+    assert_eq!(
+        export_json["episode_meta"]
+            .as_array()
+            .expect("episode_meta")
+            .len(),
+        3
+    );
+    assert_eq!(
+        export_json["narrative_scene"]
+            .as_array()
+            .expect("narrative_scene")
+            .len(),
+        19
+    );
+    assert_eq!(
+        export_json["render_segment"]
+            .as_array()
+            .expect("render_segment")
+            .len(),
+        57
+    );
+    assert_eq!(export_json["cut"].as_array().expect("cut").len(), 171);
+    assert_eq!(
+        export_json["validation_report"]
+            .as_array()
+            .expect("validation_report")
+            .len(),
+        validation.validation_report.len()
+    );
+
+    let markdown =
+        fs::read_to_string(WEEK3_EXPORT_MARKDOWN_PATH).expect("markdown export should exist");
+    assert!(markdown.contains("## 集元数据 / `episode_meta`"));
+    assert!(markdown.contains("episode-week3-003"));
+}

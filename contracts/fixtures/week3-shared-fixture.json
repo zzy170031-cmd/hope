@@ -1,0 +1,681 @@
+{
+  "cinematography_term": [
+    {
+      "中文术语": "中景",
+      "别名": "中镜",
+      "定义": "突出人物与环境关系的中距离景别。",
+      "术语标识": "cinematography-term-week3-001",
+      "类别": "景别"
+    }
+  ],
+  "committee_template": [
+    {
+      "成员构成": "场景导演,动作导演",
+      "模板名称": "基础评审委员会",
+      "模板标识": "committee-template-week3-001",
+      "职责描述": "统一镜头节奏、动作推进与提示词风格。",
+      "适用场景": "常规叙事段落"
+    }
+  ],
+  "continuity_rule": [
+    {
+      "规则名称": "场景动作连续",
+      "规则标识": "continuity-rule-week3-001",
+      "规则说明": "同一叙事场景内镜头衔接保持动作方向一致。",
+      "适用层级": "NarrativeScene"
+    }
+  ],
+  "cut": [
+    {
+      "Cut标识": "cut-week3-001",
+      "RenderSegment标识": "render-segment-week3-001",
+      "对白": "第 1 集 第1拍继续执行。",
+      "序号": 1,
+      "时长秒": 23,
+      "镜头描述": "render-segment-week3-001 的第1个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-002",
+      "RenderSegment标识": "render-segment-week3-001",
+      "对白": "第 1 集 第2拍继续执行。",
+      "序号": 2,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-001 的第2个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-003",
+      "RenderSegment标识": "render-segment-week3-001",
+      "对白": "第 1 集 第3拍继续执行。",
+      "序号": 3,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-001 的第3个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-004",
+      "RenderSegment标识": "render-segment-week3-002",
+      "对白": "第 1 集 第4拍继续执行。",
+      "序号": 4,
+      "时长秒": 23,
+      "镜头描述": "render-segment-week3-002 的第1个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-005",
+      "RenderSegment标识": "render-segment-week3-002",
+      "对白": "第 1 集 第5拍继续执行。",
+      "序号": 5,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-002 的第2个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-006",
+      "RenderSegment标识": "render-segment-week3-002",
+      "对白": "第 1 集 第6拍继续执行。",
+      "序号": 6,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-002 的第3个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-007",
+      "RenderSegment标识": "render-segment-week3-003",
+      "对白": "第 1 集 第7拍继续执行。",
+      "序号": 7,
+      "时长秒": 23,
+      "镜头描述": "render-segment-week3-003 的第1个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-008",
+      "RenderSegment标识": "render-segment-week3-003",
+      "对白": "第 1 集 第8拍继续执行。",
+      "序号": 8,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-003 的第2个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-009",
+      "RenderSegment标识": "render-segment-week3-003",
+      "对白": "第 1 集 第9拍继续执行。",
+      "序号": 9,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-003 的第3个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-010",
+      "RenderSegment标识": "render-segment-week3-004",
+      "对白": "第 1 集 第10拍继续执行。",
+      "序号": 10,
+      "时长秒": 23,
+      "镜头描述": "render-segment-week3-004 的第1个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-011",
+      "RenderSegment标识": "render-segment-week3-004",
+      "对白": "第 1 集 第11拍继续执行。",
+      "序号": 11,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-004 的第2个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-012",
+      "RenderSegment标识": "render-segment-week3-004",
+      "对白": "第 1 集 第12拍继续执行。",
+      "序号": 12,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-004 的第3个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-013",
+      "RenderSegment标识": "render-segment-week3-005",
+      "对白": "第 1 集 第13拍继续执行。",
+      "序号": 13,
+      "时长秒": 23,
+      "镜头描述": "render-segment-week3-005 的第1个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-014",
+      "RenderSegment标识": "render-segment-week3-005",
+      "对白": "第 1 集 第14拍继续执行。",
+      "序号": 14,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-005 的第2个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-015",
+      "RenderSegment标识": "render-segment-week3-005",
+      "对白": "第 1 集 第15拍继续执行。",
+      "序号": 15,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-005 的第3个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-016",
+      "RenderSegment标识": "render-segment-week3-006",
+      "对白": "第 1 集 第16拍继续执行。",
+      "序号": 16,
+      "时长秒": 23,
+      "镜头描述": "render-segment-week3-006 的第1个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-017",
+      "RenderSegment标识": "render-segment-week3-006",
+      "对白": "第 1 集 第17拍继续执行。",
+      "序号": 17,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-006 的第2个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-018",
+      "RenderSegment标识": "render-segment-week3-006",
+      "对白": "第 1 集 第18拍继续执行。",
+      "序号": 18,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-006 的第3个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-019",
+      "RenderSegment标识": "render-segment-week3-007",
+      "对白": "第 1 集 第19拍继续执行。",
+      "序号": 19,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-007 的第1个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-020",
+      "RenderSegment标识": "render-segment-week3-007",
+      "对白": "第 1 集 第20拍继续执行。",
+      "序号": 20,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-007 的第2个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-021",
+      "RenderSegment标识": "render-segment-week3-007",
+      "对白": "第 1 集 第21拍继续执行。",
+      "序号": 21,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-007 的第3个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-022",
+      "RenderSegment标识": "render-segment-week3-008",
+      "对白": "第 1 集 第22拍继续执行。",
+      "序号": 22,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-008 的第1个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-023",
+      "RenderSegment标识": "render-segment-week3-008",
+      "对白": "第 1 集 第23拍继续执行。",
+      "序号": 23,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-008 的第2个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-024",
+      "RenderSegment标识": "render-segment-week3-008",
+      "对白": "第 1 集 第24拍继续执行。",
+      "序号": 24,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-008 的第3个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-025",
+      "RenderSegment标识": "render-segment-week3-009",
+      "对白": "第 1 集 第25拍继续执行。",
+      "序号": 25,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-009 的第1个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-026",
+      "RenderSegment标识": "render-segment-week3-009",
+      "对白": "第 1 集 第26拍继续执行。",
+      "序号": 26,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-009 的第2个 cut，保持中景推进。"
+    },
+    {
+      "Cut标识": "cut-week3-027",
+      "RenderSegment标识": "render-segment-week3-009",
+      "对白": "第 1 集 第27拍继续执行。",
+      "序号": 27,
+      "时长秒": 22,
+      "镜头描述": "render-segment-week3-009 的第3个 cut，保持中景推进。"
+    }
+  ],
+  "director_cut_sample": [
+    {
+      "代表性说明": "用于 E2E benchmark 的统一视觉与动作节奏参考。",
+      "导演切样标识": "director-cut-sample-week3-001",
+      "导演档案标识": "director-profile-week3-001",
+      "样例内容": "10min single episode维持冷色调、中景、稳定切分。",
+      "样例标题": "10min single episode切样"
+    }
+  ],
+  "director_profile": [
+    {
+      "主风格": "克制写实",
+      "定位": "场景主导",
+      "导演名称": "导演甲",
+      "导演档案标识": "director-profile-week3-001",
+      "镜头偏好": "中景与近景结合"
+    }
+  ],
+  "episode_meta": [
+    {
+      "序号": 1,
+      "标题": "第 1 集",
+      "目标时长分钟": 10,
+      "集标识": "episode-week3-001",
+      "项目标识": "project-week3-001"
+    }
+  ],
+  "export_manifest": [
+    {
+      "导出清单标识": "export-manifest-week3-001",
+      "工作簿版本": "10min-single-episode-fixture",
+      "状态": "准备导出",
+      "项目标识": "project-week3-001"
+    }
+  ],
+  "handoff_zone": [
+    {
+      "HandoffZone标识": "handoff-zone-week3-001",
+      "RenderSegment标识": "render-segment-week3-001",
+      "结束边界": "12",
+      "起始边界": "10",
+      "边界类型": "render_segment_boundary"
+    },
+    {
+      "HandoffZone标识": "handoff-zone-week3-002",
+      "RenderSegment标识": "render-segment-week3-002",
+      "结束边界": "15",
+      "起始边界": "13",
+      "边界类型": "render_segment_boundary"
+    },
+    {
+      "HandoffZone标识": "handoff-zone-week3-003",
+      "RenderSegment标识": "render-segment-week3-003",
+      "结束边界": "18",
+      "起始边界": "16",
+      "边界类型": "render_segment_boundary"
+    },
+    {
+      "HandoffZone标识": "handoff-zone-week3-004",
+      "RenderSegment标识": "render-segment-week3-004",
+      "结束边界": "21",
+      "起始边界": "19",
+      "边界类型": "render_segment_boundary"
+    },
+    {
+      "HandoffZone标识": "handoff-zone-week3-005",
+      "RenderSegment标识": "render-segment-week3-005",
+      "结束边界": "24",
+      "起始边界": "22",
+      "边界类型": "render_segment_boundary"
+    },
+    {
+      "HandoffZone标识": "handoff-zone-week3-006",
+      "RenderSegment标识": "render-segment-week3-006",
+      "结束边界": "27",
+      "起始边界": "25",
+      "边界类型": "render_segment_boundary"
+    },
+    {
+      "HandoffZone标识": "handoff-zone-week3-007",
+      "RenderSegment标识": "render-segment-week3-007",
+      "结束边界": "30",
+      "起始边界": "28",
+      "边界类型": "render_segment_boundary"
+    },
+    {
+      "HandoffZone标识": "handoff-zone-week3-008",
+      "RenderSegment标识": "render-segment-week3-008",
+      "结束边界": "33",
+      "起始边界": "31",
+      "边界类型": "render_segment_boundary"
+    },
+    {
+      "HandoffZone标识": "handoff-zone-week3-009",
+      "RenderSegment标识": "render-segment-week3-009",
+      "结束边界": "36",
+      "起始边界": "34",
+      "边界类型": "render_segment_boundary"
+    }
+  ],
+  "hard_lock": [
+    {
+      "HardLock标识": "hard-lock-week3-001",
+      "作用范围": "project",
+      "锁值": "禁止出现血腥暴力词汇",
+      "锁名": "negative_prompt_guard",
+      "项目标识": "project-week3-001"
+    }
+  ],
+  "narrative_scene": [
+    {
+      "内容摘要": "第 1 集的第1个叙事场景，保持中景与冷色调推进。",
+      "叙事场景标识": "narrative-scene-week3-001",
+      "序号": 1,
+      "标题": "第 1 集-场景1",
+      "集标识": "episode-week3-001"
+    },
+    {
+      "内容摘要": "第 1 集的第2个叙事场景，保持中景与冷色调推进。",
+      "叙事场景标识": "narrative-scene-week3-002",
+      "序号": 2,
+      "标题": "第 1 集-场景2",
+      "集标识": "episode-week3-001"
+    },
+    {
+      "内容摘要": "第 1 集的第3个叙事场景，保持中景与冷色调推进。",
+      "叙事场景标识": "narrative-scene-week3-003",
+      "序号": 3,
+      "标题": "第 1 集-场景3",
+      "集标识": "episode-week3-001"
+    }
+  ],
+  "project_meta": [
+    {
+      "更新时间戳": 1713513600,
+      "标题": "Hope 10min single episode",
+      "状态": "冻结中",
+      "目标时长分钟": 10,
+      "项目标识": "project-week3-001"
+    }
+  ],
+  "prompt_package": [
+    {
+      "PromptPackage标识": "prompt-package-layout-episode-week3-001-render-segment-week3-001",
+      "来源层级": "layout_prompt",
+      "正文": "冷色调，中景，第 1 集的render-segment-week3-001布局稳定推进。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-render-episode-week3-001-render-segment-week3-001",
+      "来源层级": "render_prompt",
+      "正文": "冷色调、克制写实光线、中景连续调度，围绕render-segment-week3-001稳定输出。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-layout-episode-week3-001-render-segment-week3-002",
+      "来源层级": "layout_prompt",
+      "正文": "冷色调，中景，第 1 集的render-segment-week3-002布局稳定推进。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-render-episode-week3-001-render-segment-week3-002",
+      "来源层级": "render_prompt",
+      "正文": "冷色调、克制写实光线、中景连续调度，围绕render-segment-week3-002稳定输出。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-layout-episode-week3-001-render-segment-week3-003",
+      "来源层级": "layout_prompt",
+      "正文": "冷色调，中景，第 1 集的render-segment-week3-003布局稳定推进。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-render-episode-week3-001-render-segment-week3-003",
+      "来源层级": "render_prompt",
+      "正文": "冷色调、克制写实光线、中景连续调度，围绕render-segment-week3-003稳定输出。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-layout-episode-week3-001-render-segment-week3-004",
+      "来源层级": "layout_prompt",
+      "正文": "冷色调，中景，第 1 集的render-segment-week3-004布局稳定推进。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-render-episode-week3-001-render-segment-week3-004",
+      "来源层级": "render_prompt",
+      "正文": "冷色调、克制写实光线、中景连续调度，围绕render-segment-week3-004稳定输出。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-layout-episode-week3-001-render-segment-week3-005",
+      "来源层级": "layout_prompt",
+      "正文": "冷色调，中景，第 1 集的render-segment-week3-005布局稳定推进。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-render-episode-week3-001-render-segment-week3-005",
+      "来源层级": "render_prompt",
+      "正文": "冷色调、克制写实光线、中景连续调度，围绕render-segment-week3-005稳定输出。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-layout-episode-week3-001-render-segment-week3-006",
+      "来源层级": "layout_prompt",
+      "正文": "冷色调，中景，第 1 集的render-segment-week3-006布局稳定推进。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-render-episode-week3-001-render-segment-week3-006",
+      "来源层级": "render_prompt",
+      "正文": "冷色调、克制写实光线、中景连续调度，围绕render-segment-week3-006稳定输出。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-layout-episode-week3-001-render-segment-week3-007",
+      "来源层级": "layout_prompt",
+      "正文": "冷色调，中景，第 1 集的render-segment-week3-007布局稳定推进。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-render-episode-week3-001-render-segment-week3-007",
+      "来源层级": "render_prompt",
+      "正文": "冷色调、克制写实光线、中景连续调度，围绕render-segment-week3-007稳定输出。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-layout-episode-week3-001-render-segment-week3-008",
+      "来源层级": "layout_prompt",
+      "正文": "冷色调，中景，第 1 集的render-segment-week3-008布局稳定推进。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-render-episode-week3-001-render-segment-week3-008",
+      "来源层级": "render_prompt",
+      "正文": "冷色调、克制写实光线、中景连续调度，围绕render-segment-week3-008稳定输出。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-layout-episode-week3-001-render-segment-week3-009",
+      "来源层级": "layout_prompt",
+      "正文": "冷色调，中景，第 1 集的render-segment-week3-009布局稳定推进。",
+      "版本": 1
+    },
+    {
+      "PromptPackage标识": "prompt-package-render-episode-week3-001-render-segment-week3-009",
+      "来源层级": "render_prompt",
+      "正文": "冷色调、克制写实光线、中景连续调度，围绕render-segment-week3-009稳定输出。",
+      "版本": 1
+    }
+  ],
+  "render_segment": [
+    {
+      "RenderSegment标识": "render-segment-week3-001",
+      "叙事场景标识": "narrative-scene-week3-001",
+      "实际时长秒": 67,
+      "序号": 1,
+      "目标时长秒": 67,
+      "结束镜头序号": 12,
+      "起始镜头序号": 10
+    },
+    {
+      "RenderSegment标识": "render-segment-week3-002",
+      "叙事场景标识": "narrative-scene-week3-001",
+      "实际时长秒": 67,
+      "序号": 2,
+      "目标时长秒": 67,
+      "结束镜头序号": 15,
+      "起始镜头序号": 13
+    },
+    {
+      "RenderSegment标识": "render-segment-week3-003",
+      "叙事场景标识": "narrative-scene-week3-001",
+      "实际时长秒": 67,
+      "序号": 3,
+      "目标时长秒": 67,
+      "结束镜头序号": 18,
+      "起始镜头序号": 16
+    },
+    {
+      "RenderSegment标识": "render-segment-week3-004",
+      "叙事场景标识": "narrative-scene-week3-002",
+      "实际时长秒": 67,
+      "序号": 4,
+      "目标时长秒": 67,
+      "结束镜头序号": 21,
+      "起始镜头序号": 19
+    },
+    {
+      "RenderSegment标识": "render-segment-week3-005",
+      "叙事场景标识": "narrative-scene-week3-002",
+      "实际时长秒": 67,
+      "序号": 5,
+      "目标时长秒": 67,
+      "结束镜头序号": 24,
+      "起始镜头序号": 22
+    },
+    {
+      "RenderSegment标识": "render-segment-week3-006",
+      "叙事场景标识": "narrative-scene-week3-002",
+      "实际时长秒": 67,
+      "序号": 6,
+      "目标时长秒": 67,
+      "结束镜头序号": 27,
+      "起始镜头序号": 25
+    },
+    {
+      "RenderSegment标识": "render-segment-week3-007",
+      "叙事场景标识": "narrative-scene-week3-003",
+      "实际时长秒": 66,
+      "序号": 7,
+      "目标时长秒": 66,
+      "结束镜头序号": 30,
+      "起始镜头序号": 28
+    },
+    {
+      "RenderSegment标识": "render-segment-week3-008",
+      "叙事场景标识": "narrative-scene-week3-003",
+      "实际时长秒": 66,
+      "序号": 8,
+      "目标时长秒": 66,
+      "结束镜头序号": 33,
+      "起始镜头序号": 31
+    },
+    {
+      "RenderSegment标识": "render-segment-week3-009",
+      "叙事场景标识": "narrative-scene-week3-003",
+      "实际时长秒": 66,
+      "序号": 9,
+      "目标时长秒": 66,
+      "结束镜头序号": 36,
+      "起始镜头序号": 34
+    }
+  ],
+  "stale_event": [
+    {
+      "StaleEvent标识": "stale-event-week3-001",
+      "原因": "render_segment updated",
+      "时间戳": 1713513601,
+      "来源层级": "render_segment",
+      "来源标识": "render-segment-week3-001",
+      "目标层级": "cut",
+      "目标标识": "cut-week3-001",
+      "追踪标识": "trace-render-segment-week3-001-cut-week3-001"
+    },
+    {
+      "StaleEvent标识": "stale-event-week3-002",
+      "原因": "render_segment updated",
+      "时间戳": 1713513602,
+      "来源层级": "render_segment",
+      "来源标识": "render-segment-week3-002",
+      "目标层级": "cut",
+      "目标标识": "cut-week3-004",
+      "追踪标识": "trace-render-segment-week3-002-cut-week3-004"
+    },
+    {
+      "StaleEvent标识": "stale-event-week3-003",
+      "原因": "render_segment updated",
+      "时间戳": 1713513603,
+      "来源层级": "render_segment",
+      "来源标识": "render-segment-week3-003",
+      "目标层级": "cut",
+      "目标标识": "cut-week3-007",
+      "追踪标识": "trace-render-segment-week3-003-cut-week3-007"
+    },
+    {
+      "StaleEvent标识": "stale-event-week3-004",
+      "原因": "render_segment updated",
+      "时间戳": 1713513604,
+      "来源层级": "render_segment",
+      "来源标识": "render-segment-week3-004",
+      "目标层级": "cut",
+      "目标标识": "cut-week3-010",
+      "追踪标识": "trace-render-segment-week3-004-cut-week3-010"
+    },
+    {
+      "StaleEvent标识": "stale-event-week3-005",
+      "原因": "render_segment updated",
+      "时间戳": 1713513605,
+      "来源层级": "render_segment",
+      "来源标识": "render-segment-week3-005",
+      "目标层级": "cut",
+      "目标标识": "cut-week3-013",
+      "追踪标识": "trace-render-segment-week3-005-cut-week3-013"
+    },
+    {
+      "StaleEvent标识": "stale-event-week3-006",
+      "原因": "render_segment updated",
+      "时间戳": 1713513606,
+      "来源层级": "render_segment",
+      "来源标识": "render-segment-week3-006",
+      "目标层级": "cut",
+      "目标标识": "cut-week3-016",
+      "追踪标识": "trace-render-segment-week3-006-cut-week3-016"
+    },
+    {
+      "StaleEvent标识": "stale-event-week3-007",
+      "原因": "render_segment updated",
+      "时间戳": 1713513607,
+      "来源层级": "render_segment",
+      "来源标识": "render-segment-week3-007",
+      "目标层级": "cut",
+      "目标标识": "cut-week3-019",
+      "追踪标识": "trace-render-segment-week3-007-cut-week3-019"
+    },
+    {
+      "StaleEvent标识": "stale-event-week3-008",
+      "原因": "render_segment updated",
+      "时间戳": 1713513608,
+      "来源层级": "render_segment",
+      "来源标识": "render-segment-week3-008",
+      "目标层级": "cut",
+      "目标标识": "cut-week3-022",
+      "追踪标识": "trace-render-segment-week3-008-cut-week3-022"
+    },
+    {
+      "StaleEvent标识": "stale-event-week3-009",
+      "原因": "render_segment updated",
+      "时间戳": 1713513609,
+      "来源层级": "render_segment",
+      "来源标识": "render-segment-week3-009",
+      "目标层级": "cut",
+      "目标标识": "cut-week3-025",
+      "追踪标识": "trace-render-segment-week3-009-cut-week3-025"
+    }
+  ],
+  "visual_term": [
+    {
+      "中文术语": "冷色调",
+      "别名": "冷调",
+      "定义": "偏冷且低饱和的整体色彩基调。",
+      "术语标识": "visual-term-week3-001",
+      "类别": "色彩"
+    }
+  ]
+}

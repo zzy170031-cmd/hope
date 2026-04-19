@@ -1,0 +1,17 @@
+[package]
+name = "hope-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+core-domain = { path = "../crates/core-domain" }
+project-store = { path = "../crates/project-store" }
+storyboard-pipeline = { path = "../crates/storyboard-pipeline" }
+validators = { path = "../crates/validators" }
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "hope-app"
+path = "src/main.rs"

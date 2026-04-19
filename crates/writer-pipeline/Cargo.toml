@@ -1,0 +1,8 @@
+[package]
+name = "writer-pipeline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+core-domain = { path = "../core-domain" }

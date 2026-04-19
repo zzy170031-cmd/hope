@@ -1,0 +1,6 @@
+{
+  "benchmark_name": "60min project",
+  "project_id": "project-week3-001",
+  "project_duration_minutes": 60,
+  "logline": "项目总时长超过 45 分钟后自动拆分为多个 Episode，并继续保持同一套导出与验证 contract。"
+}

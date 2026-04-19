@@ -1,0 +1,40 @@
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectCreateOrSwitchRequest {
+    pub project_id: Option<String>,
+    pub project_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriterEntrySnapshotRequest {
+    pub project_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoryboardRenderSegmentCutPreviewSnapshotRequest {
+    pub project_id: String,
+    pub episode_id: Option<String>,
+    pub narrative_scene_id: Option<String>,
+    pub render_segment_id: Option<String>,
+    pub scene_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationExportPanelSnapshotRequest {
+    pub project_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmptyResponse;
+
+pub const PROJECT_CREATE_OR_SWITCH_COMMAND: &str = "project_create_or_switch";
+pub const WRITER_ENTRY_SNAPSHOT_COMMAND: &str = "writer_entry_snapshot";
+pub const STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND: &str =
+    "storyboard_rendersegment_cut_preview_snapshot";
+pub const VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND: &str = "validation_export_panel_snapshot";
+
+pub const IPC_COMMANDS: &[&str] = &[
+    PROJECT_CREATE_OR_SWITCH_COMMAND,
+    WRITER_ENTRY_SNAPSHOT_COMMAND,
+    STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
+    VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
+];

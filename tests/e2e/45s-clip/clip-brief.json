@@ -1,0 +1,6 @@
+{
+  "benchmark_name": "45s clip 最小闭环",
+  "project_id": "project-week3-001",
+  "clip_duration_seconds": 45,
+  "logline": "主角进入空房间，确认任务卡内容后立即转身离开，整体节奏控制在 45 秒内。"
+}

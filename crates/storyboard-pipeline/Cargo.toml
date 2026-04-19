@@ -1,0 +1,9 @@
+[package]
+name = "storyboard-pipeline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+core-domain = { path = "../core-domain" }
+

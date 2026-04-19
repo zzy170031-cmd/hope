@@ -1,0 +1,7 @@
+{
+  "benchmark_name": "30min single episode",
+  "project_id": "project-week3-001",
+  "episode_id": "episode-week3-001",
+  "episode_duration_minutes": 30,
+  "logline": "主角在更长的单集任务推进中跨越多个场景与阶段，但仍保持稳定的 RenderSegment、handoff 与导出链。"
+}

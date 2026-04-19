@@ -11,6 +11,8 @@ Cargo.lock
 /.vscode/
 *.log
 *.tmp
+scripts/*.env
+*.env.local
 
 # Generated exports
 /exports/

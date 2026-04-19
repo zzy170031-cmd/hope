@@ -1,0 +1,21 @@
+{
+  "code": 10000,
+  "data": {
+    "algorithm_base_resp": {
+      "status_code": 0,
+      "status_message": "Success"
+    },
+    "binary_data_base64": [],
+    "image_urls": [
+      "https://p9-aiop-sign.byteimg.com/tos-cn-i-vuqhorh59i/202604200015063C240FAFD52009AED1F8-3658-0~tplv-vuqhorh59i-image-v1.image?rk3s=7f9e702d&x-expires=1776701720&x-signature=xzv5mixKPLWAR82qdlmLDZ4Wcbk%3D"
+    ],
+    "resp_data": null,
+    "response_data": null,
+    "status": null,
+    "task_id": null
+  },
+  "message": "Success",
+  "request_id": "202604200015063C240FAFD52009AED1F8",
+  "status": 10000,
+  "time_elapsed": "14.03281754s"
+}

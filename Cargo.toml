@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "app",
   "crates/core-domain",
   "crates/project-store",
   "crates/writer-pipeline",

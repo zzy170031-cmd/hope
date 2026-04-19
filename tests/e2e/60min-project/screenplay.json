@@ -1,0 +1,16 @@
+{
+  "项目标识": "project-week3-001",
+  "episodes": [
+    { "集标识": "episode-week3-001", "标题": "第 1 集" },
+    { "集标识": "episode-week3-002", "标题": "第 2 集" },
+    { "集标识": "episode-week3-003", "标题": "第 3 集" }
+  ],
+  "narrative_scenes": [
+    { "叙事场景标识": "narrative-scene-week3-001", "标题": "第 1 集第 1 场" },
+    { "叙事场景标识": "narrative-scene-week3-019", "标题": "第 3 集第 5 场" }
+  ],
+  "dialogue_turns": [
+    { "角色": "主角", "对白": "项目级 60 分钟 benchmark 启动。" },
+    { "角色": "主角", "对白": "自动拆集后继续维持统一导出 contract。" }
+  ]
+}

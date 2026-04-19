@@ -1,0 +1,7 @@
+{
+  "benchmark_name": "10min single episode",
+  "project_id": "project-week3-001",
+  "episode_id": "episode-week3-001",
+  "episode_duration_minutes": 10,
+  "logline": "主角从空房间接到任务后进入走廊与控制室推进行动，最终在终端大厅完成核验并离场。"
+}
