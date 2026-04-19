@@ -1,0 +1,21 @@
+# Rust
+/target/
+Cargo.lock
+
+# Node / UI
+/node_modules/
+/dist/
+
+# Local app data
+/.idea/
+/.vscode/
+*.log
+*.tmp
+
+# Generated exports
+/exports/
+/artifacts/
+
+# Local databases and snapshots
+/local/
+/tmp/

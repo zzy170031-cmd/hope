@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/core-domain",
+  "crates/project-store",
+  "crates/writer-pipeline",
+  "crates/storyboard-pipeline",
+  "crates/validators",
+  "crates/export-engine"
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+version = "0.1.0"
