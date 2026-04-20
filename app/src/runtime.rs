@@ -5,14 +5,13 @@ use crate::{
         ProjectCreateOrSwitchRequest, StoryboardRenderSegmentCutPreviewSnapshotRequest,
         ValidationExportPanelSnapshotRequest, WriterEntrySnapshotRequest,
     },
-    state::AppState,
+    state::{load_desktop_shared_fixture, AppState},
 };
 
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
 use validators::{
-    RepairRecommendation, WEEK3_SHARED_FIXTURE_PATH, Week3SharedFixture,
-    generate_week3_repair_recommendations, generate_week3_validation_report,
-    load_week3_shared_fixture,
+    generate_week3_repair_recommendations, generate_week3_validation_report, RepairRecommendation,
+    Week3SharedFixture,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,7 +108,7 @@ pub struct ValidationRepairRecommendationItem {
 pub fn build_project_create_or_switch_snapshot(
     request: ProjectCreateOrSwitchRequest,
 ) -> io::Result<ProjectCreateOrSwitchSnapshot> {
-    let fixture = load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH)?;
+    let fixture = load_desktop_shared_fixture()?;
     Ok(build_project_create_or_switch_snapshot_from_fixture(
         request, &fixture,
     ))
@@ -118,7 +117,7 @@ pub fn build_project_create_or_switch_snapshot(
 pub fn build_writer_entry_snapshot(
     request: WriterEntrySnapshotRequest,
 ) -> io::Result<WriterEntrySnapshot> {
-    let fixture = load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH)?;
+    let fixture = load_desktop_shared_fixture()?;
     Ok(build_writer_entry_snapshot_from_fixture(request, &fixture))
 }
 
@@ -126,10 +125,8 @@ pub fn build_storyboard_rendersegment_cut_preview_snapshot(
     state: &AppState,
     request: StoryboardRenderSegmentCutPreviewSnapshotRequest,
 ) -> io::Result<StoryboardRenderSegmentCutPreviewSnapshot> {
-    let fixture = load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH)?;
-    Ok(build_storyboard_rendersegment_cut_preview_snapshot_from_fixture(
-        state, request, &fixture,
-    ))
+    let fixture = state.load_shared_fixture()?;
+    Ok(build_storyboard_rendersegment_cut_preview_snapshot_from_fixture(state, request, &fixture))
 }
 
 pub fn build_storyboard_preview_plan(
@@ -201,7 +198,7 @@ pub fn build_validation_export_panel_snapshot(
     state: &AppState,
     request: ValidationExportPanelSnapshotRequest,
 ) -> io::Result<ValidationExportPanelSnapshot> {
-    let fixture = load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH)?;
+    let fixture = state.load_shared_fixture()?;
     build_validation_export_panel_snapshot_from_fixture(state, request, &fixture)
 }
 
@@ -227,10 +224,12 @@ fn build_project_create_or_switch_snapshot_from_fixture(
     request: ProjectCreateOrSwitchRequest,
     fixture: &Week3SharedFixture,
 ) -> ProjectCreateOrSwitchSnapshot {
-    let current_project_id = request
-        .project_id
-        .clone()
-        .or_else(|| fixture.project_meta.first().map(|row| row.project_id.clone()));
+    let current_project_id = request.project_id.clone().or_else(|| {
+        fixture
+            .project_meta
+            .first()
+            .map(|row| row.project_id.clone())
+    });
 
     let projects = fixture
         .project_meta
@@ -307,7 +306,12 @@ fn build_writer_entry_snapshot_from_fixture(
     } else {
         scenes
             .iter()
-            .map(|scene| format!("第 {} 场 {}：{}", scene.sequence_no, scene.title, scene.summary))
+            .map(|scene| {
+                format!(
+                    "第 {} 场 {}：{}",
+                    scene.sequence_no, scene.title, scene.summary
+                )
+            })
             .collect::<Vec<_>>()
             .join(" | ")
     };
@@ -627,12 +631,13 @@ mod tests {
     };
 
     use super::{
-        StoryboardPreviewPlanRequest, ValidationExportPanelState,
         build_project_create_or_switch_snapshot_from_fixture, build_storyboard_preview_plan,
         build_storyboard_rendersegment_cut_preview_snapshot_from_fixture,
-        build_validation_export_panel_snapshot_from_fixture, resolve_scene_taxonomy,
-        build_writer_entry_snapshot_from_fixture,
+        build_validation_export_panel_snapshot_from_fixture,
+        build_writer_entry_snapshot_from_fixture, resolve_scene_taxonomy,
+        StoryboardPreviewPlanRequest, ValidationExportPanelState,
     };
+    use crate::state::load_desktop_shared_fixture;
     use crate::{
         ipc::{
             ProjectCreateOrSwitchRequest, StoryboardRenderSegmentCutPreviewSnapshotRequest,
@@ -640,7 +645,6 @@ mod tests {
         },
         state::AppState,
     };
-    use validators::{WEEK3_SHARED_FIXTURE_PATH, load_week3_shared_fixture};
 
     fn test_state() -> AppState {
         let store = StoreSkeleton::new(DualSqliteConnectionPolicy::new(
@@ -818,12 +822,11 @@ mod tests {
                 .primary_scene_director_id,
             "taxonomy:scene-taxonomy-daily-dialogue:scene"
         );
-        assert!(
-            plan.committee_runtime
-                .prompt_layers
-                .layout_prompt
-                .contains("场景分类：daily_dialogue")
-        );
+        assert!(plan
+            .committee_runtime
+            .prompt_layers
+            .layout_prompt
+            .contains("场景分类：daily_dialogue"));
     }
 
     #[test]
@@ -867,8 +870,7 @@ mod tests {
 
     #[test]
     fn build_project_create_or_switch_snapshot_tracks_fixture_projects() {
-        let fixture = load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH)
-            .expect("shared fixture should load");
+        let fixture = load_desktop_shared_fixture().expect("shared fixture should load");
 
         let snapshot = build_project_create_or_switch_snapshot_from_fixture(
             ProjectCreateOrSwitchRequest {
@@ -878,7 +880,10 @@ mod tests {
             &fixture,
         );
 
-        assert_eq!(snapshot.current_project_id.as_deref(), Some("project-week3-001"));
+        assert_eq!(
+            snapshot.current_project_id.as_deref(),
+            Some("project-week3-001")
+        );
         assert_eq!(snapshot.projects.len(), 1);
         assert!(snapshot.projects[0].episode_count >= 1);
         assert!(snapshot.projects[0].name.contains("Hope"));
@@ -886,8 +891,7 @@ mod tests {
 
     #[test]
     fn build_writer_entry_snapshot_summarizes_fixture_layers() {
-        let fixture = load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH)
-            .expect("shared fixture should load");
+        let fixture = load_desktop_shared_fixture().expect("shared fixture should load");
 
         let snapshot = build_writer_entry_snapshot_from_fixture(
             WriterEntrySnapshotRequest {
@@ -905,8 +909,7 @@ mod tests {
     #[test]
     fn build_storyboard_rendersegment_cut_preview_snapshot_includes_runtime_details() {
         let state = test_state();
-        let fixture = load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH)
-            .expect("shared fixture should load");
+        let fixture = load_desktop_shared_fixture().expect("shared fixture should load");
 
         let snapshot = build_storyboard_rendersegment_cut_preview_snapshot_from_fixture(
             &state,
@@ -930,8 +933,7 @@ mod tests {
     #[test]
     fn build_validation_export_panel_snapshot_surfaces_kb_repairs() {
         let state = test_state();
-        let mut fixture = load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH)
-            .expect("shared fixture should load");
+        let mut fixture = load_desktop_shared_fixture().expect("shared fixture should load");
         fixture.prompt_package[0].body = "TODO: rewrite this prompt body".to_string();
 
         let snapshot = build_validation_export_panel_snapshot_from_fixture(
@@ -949,26 +951,21 @@ mod tests {
             snapshot.summary_items[2].state,
             ValidationExportPanelState::Ready
         );
-        assert!(
-            snapshot
-                .repair_recommendations
-                .iter()
-                .any(|item| item.failure_code == "chinese_prompt_noise")
-        );
-        assert!(
-            snapshot
-                .repair_recommendations
-                .iter()
-                .flat_map(|item| item.prompt_template_names.iter())
-                .any(|name| name == "Repair Prompt Language")
-        );
+        assert!(snapshot
+            .repair_recommendations
+            .iter()
+            .any(|item| item.failure_code == "chinese_prompt_noise"));
+        assert!(snapshot
+            .repair_recommendations
+            .iter()
+            .flat_map(|item| item.prompt_template_names.iter())
+            .any(|name| name == "Repair Prompt Language"));
     }
 
     #[test]
     fn build_validation_export_panel_snapshot_stays_bounded_without_repair_mappings() {
         let state = test_state_without_repair_mappings();
-        let mut fixture = load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH)
-            .expect("shared fixture should load");
+        let mut fixture = load_desktop_shared_fixture().expect("shared fixture should load");
         fixture.prompt_package[0].body = "TODO: rewrite this prompt body".to_string();
 
         let snapshot = build_validation_export_panel_snapshot_from_fixture(
