@@ -1,12 +1,15 @@
 use std::io;
 
 use crate::state::AppState;
+use project_store::{
+    bootstrap_verified_kb_context_from_checkpoint, KbRuntimeError,
+    SnapshotBootstrapCheckpointArtifacts, StoreSkeleton,
+};
 
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
 use validators::{
-    RepairRecommendation, WEEK3_SHARED_FIXTURE_PATH, Week3SharedFixture,
     generate_week3_repair_recommendations, generate_week3_validation_report,
-    load_week3_shared_fixture,
+    load_week3_shared_fixture, RepairRecommendation, Week3SharedFixture, WEEK3_SHARED_FIXTURE_PATH,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,11 +68,76 @@ pub struct ValidationRepairRecommendationItem {
     pub prompt_template_names: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoryboardPreviewPlanFromCheckpointError {
+    Bootstrap(KbRuntimeError),
+    Planning(StoryboardPlanningError),
+}
+
+pub fn bootstrap_app_state_from_checkpoint(
+    store: StoreSkeleton,
+    checkpoint_artifacts: SnapshotBootstrapCheckpointArtifacts,
+) -> Result<AppState, KbRuntimeError> {
+    let context = bootstrap_verified_kb_context_from_checkpoint(checkpoint_artifacts)?;
+
+    Ok(AppState::new(store, context.runtime, context.bundle))
+}
+
+pub fn build_storyboard_preview_plan_from_checkpoint(
+    store: StoreSkeleton,
+    checkpoint_artifacts: SnapshotBootstrapCheckpointArtifacts,
+    request: StoryboardPreviewPlanRequest,
+) -> Result<StoryboardPlan, StoryboardPreviewPlanFromCheckpointError> {
+    let state = bootstrap_app_state_from_checkpoint(store, checkpoint_artifacts)
+        .map_err(StoryboardPreviewPlanFromCheckpointError::Bootstrap)?;
+
+    build_storyboard_preview_plan(&state, request)
+        .map_err(StoryboardPreviewPlanFromCheckpointError::Planning)
+}
+
 pub fn build_storyboard_preview_plan(
     state: &AppState,
     request: StoryboardPreviewPlanRequest,
 ) -> Result<StoryboardPlan, StoryboardPlanningError> {
     let scene_taxonomy = resolve_scene_taxonomy(state, request.scene_type.as_deref());
+    let derived_scene_director_id = request.scene_director_id.clone().or_else(|| {
+        scene_taxonomy
+            .as_ref()
+            .map(|taxonomy| format!("taxonomy:{}:scene", taxonomy.scene_taxonomy_id))
+    });
+    let derived_action_director_id = request.action_director_id.clone().or_else(|| {
+        scene_taxonomy
+            .as_ref()
+            .map(|taxonomy| format!("taxonomy:{}:action", taxonomy.scene_taxonomy_id))
+    });
+    let layout_prompt = if let Some(taxonomy) = scene_taxonomy.as_ref() {
+        let layout_tag = format!(
+            "\u{573A}\u{666F}\u{5206}\u{7C7B}\u{FF1A}{}",
+            taxonomy.scene_type
+        );
+
+        if request.layout_prompt.contains(&layout_tag) {
+            request.layout_prompt.clone()
+        } else {
+            format!("{}\n{}", request.layout_prompt, layout_tag)
+        }
+    } else {
+        request.layout_prompt.clone()
+    };
+    let render_prompt = if let Some(taxonomy) = scene_taxonomy.as_ref() {
+        let continuity_tag = format!(
+            "\u{8FDE}\u{7EED}\u{6027}\u{4F18}\u{5148}\u{7EA7}\u{FF1A}{}",
+            taxonomy.continuity_priority
+        );
+
+        if request.render_prompt.contains(&continuity_tag) {
+            request.render_prompt.clone()
+        } else {
+            format!("{}\n{}", request.render_prompt, continuity_tag)
+        }
+    } else {
+        request.render_prompt.clone()
+    };
 
     storyboard_pipeline::build_storyboard_plan(StoryboardPlanRequest {
         render_segment_id: request.render_segment_id,
@@ -82,11 +150,11 @@ pub fn build_storyboard_preview_plan(
         cut_sequence_no: request.cut_sequence_no,
         shot_description: request.shot_description,
         dialogue: request.dialogue,
-        scene_director_id: request.scene_director_id,
-        action_director_id: request.action_director_id,
+        scene_director_id: derived_scene_director_id,
+        action_director_id: derived_action_director_id,
         scene_taxonomy,
-        layout_prompt: request.layout_prompt,
-        render_prompt: request.render_prompt,
+        layout_prompt,
+        render_prompt,
     })
 }
 
@@ -199,21 +267,31 @@ fn map_repair_recommendation(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs::{self, File},
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use core_domain::{
         FailurePatternRecord, KbRuntimeSummary, KbSnapshotRecord, PromptTemplateRecord,
         SceneTaxonomyRecord,
     };
     use project_store::{
-        DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeHandle, StoreSkeleton,
+        DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeError, KbRuntimeHandle,
+        SnapshotBootstrapCheckpointArtifacts, StoreSkeleton,
+        SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH,
     };
 
     use super::{
-        StoryboardPreviewPlanRequest, ValidationExportPanelSnapshotRequest,
-        ValidationExportPanelState, build_storyboard_preview_plan,
+        bootstrap_app_state_from_checkpoint, build_storyboard_preview_plan,
+        build_storyboard_preview_plan_from_checkpoint,
         build_validation_export_panel_snapshot_from_fixture, resolve_scene_taxonomy,
+        StoryboardPreviewPlanFromCheckpointError, StoryboardPreviewPlanRequest,
+        ValidationExportPanelSnapshotRequest, ValidationExportPanelState,
     };
     use crate::state::AppState;
-    use validators::{WEEK3_SHARED_FIXTURE_PATH, load_week3_shared_fixture};
+    use validators::{load_week3_shared_fixture, WEEK3_SHARED_FIXTURE_PATH};
 
     fn test_state() -> AppState {
         let store = StoreSkeleton::new(DualSqliteConnectionPolicy::new(
@@ -332,6 +410,164 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_app_state_from_checkpoint_loads_verified_runtime_into_app_state() {
+        let fixture = create_snapshot_bootstrap_fixture();
+        let store = StoreSkeleton::new(DualSqliteConnectionPolicy::new(
+            fixture.artifacts.snapshot_path.clone(),
+            fixture.root.join("hope.sqlite3"),
+        ));
+
+        let state = bootstrap_app_state_from_checkpoint(store.clone(), fixture.artifacts.clone())
+            .expect("checkpoint bootstrap should hydrate app state");
+
+        assert_eq!(state.store.connection_policy, store.connection_policy);
+        assert_eq!(
+            state.kb_runtime.snapshot.snapshot_hash,
+            SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+        );
+        assert_eq!(
+            state.kb_runtime.summary.snapshot_path,
+            fixture.artifacts.snapshot_path.display().to_string()
+        );
+        assert_eq!(state.kb_knowledge.scene_taxonomies.len(), 1);
+        assert_eq!(state.kb_knowledge.failure_patterns.len(), 1);
+        assert_eq!(state.kb_knowledge.prompt_templates.len(), 1);
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
+    fn bootstrap_app_state_from_checkpoint_rejects_missing_trusted_input_without_fallback() {
+        let fixture = create_snapshot_bootstrap_fixture();
+        let store = StoreSkeleton::new(DualSqliteConnectionPolicy::new(
+            fixture.artifacts.snapshot_path.clone(),
+            fixture.root.join("hope.sqlite3"),
+        ));
+        let missing_path = fixture.packet_root.join("export_templates.json");
+        fs::remove_file(&missing_path).expect("trusted input should be removable for the test");
+
+        let error = bootstrap_app_state_from_checkpoint(store, fixture.artifacts.clone())
+            .expect_err("missing trusted input should fail without app-side fallback");
+
+        assert_eq!(
+            error,
+            KbRuntimeError::SnapshotBootstrapInputMissing {
+                input_name: "export_template".to_string(),
+                path: missing_path,
+            }
+        );
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
+    fn build_storyboard_preview_plan_from_checkpoint_uses_verified_app_state() {
+        let fixture = create_snapshot_bootstrap_fixture();
+        let store = StoreSkeleton::new(DualSqliteConnectionPolicy::new(
+            fixture.artifacts.snapshot_path.clone(),
+            fixture.root.join("hope.sqlite3"),
+        ));
+
+        let plan = build_storyboard_preview_plan_from_checkpoint(
+            store,
+            fixture.artifacts.clone(),
+            StoryboardPreviewPlanRequest {
+                render_segment_id: "render-segment-checkpoint-001".to_string(),
+                narrative_scene_id: "narrative-scene-checkpoint-001".to_string(),
+                render_segment_sequence_no: 1,
+                start_shot_sequence_no: 1,
+                end_shot_sequence_no: 3,
+                target_duration_seconds: 45,
+                cut_id: "cut-checkpoint-001".to_string(),
+                cut_sequence_no: 1,
+                shot_description: "medium shot dialogue".to_string(),
+                dialogue: "Checkpoint-backed taxonomy should hydrate this preview.".to_string(),
+                scene_director_id: None,
+                action_director_id: None,
+                scene_type: Some("daily_dialogue".to_string()),
+                layout_prompt: "cool palette, medium shot".to_string(),
+                render_prompt: "restrained realism".to_string(),
+            },
+        )
+        .expect("checkpoint-backed storyboard preview should build");
+
+        assert_eq!(
+            plan.render_segment.scene_taxonomy_id.as_deref(),
+            Some("scene_tax_01")
+        );
+        assert_eq!(
+            plan.committee_runtime
+                .director_assignment
+                .primary_scene_director_id,
+            "taxonomy:scene_tax_01:scene"
+        );
+        assert_eq!(
+            plan.committee_runtime
+                .director_assignment
+                .primary_action_director_id,
+            "taxonomy:scene_tax_01:action"
+        );
+        assert!(plan
+            .committee_runtime
+            .prompt_layers
+            .layout_prompt
+            .contains("场景分类：daily_dialogue"));
+        assert!(plan
+            .committee_runtime
+            .prompt_layers
+            .render_prompt
+            .contains("连续性优先级：high"));
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
+    fn build_storyboard_preview_plan_from_checkpoint_propagates_bootstrap_errors() {
+        let fixture = create_snapshot_bootstrap_fixture();
+        let store = StoreSkeleton::new(DualSqliteConnectionPolicy::new(
+            fixture.artifacts.snapshot_path.clone(),
+            fixture.root.join("hope.sqlite3"),
+        ));
+        let missing_path = fixture.packet_root.join("export_templates.json");
+        fs::remove_file(&missing_path).expect("trusted input should be removable for the test");
+
+        let error = build_storyboard_preview_plan_from_checkpoint(
+            store,
+            fixture.artifacts.clone(),
+            StoryboardPreviewPlanRequest {
+                render_segment_id: "render-segment-checkpoint-002".to_string(),
+                narrative_scene_id: "narrative-scene-checkpoint-002".to_string(),
+                render_segment_sequence_no: 1,
+                start_shot_sequence_no: 1,
+                end_shot_sequence_no: 3,
+                target_duration_seconds: 45,
+                cut_id: "cut-checkpoint-002".to_string(),
+                cut_sequence_no: 1,
+                shot_description: "medium shot dialogue".to_string(),
+                dialogue: "Bootstrap errors should surface directly.".to_string(),
+                scene_director_id: None,
+                action_director_id: None,
+                scene_type: Some("daily_dialogue".to_string()),
+                layout_prompt: "cool palette, medium shot".to_string(),
+                render_prompt: "restrained realism".to_string(),
+            },
+        )
+        .expect_err("checkpoint caller should not add a local fallback");
+
+        assert_eq!(
+            error,
+            StoryboardPreviewPlanFromCheckpointError::Bootstrap(
+                KbRuntimeError::SnapshotBootstrapInputMissing {
+                    input_name: "export_template".to_string(),
+                    path: missing_path,
+                }
+            )
+        );
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
     fn resolve_scene_taxonomy_matches_by_scene_type_and_display_name() {
         let state = test_state();
 
@@ -391,12 +627,11 @@ mod tests {
                 .primary_scene_director_id,
             "taxonomy:scene-taxonomy-daily-dialogue:scene"
         );
-        assert!(
-            plan.committee_runtime
-                .prompt_layers
-                .layout_prompt
-                .contains("场景分类：daily_dialogue")
-        );
+        assert!(plan
+            .committee_runtime
+            .prompt_layers
+            .layout_prompt
+            .contains("场景分类：daily_dialogue"));
     }
 
     #[test]
@@ -460,19 +695,15 @@ mod tests {
             snapshot.summary_items[2].state,
             ValidationExportPanelState::Ready
         );
-        assert!(
-            snapshot
-                .repair_recommendations
-                .iter()
-                .any(|item| item.failure_code == "chinese_prompt_noise")
-        );
-        assert!(
-            snapshot
-                .repair_recommendations
-                .iter()
-                .flat_map(|item| item.prompt_template_names.iter())
-                .any(|name| name == "Repair Prompt Language")
-        );
+        assert!(snapshot
+            .repair_recommendations
+            .iter()
+            .any(|item| item.failure_code == "chinese_prompt_noise"));
+        assert!(snapshot
+            .repair_recommendations
+            .iter()
+            .flat_map(|item| item.prompt_template_names.iter())
+            .any(|name| name == "Repair Prompt Language"));
     }
 
     #[test]
@@ -497,5 +728,147 @@ mod tests {
             ValidationExportPanelState::Pending
         );
         assert!(snapshot.summary_items[1].value.contains("rows"));
+    }
+
+    fn create_snapshot_bootstrap_fixture() -> SnapshotBootstrapFixture {
+        let root = unique_test_dir("app-runtime-snapshot-bootstrap");
+        let repo_root = root.join("hope-kb-runtime");
+        let snapshots_dir = repo_root.join("snapshots");
+        let packet_root = repo_root.join("seed").join("v0.1");
+        fs::create_dir_all(&snapshots_dir).expect("snapshots dir should be creatable");
+        fs::create_dir_all(&packet_root).expect("packet root should be creatable");
+
+        let snapshot_path = snapshots_dir.join("hope-kb-v0.1.sqlite3");
+        File::create(&snapshot_path).expect("snapshot file should be creatable");
+
+        let manifest_path = packet_root.join("manifest.json");
+        fs::write(
+            &manifest_path,
+            format!(
+                r#"{{"content_hash":"{}"}}"#,
+                SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+            ),
+        )
+        .expect("manifest should be writable");
+
+        let validator_result_path = root.join("validator_result.json");
+        fs::write(
+            &validator_result_path,
+            format!(
+                r#"{{"status":"passed","content_hash":"{}"}}"#,
+                SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+            ),
+        )
+        .expect("validator result should be writable");
+
+        let snapshot_meta_path = root.join("snapshot_meta.json");
+        fs::write(
+            &snapshot_meta_path,
+            format!(
+                r#"{{"content_hash":"{}"}}"#,
+                SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+            ),
+        )
+        .expect("snapshot meta should be writable");
+
+        fs::write(packet_root.join("export_templates.json"), "[]")
+            .expect("export templates should be writable");
+        fs::write(
+            packet_root.join("failure_pattern_library.json"),
+            r#"[{
+              "machine_id": "failure_01",
+              "failure_code": "style_drift",
+              "failure_name": "Style drift",
+              "failure_category": "style",
+              "symptom": "Adjacent cuts drift apart.",
+              "common_causes": ["hard lock missing"],
+              "detection_hint": "Check Style Unity Validator",
+              "repair_strategy": "Reapply hard locks.",
+              "affected_layers": ["prompt_packages"],
+              "validator_hint": "Style Unity Validator",
+              "repair_template_ids": ["prompt_09"],
+              "repair_priority": "high",
+              "repair_scope": "render_prompt_only",
+              "suggested_followup_validator": ["Style Unity Validator"],
+              "source_type": "team_distillation",
+              "source_notes": "test",
+              "confidence_level": "high",
+              "last_reviewed_at": "2026-04-20"
+            }]"#,
+        )
+        .expect("failure patterns should be writable");
+        fs::write(packet_root.join("degraded_input_examples.json"), "[]")
+            .expect("degraded input examples should be writable");
+        fs::write(
+            packet_root.join("runtime_consume_contracts.json"),
+            r#"[{
+              "consumer_surface": "snapshot_bootstrap",
+              "required_snapshot_tables": [
+                "snapshot_meta",
+                "export_template",
+                "failure_pattern",
+                "degraded_input_example",
+                "runtime_consume_contract"
+              ]
+            }]"#,
+        )
+        .expect("runtime consume contract should be writable");
+        fs::write(
+            packet_root.join("scene_taxonomy.json"),
+            r#"[{
+              "machine_id": "scene_tax_01",
+              "scene_type": "daily_dialogue",
+              "display_name": "Daily Dialogue",
+              "definition": "A stable dialogue scene.",
+              "default_duration_band": "30-60s",
+              "typical_committee_roles": ["chief", "scene", "emotion"],
+              "default_handoff_out": ["scene->emotion"],
+              "risk_flags": ["pace_flat"],
+              "continuity_priority": "high",
+              "prompt_focus": ["micro_expression", "blocking"],
+              "source_type": "team_distillation",
+              "source_notes": "test",
+              "confidence_level": "high",
+              "last_reviewed_at": "2026-04-20"
+            }]"#,
+        )
+        .expect("scene taxonomy should be writable");
+        fs::write(
+            packet_root.join("prompt_templates.json"),
+            r#"[{
+              "machine_id": "prompt_09",
+              "stage": "repair_pass",
+              "name": "Structure Repair Loop",
+              "target_model_family": "qwen-compatible",
+              "repairs_failure_codes": ["style_drift"]
+            }]"#,
+        )
+        .expect("prompt templates should be writable");
+
+        SnapshotBootstrapFixture {
+            root,
+            packet_root,
+            artifacts: SnapshotBootstrapCheckpointArtifacts {
+                snapshot_path,
+                manifest_path,
+                validator_result_path,
+                snapshot_meta_path,
+            },
+        }
+    }
+
+    fn unique_test_dir(prefix: &str) -> PathBuf {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current time should be after unix epoch")
+            .as_nanos();
+
+        std::env::temp_dir().join(format!("hope-{prefix}-{unique_suffix}"))
+    }
+
+    struct SnapshotBootstrapFixture {
+        root: PathBuf,
+        packet_root: PathBuf,
+        artifacts: SnapshotBootstrapCheckpointArtifacts,
     }
 }
