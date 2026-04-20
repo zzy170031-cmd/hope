@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -73,6 +74,17 @@ pub const PROMPT_TEMPLATE_COLUMNS: &[&str] = &[
     "is_structured_output",
 ];
 
+pub const SNAPSHOT_BOOTSTRAP_SURFACE: &str = "snapshot_bootstrap";
+pub const SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH: &str =
+    "bundle-sha256:5f042c10ada3726bdbd71d5f4cbad2187b3895dd85e1e5195d6938a3a22d20b6";
+pub const SNAPSHOT_BOOTSTRAP_TRUSTED_INPUTS: &[&str] = &[
+    "snapshot_meta",
+    "export_template",
+    "failure_pattern",
+    "degraded_input_example",
+    "runtime_consume_contract",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KbRuntimeHandle {
     pub snapshot: KbSnapshotRecord,
@@ -84,6 +96,50 @@ pub struct KbKnowledgeBundle {
     pub scene_taxonomies: Vec<core_domain::SceneTaxonomyRecord>,
     pub failure_patterns: Vec<FailurePatternRecord>,
     pub prompt_templates: Vec<PromptTemplateRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotBootstrapPreparePaths {
+    pub snapshot_path: PathBuf,
+    pub manifest_path: PathBuf,
+    pub validator_result_path: PathBuf,
+    pub snapshot_meta_path: PathBuf,
+    pub export_template_path: PathBuf,
+    pub failure_pattern_path: PathBuf,
+    pub degraded_input_example_path: PathBuf,
+    pub runtime_consume_contract_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotBootstrapPreparation {
+    pub snapshot_path: PathBuf,
+    pub reviewed_bundle_hash: String,
+    pub consistency: SnapshotBootstrapConsistencyGate,
+    pub trusted_inputs: SnapshotBootstrapTrustedInputs,
+    pub contract_gate: SnapshotBootstrapContractGate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotBootstrapConsistencyGate {
+    pub manifest_content_hash: String,
+    pub validator_status: String,
+    pub validator_content_hash: String,
+    pub snapshot_meta_content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotBootstrapTrustedInputs {
+    pub snapshot_meta_path: PathBuf,
+    pub export_template_path: PathBuf,
+    pub failure_pattern_path: PathBuf,
+    pub degraded_input_example_path: PathBuf,
+    pub runtime_consume_contract_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotBootstrapContractGate {
+    pub consumer_surface: String,
+    pub required_snapshot_tables: Vec<String>,
 }
 
 impl KbRuntimeHandle {
@@ -110,14 +166,113 @@ impl KbRuntimeHandle {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KbRuntimeError {
-    SnapshotMissing { path: PathBuf },
-    SnapshotMetadataUnreadable { path: PathBuf, message: String },
-    SeedBundlePathMissing { path: PathBuf },
-    SeedBundleUnreadable { path: PathBuf, message: String },
-    SeedBundleInvalid { path: PathBuf, message: String },
+    SnapshotMissing {
+        path: PathBuf,
+    },
+    SnapshotMetadataUnreadable {
+        path: PathBuf,
+        message: String,
+    },
+    SnapshotBootstrapManifestUnreadable {
+        path: PathBuf,
+        message: String,
+    },
+    SnapshotBootstrapManifestInvalid {
+        path: PathBuf,
+        message: String,
+    },
+    SnapshotBootstrapValidatorResultUnreadable {
+        path: PathBuf,
+        message: String,
+    },
+    SnapshotBootstrapValidatorResultInvalid {
+        path: PathBuf,
+        message: String,
+    },
+    SnapshotBootstrapValidatorFailed {
+        path: PathBuf,
+        status: String,
+    },
+    SnapshotBootstrapSnapshotMetaUnreadable {
+        path: PathBuf,
+        message: String,
+    },
+    SnapshotBootstrapSnapshotMetaInvalid {
+        path: PathBuf,
+        message: String,
+    },
+    SnapshotBootstrapReviewedHashMismatch {
+        expected: String,
+        manifest_hash: String,
+        validator_hash: String,
+        snapshot_hash: String,
+    },
+    SnapshotBootstrapContractUnreadable {
+        path: PathBuf,
+        message: String,
+    },
+    SnapshotBootstrapContractInvalid {
+        path: PathBuf,
+        message: String,
+    },
+    SnapshotBootstrapContractSurfaceMissing {
+        path: PathBuf,
+        consumer_surface: String,
+    },
+    SnapshotBootstrapTrustedInputMismatch {
+        path: PathBuf,
+        consumer_surface: String,
+        missing_inputs: Vec<String>,
+        unexpected_inputs: Vec<String>,
+    },
+    SnapshotBootstrapInputMissing {
+        input_name: String,
+        path: PathBuf,
+    },
+    SnapshotBootstrapInputUnreadable {
+        input_name: String,
+        path: PathBuf,
+        message: String,
+    },
+    SnapshotBootstrapInputInvalid {
+        input_name: String,
+        path: PathBuf,
+        message: String,
+    },
+    SeedBundlePathMissing {
+        path: PathBuf,
+    },
+    SeedBundleUnreadable {
+        path: PathBuf,
+        message: String,
+    },
+    SeedBundleInvalid {
+        path: PathBuf,
+        message: String,
+    },
 }
 
 pub fn load_kb_runtime(snapshot_path: PathBuf) -> Result<KbRuntimeHandle, KbRuntimeError> {
+    build_kb_runtime_handle(snapshot_path, "runtime-unverified".to_string())
+}
+
+pub fn load_kb_runtime_from_preparation(
+    preparation: SnapshotBootstrapPreparation,
+) -> Result<KbRuntimeHandle, KbRuntimeError> {
+    build_kb_runtime_handle(preparation.snapshot_path, preparation.reviewed_bundle_hash)
+}
+
+pub fn bootstrap_verified_kb_runtime(
+    paths: SnapshotBootstrapPreparePaths,
+) -> Result<KbRuntimeHandle, KbRuntimeError> {
+    let preparation = prepare_snapshot_bootstrap(paths)?;
+    load_kb_runtime_from_preparation(preparation)
+}
+
+fn build_kb_runtime_handle(
+    snapshot_path: PathBuf,
+    snapshot_hash: String,
+) -> Result<KbRuntimeHandle, KbRuntimeError> {
     if !snapshot_path.is_file() {
         return Err(KbRuntimeError::SnapshotMissing {
             path: snapshot_path,
@@ -147,7 +302,7 @@ pub fn load_kb_runtime(snapshot_path: PathBuf) -> Result<KbRuntimeHandle, KbRunt
 
     let snapshot = KbSnapshotRecord {
         snapshot_id: snapshot_id.clone(),
-        snapshot_hash: "runtime-unverified".to_string(),
+        snapshot_hash,
         seed_format: "hope-kb-sqlite-snapshot-v0.1".to_string(),
         source_name: "hope-kb".to_string(),
         created_at_timestamp,
@@ -166,6 +321,73 @@ pub fn load_kb_runtime(snapshot_path: PathBuf) -> Result<KbRuntimeHandle, KbRunt
     };
 
     Ok(KbRuntimeHandle { snapshot, summary })
+}
+
+pub fn prepare_snapshot_bootstrap(
+    paths: SnapshotBootstrapPreparePaths,
+) -> Result<SnapshotBootstrapPreparation, KbRuntimeError> {
+    prepare_snapshot_bootstrap_with_reviewed_hash(paths, SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH)
+}
+
+pub fn prepare_snapshot_bootstrap_with_reviewed_hash(
+    paths: SnapshotBootstrapPreparePaths,
+    reviewed_bundle_hash: &str,
+) -> Result<SnapshotBootstrapPreparation, KbRuntimeError> {
+    if !paths.snapshot_path.is_file() {
+        return Err(KbRuntimeError::SnapshotMissing {
+            path: paths.snapshot_path,
+        });
+    }
+
+    let manifest = load_snapshot_bootstrap_manifest(&paths.manifest_path)?;
+    let validator_result = load_snapshot_bootstrap_validator_result(&paths.validator_result_path)?;
+    if !validator_result.status.eq_ignore_ascii_case("passed") {
+        return Err(KbRuntimeError::SnapshotBootstrapValidatorFailed {
+            path: paths.validator_result_path,
+            status: validator_result.status,
+        });
+    }
+
+    let snapshot_meta = load_snapshot_bootstrap_snapshot_meta(&paths.snapshot_meta_path)?;
+    ensure_snapshot_bootstrap_reviewed_hash(
+        reviewed_bundle_hash,
+        &manifest.content_hash,
+        &validator_result.content_hash,
+        &snapshot_meta.content_hash,
+    )?;
+
+    let contract_gate =
+        load_snapshot_bootstrap_contract_gate(&paths.runtime_consume_contract_path)?;
+    ensure_snapshot_bootstrap_trusted_inputs(&paths.runtime_consume_contract_path, &contract_gate)?;
+
+    validate_snapshot_bootstrap_json_input("export_template", &paths.export_template_path)?;
+    validate_snapshot_bootstrap_json_input("failure_pattern", &paths.failure_pattern_path)?;
+    validate_snapshot_bootstrap_json_input(
+        "degraded_input_example",
+        &paths.degraded_input_example_path,
+    )?;
+
+    Ok(SnapshotBootstrapPreparation {
+        snapshot_path: paths.snapshot_path,
+        reviewed_bundle_hash: reviewed_bundle_hash.to_string(),
+        consistency: SnapshotBootstrapConsistencyGate {
+            manifest_content_hash: manifest.content_hash,
+            validator_status: validator_result.status,
+            validator_content_hash: validator_result.content_hash,
+            snapshot_meta_content_hash: snapshot_meta.content_hash,
+        },
+        trusted_inputs: SnapshotBootstrapTrustedInputs {
+            snapshot_meta_path: paths.snapshot_meta_path,
+            export_template_path: paths.export_template_path,
+            failure_pattern_path: paths.failure_pattern_path,
+            degraded_input_example_path: paths.degraded_input_example_path,
+            runtime_consume_contract_path: paths.runtime_consume_contract_path,
+        },
+        contract_gate: SnapshotBootstrapContractGate {
+            consumer_surface: contract_gate.consumer_surface,
+            required_snapshot_tables: contract_gate.required_snapshot_tables,
+        },
+    })
 }
 
 pub fn load_kb_knowledge_bundle(
@@ -287,6 +509,163 @@ fn load_prompt_templates(seed_root: &Path) -> Result<Vec<PromptTemplateRecord>, 
         .collect())
 }
 
+fn load_snapshot_bootstrap_manifest(
+    path: &Path,
+) -> Result<SnapshotBootstrapManifestSeed, KbRuntimeError> {
+    let json = fs::read_to_string(path).map_err(|error| {
+        KbRuntimeError::SnapshotBootstrapManifestUnreadable {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }
+    })?;
+
+    serde_json::from_str(&json).map_err(|error| KbRuntimeError::SnapshotBootstrapManifestInvalid {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })
+}
+
+fn load_snapshot_bootstrap_validator_result(
+    path: &Path,
+) -> Result<SnapshotBootstrapValidatorResultSeed, KbRuntimeError> {
+    let json = fs::read_to_string(path).map_err(|error| {
+        KbRuntimeError::SnapshotBootstrapValidatorResultUnreadable {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }
+    })?;
+
+    serde_json::from_str(&json).map_err(|error| {
+        KbRuntimeError::SnapshotBootstrapValidatorResultInvalid {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }
+    })
+}
+
+fn load_snapshot_bootstrap_snapshot_meta(
+    path: &Path,
+) -> Result<SnapshotBootstrapSnapshotMetaSeed, KbRuntimeError> {
+    let json = fs::read_to_string(path).map_err(|error| {
+        KbRuntimeError::SnapshotBootstrapSnapshotMetaUnreadable {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }
+    })?;
+
+    serde_json::from_str(&json).map_err(|error| {
+        KbRuntimeError::SnapshotBootstrapSnapshotMetaInvalid {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }
+    })
+}
+
+fn load_snapshot_bootstrap_contract_gate(
+    path: &Path,
+) -> Result<SnapshotBootstrapContractRow, KbRuntimeError> {
+    let json = fs::read_to_string(path).map_err(|error| {
+        KbRuntimeError::SnapshotBootstrapContractUnreadable {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }
+    })?;
+
+    let rows: Vec<SnapshotBootstrapContractRow> = serde_json::from_str(&json).map_err(|error| {
+        KbRuntimeError::SnapshotBootstrapContractInvalid {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }
+    })?;
+
+    rows.into_iter()
+        .find(|row| row.consumer_surface == SNAPSHOT_BOOTSTRAP_SURFACE)
+        .ok_or_else(|| KbRuntimeError::SnapshotBootstrapContractSurfaceMissing {
+            path: path.to_path_buf(),
+            consumer_surface: SNAPSHOT_BOOTSTRAP_SURFACE.to_string(),
+        })
+}
+
+fn ensure_snapshot_bootstrap_reviewed_hash(
+    reviewed_bundle_hash: &str,
+    manifest_hash: &str,
+    validator_hash: &str,
+    snapshot_hash: &str,
+) -> Result<(), KbRuntimeError> {
+    if manifest_hash == reviewed_bundle_hash
+        && validator_hash == reviewed_bundle_hash
+        && snapshot_hash == reviewed_bundle_hash
+    {
+        return Ok(());
+    }
+
+    Err(KbRuntimeError::SnapshotBootstrapReviewedHashMismatch {
+        expected: reviewed_bundle_hash.to_string(),
+        manifest_hash: manifest_hash.to_string(),
+        validator_hash: validator_hash.to_string(),
+        snapshot_hash: snapshot_hash.to_string(),
+    })
+}
+
+fn ensure_snapshot_bootstrap_trusted_inputs(
+    path: &Path,
+    contract_gate: &SnapshotBootstrapContractRow,
+) -> Result<(), KbRuntimeError> {
+    let expected: BTreeSet<String> = SNAPSHOT_BOOTSTRAP_TRUSTED_INPUTS
+        .iter()
+        .map(|item| (*item).to_string())
+        .collect();
+    let actual: BTreeSet<String> = contract_gate
+        .required_snapshot_tables
+        .iter()
+        .cloned()
+        .collect();
+
+    let missing_inputs = expected.difference(&actual).cloned().collect::<Vec<_>>();
+    let unexpected_inputs = actual.difference(&expected).cloned().collect::<Vec<_>>();
+
+    if missing_inputs.is_empty() && unexpected_inputs.is_empty() {
+        return Ok(());
+    }
+
+    Err(KbRuntimeError::SnapshotBootstrapTrustedInputMismatch {
+        path: path.to_path_buf(),
+        consumer_surface: contract_gate.consumer_surface.clone(),
+        missing_inputs,
+        unexpected_inputs,
+    })
+}
+
+fn validate_snapshot_bootstrap_json_input(
+    input_name: &str,
+    path: &Path,
+) -> Result<(), KbRuntimeError> {
+    if !path.is_file() {
+        return Err(KbRuntimeError::SnapshotBootstrapInputMissing {
+            input_name: input_name.to_string(),
+            path: path.to_path_buf(),
+        });
+    }
+
+    let json = fs::read_to_string(path).map_err(|error| {
+        KbRuntimeError::SnapshotBootstrapInputUnreadable {
+            input_name: input_name.to_string(),
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }
+    })?;
+
+    serde_json::from_str::<serde_json::Value>(&json).map_err(|error| {
+        KbRuntimeError::SnapshotBootstrapInputInvalid {
+            input_name: input_name.to_string(),
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }
+    })?;
+
+    Ok(())
+}
+
 fn load_seed_json<T>(path: &Path) -> Result<T, KbRuntimeError>
 where
     T: for<'de> Deserialize<'de>,
@@ -351,10 +730,34 @@ struct PromptTemplateSeedRow {
     repairs_failure_codes: Option<Vec<String>>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SnapshotBootstrapManifestSeed {
+    content_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SnapshotBootstrapValidatorResultSeed {
+    #[serde(alias = "result")]
+    status: String,
+    content_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SnapshotBootstrapSnapshotMetaSeed {
+    content_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SnapshotBootstrapContractRow {
+    consumer_surface: String,
+    required_snapshot_tables: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs::{self, File};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn load_kb_runtime_requires_existing_snapshot() {
@@ -427,6 +830,7 @@ mod tests {
                 .contains(&"scene_taxonomy".to_string())
         );
         assert_eq!(runtime.snapshot.source_name, "hope-kb");
+        assert_eq!(runtime.snapshot.snapshot_hash, "runtime-unverified");
 
         fs::remove_file(temp_path).expect("temp snapshot should be removable");
     }
@@ -517,5 +921,292 @@ mod tests {
         assert_eq!(bundle.prompt_templates[0].stage, "repair_pass");
 
         fs::remove_dir_all(repo_root).expect("temp repo root should be removable");
+    }
+
+    #[test]
+    fn prepare_snapshot_bootstrap_pins_reviewed_hash_and_trusted_inputs() {
+        let fixture = create_snapshot_bootstrap_fixture();
+
+        let preparation =
+            prepare_snapshot_bootstrap(fixture.paths.clone()).expect("bootstrap should prepare");
+
+        assert_eq!(
+            preparation.reviewed_bundle_hash,
+            SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+        );
+        assert_eq!(
+            preparation.consistency.manifest_content_hash,
+            SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+        );
+        assert_eq!(
+            preparation.consistency.validator_content_hash,
+            SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+        );
+        assert_eq!(
+            preparation.consistency.snapshot_meta_content_hash,
+            SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+        );
+        assert_eq!(preparation.consistency.validator_status, "passed");
+        assert_eq!(
+            preparation.contract_gate.consumer_surface,
+            SNAPSHOT_BOOTSTRAP_SURFACE
+        );
+        assert_eq!(
+            preparation.contract_gate.required_snapshot_tables,
+            SNAPSHOT_BOOTSTRAP_TRUSTED_INPUTS
+                .iter()
+                .map(|item| (*item).to_string())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            preparation.trusted_inputs.runtime_consume_contract_path,
+            fixture.paths.runtime_consume_contract_path
+        );
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
+    fn prepare_snapshot_bootstrap_rejects_hash_mismatch() {
+        let fixture = create_snapshot_bootstrap_fixture();
+        fs::write(
+            &fixture.paths.validator_result_path,
+            r#"{"status":"passed","content_hash":"bundle-sha256:mismatch"}"#,
+        )
+        .expect("validator result should be writable");
+
+        let error = prepare_snapshot_bootstrap(fixture.paths.clone())
+            .expect_err("hash mismatch should fail");
+
+        assert_eq!(
+            error,
+            KbRuntimeError::SnapshotBootstrapReviewedHashMismatch {
+                expected: SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH.to_string(),
+                manifest_hash: SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH.to_string(),
+                validator_hash: "bundle-sha256:mismatch".to_string(),
+                snapshot_hash: SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH.to_string(),
+            }
+        );
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
+    fn prepare_snapshot_bootstrap_rejects_untrusted_contract_expansion() {
+        let fixture = create_snapshot_bootstrap_fixture();
+        fs::write(
+            &fixture.paths.runtime_consume_contract_path,
+            r#"[
+              {
+                "consumer_surface": "snapshot_bootstrap",
+                "required_snapshot_tables": [
+                  "snapshot_meta",
+                  "export_template",
+                  "failure_pattern",
+                  "degraded_input_example",
+                  "runtime_consume_contract",
+                  "handoff_projection"
+                ]
+              }
+            ]"#,
+        )
+        .expect("runtime contract should be writable");
+
+        let error = prepare_snapshot_bootstrap(fixture.paths.clone())
+            .expect_err("unexpected trusted input expansion should fail");
+
+        assert_eq!(
+            error,
+            KbRuntimeError::SnapshotBootstrapTrustedInputMismatch {
+                path: fixture.paths.runtime_consume_contract_path.clone(),
+                consumer_surface: SNAPSHOT_BOOTSTRAP_SURFACE.to_string(),
+                missing_inputs: Vec::new(),
+                unexpected_inputs: vec!["handoff_projection".to_string()],
+            }
+        );
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
+    fn load_kb_runtime_from_preparation_uses_reviewed_hash_and_preserves_summary() {
+        let fixture = create_snapshot_bootstrap_fixture();
+        let preparation =
+            prepare_snapshot_bootstrap(fixture.paths.clone()).expect("bootstrap should prepare");
+        let expected_snapshot_path = fixture.paths.snapshot_path.display().to_string();
+
+        let runtime = load_kb_runtime_from_preparation(preparation)
+            .expect("verified bootstrap runtime should load");
+
+        assert_eq!(
+            runtime.snapshot.snapshot_hash,
+            SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+        );
+        assert_eq!(runtime.summary.snapshot_path, expected_snapshot_path);
+        assert!(runtime.supports_scene_taxonomy());
+        assert!(runtime.supports_failure_repairs());
+        assert_eq!(
+            runtime.summary.mirror_tables,
+            HOPE_KB_MIRROR_TABLES
+                .iter()
+                .map(|table| (*table).to_string())
+                .collect::<Vec<_>>()
+        );
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
+    fn bootstrap_verified_kb_runtime_uses_reviewed_hash_and_preserves_summary() {
+        let fixture = create_snapshot_bootstrap_fixture();
+        let expected_snapshot_path = fixture.paths.snapshot_path.display().to_string();
+
+        let runtime = bootstrap_verified_kb_runtime(fixture.paths.clone())
+            .expect("verified bootstrap runtime should load");
+
+        assert_eq!(
+            runtime.snapshot.snapshot_hash,
+            SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+        );
+        assert_eq!(runtime.summary.snapshot_path, expected_snapshot_path);
+        assert!(runtime.supports_scene_taxonomy());
+        assert!(runtime.supports_failure_repairs());
+        assert_eq!(
+            runtime.summary.mirror_tables,
+            HOPE_KB_MIRROR_TABLES
+                .iter()
+                .map(|table| (*table).to_string())
+                .collect::<Vec<_>>()
+        );
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
+    fn bootstrap_verified_kb_runtime_rejects_hash_mismatch() {
+        let fixture = create_snapshot_bootstrap_fixture();
+        fs::write(
+            &fixture.paths.validator_result_path,
+            r#"{"status":"passed","content_hash":"bundle-sha256:mismatch"}"#,
+        )
+        .expect("validator result should be writable");
+
+        let error = bootstrap_verified_kb_runtime(fixture.paths.clone())
+            .expect_err("verified bootstrap should fail on hash mismatch");
+
+        assert_eq!(
+            error,
+            KbRuntimeError::SnapshotBootstrapReviewedHashMismatch {
+                expected: SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH.to_string(),
+                manifest_hash: SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH.to_string(),
+                validator_hash: "bundle-sha256:mismatch".to_string(),
+                snapshot_hash: SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH.to_string(),
+            }
+        );
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    fn create_snapshot_bootstrap_fixture() -> SnapshotBootstrapFixture {
+        let root = unique_test_dir("snapshot-bootstrap-prep");
+        fs::create_dir_all(&root).expect("fixture root should be creatable");
+
+        let snapshot_path = root.join("hope-kb-v0.1.sqlite3");
+        File::create(&snapshot_path).expect("snapshot file should be creatable");
+
+        let manifest_path = root.join("manifest.json");
+        fs::write(
+            &manifest_path,
+            format!(
+                r#"{{"content_hash":"{}"}}"#,
+                SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+            ),
+        )
+        .expect("manifest should be writable");
+
+        let validator_result_path = root.join("validator_result.json");
+        fs::write(
+            &validator_result_path,
+            format!(
+                r#"{{"status":"passed","content_hash":"{}"}}"#,
+                SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+            ),
+        )
+        .expect("validator result should be writable");
+
+        let snapshot_meta_path = root.join("snapshot_meta.json");
+        fs::write(
+            &snapshot_meta_path,
+            format!(
+                r#"{{"content_hash":"{}"}}"#,
+                SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+            ),
+        )
+        .expect("snapshot meta should be writable");
+
+        let export_template_path = root.join("export_templates.json");
+        fs::write(&export_template_path, "[]").expect("export templates should be writable");
+
+        let failure_pattern_path = root.join("failure_patterns.json");
+        fs::write(&failure_pattern_path, "[]").expect("failure patterns should be writable");
+
+        let degraded_input_example_path = root.join("degraded_input_examples.json");
+        fs::write(&degraded_input_example_path, "[]")
+            .expect("degraded input examples should be writable");
+
+        let runtime_consume_contract_path = root.join("runtime_consume_contracts.json");
+        fs::write(
+            &runtime_consume_contract_path,
+            r#"[
+              {
+                "consumer_surface": "snapshot_bootstrap",
+                "required_snapshot_tables": [
+                  "snapshot_meta",
+                  "export_template",
+                  "failure_pattern",
+                  "degraded_input_example",
+                  "runtime_consume_contract"
+                ]
+              },
+              {
+                "consumer_surface": "handoff_projection",
+                "required_snapshot_tables": [
+                  "committee_handoff_rule",
+                  "failure_pattern",
+                  "degraded_input_example",
+                  "export_template",
+                  "runtime_consume_contract"
+                ]
+              }
+            ]"#,
+        )
+        .expect("runtime consume contract should be writable");
+
+        SnapshotBootstrapFixture {
+            root: root.clone(),
+            paths: SnapshotBootstrapPreparePaths {
+                snapshot_path,
+                manifest_path,
+                validator_result_path,
+                snapshot_meta_path,
+                export_template_path,
+                failure_pattern_path,
+                degraded_input_example_path,
+                runtime_consume_contract_path,
+            },
+        }
+    }
+
+    fn unique_test_dir(prefix: &str) -> PathBuf {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current time should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("hope-{prefix}-{unique_suffix}"))
+    }
+
+    struct SnapshotBootstrapFixture {
+        root: PathBuf,
+        paths: SnapshotBootstrapPreparePaths,
     }
 }
