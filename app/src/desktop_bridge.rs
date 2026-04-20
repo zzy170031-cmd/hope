@@ -1,20 +1,29 @@
 use std::io;
 
 use crate::{
-    ipc::{PROJECT_CREATE_OR_SWITCH_COMMAND, ProjectCreateOrSwitchRequest},
-    runtime::{ProjectCreateOrSwitchSnapshot, build_project_create_or_switch_snapshot},
+    ipc::{
+        PROJECT_CREATE_OR_SWITCH_COMMAND, ProjectCreateOrSwitchRequest,
+        WRITER_ENTRY_SNAPSHOT_COMMAND, WriterEntrySnapshotRequest,
+    },
+    runtime::{
+        ProjectCreateOrSwitchSnapshot, WriterEntrySnapshot, build_project_create_or_switch_snapshot,
+        build_writer_entry_snapshot,
+    },
 };
 
-pub const DESKTOP_INVOKE_COMMANDS: &[&str] = &[PROJECT_CREATE_OR_SWITCH_COMMAND];
+pub const DESKTOP_INVOKE_COMMANDS: &[&str] =
+    &[PROJECT_CREATE_OR_SWITCH_COMMAND, WRITER_ENTRY_SNAPSHOT_COMMAND];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DesktopInvokeRequest {
     ProjectCreateOrSwitch(ProjectCreateOrSwitchRequest),
+    WriterEntrySnapshot(WriterEntrySnapshotRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DesktopInvokeResponse {
     ProjectCreateOrSwitch(ProjectCreateOrSwitchSnapshot),
+    WriterEntrySnapshot(WriterEntrySnapshot),
 }
 
 #[derive(Debug)]
@@ -55,6 +64,10 @@ pub fn invoke_desktop_command(
             let snapshot = build_project_create_or_switch_snapshot(request)?;
             Ok(DesktopInvokeResponse::ProjectCreateOrSwitch(snapshot))
         }
+        (WRITER_ENTRY_SNAPSHOT_COMMAND, DesktopInvokeRequest::WriterEntrySnapshot(request)) => {
+            let snapshot = build_writer_entry_snapshot(request)?;
+            Ok(DesktopInvokeResponse::WriterEntrySnapshot(snapshot))
+        }
         _ => Err(DesktopInvokeError::UnsupportedCommand {
             command: command.to_string(),
         }),
@@ -63,17 +76,21 @@ pub fn invoke_desktop_command(
 
 #[cfg(test)]
 mod tests {
-    use crate::ipc::ProjectCreateOrSwitchRequest;
+    use crate::ipc::{ProjectCreateOrSwitchRequest, WriterEntrySnapshotRequest};
 
     use super::{
         DESKTOP_INVOKE_COMMANDS, DesktopInvokeRequest, DesktopInvokeResponse,
-        PROJECT_CREATE_OR_SWITCH_COMMAND, desktop_invoke_contract, invoke_desktop_command,
+        PROJECT_CREATE_OR_SWITCH_COMMAND, WRITER_ENTRY_SNAPSHOT_COMMAND, desktop_invoke_contract,
+        invoke_desktop_command,
     };
 
     #[test]
-    fn desktop_invoke_contract_registers_projects_first() {
+    fn desktop_invoke_contract_registers_phase1_commands_only() {
         assert_eq!(desktop_invoke_contract(), DESKTOP_INVOKE_COMMANDS);
-        assert_eq!(desktop_invoke_contract(), &[PROJECT_CREATE_OR_SWITCH_COMMAND]);
+        assert_eq!(
+            desktop_invoke_contract(),
+            &[PROJECT_CREATE_OR_SWITCH_COMMAND, WRITER_ENTRY_SNAPSHOT_COMMAND]
+        );
     }
 
     #[test]
@@ -92,22 +109,48 @@ mod tests {
                 assert_eq!(snapshot.current_project_id.as_deref(), Some("project-week3-001"));
                 assert!(!snapshot.projects.is_empty());
             }
+            _ => panic!("project invoke should return the project snapshot variant"),
         }
     }
 
     #[test]
-    fn invoke_desktop_command_rejects_unregistered_commands() {
-        let error = invoke_desktop_command(
-            "writer_entry_snapshot",
-            DesktopInvokeRequest::ProjectCreateOrSwitch(ProjectCreateOrSwitchRequest {
-                project_id: None,
-                project_name: None,
+    fn invoke_desktop_command_returns_real_writer_snapshot() {
+        let response = invoke_desktop_command(
+            WRITER_ENTRY_SNAPSHOT_COMMAND,
+            DesktopInvokeRequest::WriterEntrySnapshot(WriterEntrySnapshotRequest {
+                project_id: "project-week3-001".to_string(),
             }),
         )
-        .expect_err("writer is not enabled in the first Projects-only pass");
+        .expect("writer desktop invoke should succeed");
 
-        assert!(error
-            .to_string()
-            .contains("desktop invoke command is not registered yet"));
+        match response {
+            DesktopInvokeResponse::WriterEntrySnapshot(snapshot) => {
+                assert_eq!(snapshot.project_id, "project-week3-001");
+                assert!(snapshot.synopsis.contains("分钟"));
+                assert!(snapshot.story.contains("第 1 集"));
+            }
+            _ => panic!("writer invoke should return the writer snapshot variant"),
+        }
+    }
+
+    #[test]
+    fn invoke_desktop_command_keeps_preview_and_export_closed() {
+        for command in [
+            "storyboard_rendersegment_cut_preview_snapshot",
+            "validation_export_panel_snapshot",
+        ] {
+            let error = invoke_desktop_command(
+                command,
+                DesktopInvokeRequest::ProjectCreateOrSwitch(ProjectCreateOrSwitchRequest {
+                    project_id: None,
+                    project_name: None,
+                }),
+            )
+            .expect_err("preview and export should stay closed in the writer step");
+
+            assert!(error
+                .to_string()
+                .contains("desktop invoke command is not registered yet"));
+        }
     }
 }
