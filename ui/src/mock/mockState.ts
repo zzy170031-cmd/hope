@@ -2,6 +2,7 @@ import type {
   ExportValidationItem,
   PreviewItem,
   ProjectSummary,
+  ValidationExportPanelSnapshot,
   WriterLayerSnapshot,
 } from "../types";
 
@@ -68,20 +69,45 @@ export const MOCK_PREVIEW_ITEMS: Record<"storyboard" | "renderSegment" | "cuts",
   ],
 };
 
-export const MOCK_EXPORT_VALIDATION: ExportValidationItem[] = [
+const MOCK_EXPORT_VALIDATION_SUMMARY: ExportValidationItem[] = [
   {
-    label: "Workbook 结构",
-    value: "17 张 sheet",
-    state: "待对齐",
-  },
-  {
-    label: "中文字段",
-    value: "统一采用 UTF-8",
+    label: "当前项目",
+    value: "project-week3-001",
     state: "正常",
   },
   {
-    label: "Validation report",
-    value: "等待真实 IPC 接入",
-    state: "待补充",
+    label: "Validation 报告",
+    value: "17 行检查 / 2 条阻塞",
+    state: "阻塞",
+  },
+  {
+    label: "修复建议",
+    value: "2 条 KB-backed 建议",
+    state: "正常",
   },
 ];
+
+export const MOCK_EXPORT_VALIDATION_SNAPSHOT: ValidationExportPanelSnapshot = {
+  projectId: "project-week3-001",
+  summaryItems: MOCK_EXPORT_VALIDATION_SUMMARY,
+  repairRecommendations: [
+    {
+      failureCode: "style_drift",
+      failureName: "Style Drift",
+      repairStrategy: "重新注入风格锁定语句，并在 render prompt 中保留 identity baseline。",
+      repairPriority: "high",
+      repairScope: "render_prompt_only",
+      validatorHint: "Style Unity Validator",
+      promptTemplateNames: ["Repair Style Lock"],
+    },
+    {
+      failureCode: "chinese_prompt_noise",
+      failureName: "Chinese Prompt Noise",
+      repairStrategy: "将占位 prompt 改写为自然中文，去掉 TODO 和机器痕迹。",
+      repairPriority: "medium",
+      repairScope: "prompt_rendering_layer",
+      validatorHint: "Prompt quality review",
+      promptTemplateNames: ["Repair Prompt Language"],
+    },
+  ],
+};

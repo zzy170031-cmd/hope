@@ -331,9 +331,9 @@ button {
   color: var(--accent);
 }
 
-.validation-row__state--track-a {
-  background: rgba(63, 97, 127, 0.12);
-  color: #3f617f;
+.validation-row__state--blocked {
+  background: rgba(124, 42, 42, 0.12);
+  color: #7c2a2a;
 }
 
 @keyframes shimmer {

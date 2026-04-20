@@ -1,6 +1,12 @@
-use std::io;
+use std::{collections::HashSet, io};
 
-use crate::state::AppState;
+use crate::{
+    ipc::{
+        ProjectCreateOrSwitchRequest, StoryboardRenderSegmentCutPreviewSnapshotRequest,
+        ValidationExportPanelSnapshotRequest, WriterEntrySnapshotRequest,
+    },
+    state::AppState,
+};
 
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
 use validators::{
@@ -8,6 +14,46 @@ use validators::{
     generate_week3_repair_recommendations, generate_week3_validation_report,
     load_week3_shared_fixture,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectCreateOrSwitchSnapshot {
+    pub current_project_id: Option<String>,
+    pub projects: Vec<ProjectSummaryItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectSummaryItem {
+    pub project_id: String,
+    pub name: String,
+    pub status: String,
+    pub updated_at: String,
+    pub episode_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriterEntrySnapshot {
+    pub project_id: String,
+    pub synopsis: String,
+    pub story: String,
+    pub screenplay: String,
+    pub storyboard: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoryboardRenderSegmentCutPreviewSnapshot {
+    pub project_id: String,
+    pub storyboard: Vec<PreviewItem>,
+    pub render_segment: Vec<PreviewItem>,
+    pub cuts: Vec<PreviewItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewItem {
+    pub id: String,
+    pub label: String,
+    pub duration: String,
+    pub note: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoryboardPreviewPlanRequest {
@@ -26,11 +72,6 @@ pub struct StoryboardPreviewPlanRequest {
     pub scene_type: Option<String>,
     pub layout_prompt: String,
     pub render_prompt: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ValidationExportPanelSnapshotRequest {
-    pub project_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,11 +106,77 @@ pub struct ValidationRepairRecommendationItem {
     pub prompt_template_names: Vec<String>,
 }
 
+pub fn build_project_create_or_switch_snapshot(
+    request: ProjectCreateOrSwitchRequest,
+) -> io::Result<ProjectCreateOrSwitchSnapshot> {
+    let fixture = load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH)?;
+    Ok(build_project_create_or_switch_snapshot_from_fixture(
+        request, &fixture,
+    ))
+}
+
+pub fn build_writer_entry_snapshot(
+    request: WriterEntrySnapshotRequest,
+) -> io::Result<WriterEntrySnapshot> {
+    let fixture = load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH)?;
+    Ok(build_writer_entry_snapshot_from_fixture(request, &fixture))
+}
+
+pub fn build_storyboard_rendersegment_cut_preview_snapshot(
+    state: &AppState,
+    request: StoryboardRenderSegmentCutPreviewSnapshotRequest,
+) -> io::Result<StoryboardRenderSegmentCutPreviewSnapshot> {
+    let fixture = load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH)?;
+    Ok(build_storyboard_rendersegment_cut_preview_snapshot_from_fixture(
+        state, request, &fixture,
+    ))
+}
+
 pub fn build_storyboard_preview_plan(
     state: &AppState,
     request: StoryboardPreviewPlanRequest,
 ) -> Result<StoryboardPlan, StoryboardPlanningError> {
     let scene_taxonomy = resolve_scene_taxonomy(state, request.scene_type.as_deref());
+    let derived_scene_director_id = request.scene_director_id.clone().or_else(|| {
+        scene_taxonomy
+            .as_ref()
+            .map(|taxonomy| format!("taxonomy:{}:scene", taxonomy.scene_taxonomy_id))
+    });
+    let derived_action_director_id = request.action_director_id.clone().or_else(|| {
+        scene_taxonomy
+            .as_ref()
+            .map(|taxonomy| format!("taxonomy:{}:action", taxonomy.scene_taxonomy_id))
+    });
+    let layout_prompt = if let Some(taxonomy) = scene_taxonomy.as_ref() {
+        if request
+            .layout_prompt
+            .contains(&format!("场景分类：{}", taxonomy.scene_type))
+        {
+            request.layout_prompt.clone()
+        } else {
+            format!(
+                "{}\n场景分类：{}",
+                request.layout_prompt, taxonomy.scene_type
+            )
+        }
+    } else {
+        request.layout_prompt.clone()
+    };
+    let render_prompt = if let Some(taxonomy) = scene_taxonomy.as_ref() {
+        if request
+            .render_prompt
+            .contains(&format!("连续性优先级：{}", taxonomy.continuity_priority))
+        {
+            request.render_prompt.clone()
+        } else {
+            format!(
+                "{}\n连续性优先级：{}",
+                request.render_prompt, taxonomy.continuity_priority
+            )
+        }
+    } else {
+        request.render_prompt.clone()
+    };
 
     storyboard_pipeline::build_storyboard_plan(StoryboardPlanRequest {
         render_segment_id: request.render_segment_id,
@@ -82,11 +189,11 @@ pub fn build_storyboard_preview_plan(
         cut_sequence_no: request.cut_sequence_no,
         shot_description: request.shot_description,
         dialogue: request.dialogue,
-        scene_director_id: request.scene_director_id,
-        action_director_id: request.action_director_id,
+        scene_director_id: derived_scene_director_id,
+        action_director_id: derived_action_director_id,
         scene_taxonomy,
-        layout_prompt: request.layout_prompt,
-        render_prompt: request.render_prompt,
+        layout_prompt,
+        render_prompt,
     })
 }
 
@@ -114,6 +221,278 @@ pub fn resolve_scene_taxonomy(
                 || taxonomy.scene_taxonomy_id == scene_type
         })
         .cloned()
+}
+
+fn build_project_create_or_switch_snapshot_from_fixture(
+    request: ProjectCreateOrSwitchRequest,
+    fixture: &Week3SharedFixture,
+) -> ProjectCreateOrSwitchSnapshot {
+    let current_project_id = request
+        .project_id
+        .clone()
+        .or_else(|| fixture.project_meta.first().map(|row| row.project_id.clone()));
+
+    let projects = fixture
+        .project_meta
+        .iter()
+        .map(|row| ProjectSummaryItem {
+            project_id: row.project_id.clone(),
+            name: row.title.clone(),
+            status: row.status.clone(),
+            updated_at: format!("timestamp {}", row.updated_at_timestamp),
+            episode_count: fixture
+                .episode_meta
+                .iter()
+                .filter(|episode| episode.project_id == row.project_id)
+                .count(),
+        })
+        .collect();
+
+    ProjectCreateOrSwitchSnapshot {
+        current_project_id,
+        projects,
+    }
+}
+
+fn build_writer_entry_snapshot_from_fixture(
+    request: WriterEntrySnapshotRequest,
+    fixture: &Week3SharedFixture,
+) -> WriterEntrySnapshot {
+    let episode_ids = project_episode_ids(fixture, &request.project_id);
+    let scene_ids = project_scene_ids(fixture, &request.project_id);
+    let render_segment_ids = project_render_segment_ids(fixture, &request.project_id);
+    let episode_count = episode_ids.len();
+
+    let scenes: Vec<_> = fixture
+        .narrative_scene
+        .iter()
+        .filter(|scene| scene_ids.contains(&scene.narrative_scene_id))
+        .collect();
+    let cuts: Vec<_> = fixture
+        .cut
+        .iter()
+        .filter(|cut| render_segment_ids.contains(&cut.render_segment_id))
+        .collect();
+    let render_segment_count = fixture
+        .render_segment
+        .iter()
+        .filter(|segment| render_segment_ids.contains(&segment.render_segment_id))
+        .count();
+    let handoff_zone_count = fixture
+        .handoff_zone
+        .iter()
+        .filter(|zone| render_segment_ids.contains(&zone.render_segment_id))
+        .count();
+
+    let synopsis = if let Some(project) = fixture
+        .project_meta
+        .iter()
+        .find(|row| row.project_id == request.project_id)
+    {
+        let first_scene = scenes
+            .first()
+            .map(|scene| format!(" 首个 NarrativeScene：{}。", scene.title))
+            .unwrap_or_default();
+
+        format!(
+            "项目《{}》当前目标 {} 分钟，已同步 {} 个 Episode。{}",
+            project.title, project.target_duration_minutes, episode_count, first_scene
+        )
+    } else {
+        format!("项目 {} 已接入共享 fixture。", request.project_id)
+    };
+
+    let story = if scenes.is_empty() {
+        format!("项目 {} 暂无 NarrativeScene。", request.project_id)
+    } else {
+        scenes
+            .iter()
+            .map(|scene| format!("第 {} 场 {}：{}", scene.sequence_no, scene.title, scene.summary))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+
+    let screenplay = if cuts.is_empty() {
+        "当前共享 fixture 暂无 Cut 预览。".to_string()
+    } else {
+        cuts.iter()
+            .take(3)
+            .map(|cut| {
+                format!(
+                    "Cut {:02} / {} / {}",
+                    cut.sequence_no, cut.shot_description, cut.dialogue
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+
+    let storyboard = format!(
+        "{} 个 RenderSegment / {} 个 Cut / {} 个 HandoffZone / {} 个 PromptPackage",
+        render_segment_count,
+        cuts.len(),
+        handoff_zone_count,
+        fixture.prompt_package.len()
+    );
+
+    WriterEntrySnapshot {
+        project_id: request.project_id,
+        synopsis,
+        story,
+        screenplay,
+        storyboard,
+    }
+}
+
+fn build_storyboard_rendersegment_cut_preview_snapshot_from_fixture(
+    state: &AppState,
+    request: StoryboardRenderSegmentCutPreviewSnapshotRequest,
+    fixture: &Week3SharedFixture,
+) -> StoryboardRenderSegmentCutPreviewSnapshot {
+    let scene_ids = project_scene_ids(fixture, &request.project_id);
+    let project_render_segment_ids = project_render_segment_ids(fixture, &request.project_id);
+
+    let mut scenes: Vec<_> = fixture
+        .narrative_scene
+        .iter()
+        .filter(|scene| scene_ids.contains(&scene.narrative_scene_id))
+        .collect();
+    if let Some(narrative_scene_id) = request.narrative_scene_id.as_ref() {
+        scenes.retain(|scene| scene.narrative_scene_id == *narrative_scene_id);
+    }
+    scenes.sort_by_key(|scene| scene.sequence_no);
+
+    let filtered_scene_ids: HashSet<_> = scenes
+        .iter()
+        .map(|scene| scene.narrative_scene_id.clone())
+        .collect();
+
+    let mut render_segments: Vec<_> = fixture
+        .render_segment
+        .iter()
+        .filter(|segment| project_render_segment_ids.contains(&segment.render_segment_id))
+        .filter(|segment| filtered_scene_ids.contains(&segment.narrative_scene_id))
+        .collect();
+    if let Some(render_segment_id) = request.render_segment_id.as_ref() {
+        render_segments.retain(|segment| segment.render_segment_id == *render_segment_id);
+    }
+    render_segments.sort_by_key(|segment| segment.sequence_no);
+
+    let filtered_render_segment_ids: HashSet<_> = render_segments
+        .iter()
+        .map(|segment| segment.render_segment_id.clone())
+        .collect();
+
+    let storyboard = scenes
+        .iter()
+        .map(|scene| PreviewItem {
+            id: scene.narrative_scene_id.clone(),
+            label: format!("第 {:02} 场 {}", scene.sequence_no, scene.title),
+            duration: "Scene".to_string(),
+            note: scene.summary.clone(),
+        })
+        .collect();
+
+    let render_segment = render_segments
+        .iter()
+        .map(|segment| {
+            let scene = scenes
+                .iter()
+                .find(|scene| scene.narrative_scene_id == segment.narrative_scene_id);
+            let cut = fixture
+                .cut
+                .iter()
+                .filter(|cut| cut.render_segment_id == segment.render_segment_id)
+                .min_by_key(|cut| cut.sequence_no);
+            let prompt_body = fixture
+                .prompt_package
+                .first()
+                .map(|prompt| prompt.body.as_str())
+                .unwrap_or("等待真实 PromptPackage 注入。");
+
+            let plan_note = match build_storyboard_preview_plan(
+                state,
+                StoryboardPreviewPlanRequest {
+                    render_segment_id: segment.render_segment_id.clone(),
+                    narrative_scene_id: segment.narrative_scene_id.clone(),
+                    render_segment_sequence_no: segment.sequence_no,
+                    start_shot_sequence_no: segment.start_shot_sequence_no,
+                    end_shot_sequence_no: segment.end_shot_sequence_no,
+                    target_duration_seconds: segment.target_duration_seconds as u16,
+                    cut_id: cut
+                        .map(|item| item.cut_id.clone())
+                        .unwrap_or_else(|| format!("{}-preview-cut", segment.render_segment_id)),
+                    cut_sequence_no: cut.map(|item| item.sequence_no).unwrap_or(1),
+                    shot_description: cut
+                        .map(|item| item.shot_description.clone())
+                        .unwrap_or_else(|| "待补充镜头描述".to_string()),
+                    dialogue: cut
+                        .map(|item| item.dialogue.clone())
+                        .unwrap_or_else(|| "待补充对白".to_string()),
+                    scene_director_id: Some("desktop-shell:scene".to_string()),
+                    action_director_id: Some("desktop-shell:action".to_string()),
+                    scene_type: request.scene_type.clone(),
+                    layout_prompt: format!(
+                        "{} / {}",
+                        scene
+                            .map(|item| item.title.as_str())
+                            .unwrap_or("未命名场景"),
+                        cut.map(|item| item.shot_description.as_str())
+                            .unwrap_or("待补充镜头描述")
+                    ),
+                    render_prompt: prompt_body.to_string(),
+                },
+            ) {
+                Ok(plan) => format!(
+                    "{} | shots {}-{} | handoff {} -> {} | scene {} | render {}",
+                    scene
+                        .map(|item| item.title.as_str())
+                        .unwrap_or("未命名场景"),
+                    plan.render_segment.start_shot_sequence_no,
+                    plan.render_segment.end_shot_sequence_no,
+                    plan.handoff_zone.start_boundary,
+                    plan.handoff_zone.end_boundary,
+                    truncate_preview_text(&plan.committee_runtime.prompt_layers.layout_prompt, 48),
+                    truncate_preview_text(&plan.committee_runtime.prompt_layers.render_prompt, 64)
+                ),
+                Err(error) => format!("Preview plan fallback: {}", error),
+            };
+
+            PreviewItem {
+                id: segment.render_segment_id.clone(),
+                label: format!("RenderSegment {:02}", segment.sequence_no),
+                duration: format!("{}s", segment.target_duration_seconds),
+                note: plan_note,
+            }
+        })
+        .collect();
+
+    let mut cuts: Vec<_> = fixture
+        .cut
+        .iter()
+        .filter(|cut| filtered_render_segment_ids.contains(&cut.render_segment_id))
+        .collect();
+    cuts.sort_by_key(|cut| cut.sequence_no);
+    let cuts = cuts
+        .iter()
+        .map(|cut| PreviewItem {
+            id: cut.cut_id.clone(),
+            label: format!("Cut {:02}", cut.sequence_no),
+            duration: format!("{}s", cut.duration_seconds),
+            note: format!(
+                "{} / {}",
+                cut.shot_description,
+                truncate_preview_text(&cut.dialogue, 48)
+            ),
+        })
+        .collect();
+
+    StoryboardRenderSegmentCutPreviewSnapshot {
+        project_id: request.project_id,
+        storyboard,
+        render_segment,
+        cuts,
+    }
 }
 
 fn build_validation_export_panel_snapshot_from_fixture(
@@ -179,6 +558,46 @@ fn build_validation_export_panel_snapshot_from_fixture(
     })
 }
 
+fn project_episode_ids(fixture: &Week3SharedFixture, project_id: &str) -> HashSet<String> {
+    fixture
+        .episode_meta
+        .iter()
+        .filter(|episode| episode.project_id == project_id)
+        .map(|episode| episode.episode_id.clone())
+        .collect()
+}
+
+fn project_scene_ids(fixture: &Week3SharedFixture, project_id: &str) -> HashSet<String> {
+    let episode_ids = project_episode_ids(fixture, project_id);
+
+    fixture
+        .narrative_scene
+        .iter()
+        .filter(|scene| episode_ids.contains(&scene.episode_id))
+        .map(|scene| scene.narrative_scene_id.clone())
+        .collect()
+}
+
+fn project_render_segment_ids(fixture: &Week3SharedFixture, project_id: &str) -> HashSet<String> {
+    let scene_ids = project_scene_ids(fixture, project_id);
+
+    fixture
+        .render_segment
+        .iter()
+        .filter(|segment| scene_ids.contains(&segment.narrative_scene_id))
+        .map(|segment| segment.render_segment_id.clone())
+        .collect()
+}
+
+fn truncate_preview_text(text: &str, max_chars: usize) -> String {
+    let truncated: String = text.chars().take(max_chars).collect();
+    if text.chars().count() > max_chars {
+        format!("{}...", truncated)
+    } else {
+        truncated
+    }
+}
+
 fn map_repair_recommendation(
     recommendation: RepairRecommendation,
 ) -> ValidationRepairRecommendationItem {
@@ -208,11 +627,19 @@ mod tests {
     };
 
     use super::{
-        StoryboardPreviewPlanRequest, ValidationExportPanelSnapshotRequest,
-        ValidationExportPanelState, build_storyboard_preview_plan,
+        StoryboardPreviewPlanRequest, ValidationExportPanelState,
+        build_project_create_or_switch_snapshot_from_fixture, build_storyboard_preview_plan,
+        build_storyboard_rendersegment_cut_preview_snapshot_from_fixture,
         build_validation_export_panel_snapshot_from_fixture, resolve_scene_taxonomy,
+        build_writer_entry_snapshot_from_fixture,
     };
-    use crate::state::AppState;
+    use crate::{
+        ipc::{
+            ProjectCreateOrSwitchRequest, StoryboardRenderSegmentCutPreviewSnapshotRequest,
+            ValidationExportPanelSnapshotRequest, WriterEntrySnapshotRequest,
+        },
+        state::AppState,
+    };
     use validators::{WEEK3_SHARED_FIXTURE_PATH, load_week3_shared_fixture};
 
     fn test_state() -> AppState {
@@ -436,6 +863,68 @@ mod tests {
             plan.committee_runtime.prompt_layers.layout_prompt,
             "close shot, interior"
         );
+    }
+
+    #[test]
+    fn build_project_create_or_switch_snapshot_tracks_fixture_projects() {
+        let fixture = load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH)
+            .expect("shared fixture should load");
+
+        let snapshot = build_project_create_or_switch_snapshot_from_fixture(
+            ProjectCreateOrSwitchRequest {
+                project_id: None,
+                project_name: None,
+            },
+            &fixture,
+        );
+
+        assert_eq!(snapshot.current_project_id.as_deref(), Some("project-week3-001"));
+        assert_eq!(snapshot.projects.len(), 1);
+        assert!(snapshot.projects[0].episode_count >= 1);
+        assert!(snapshot.projects[0].name.contains("Hope"));
+    }
+
+    #[test]
+    fn build_writer_entry_snapshot_summarizes_fixture_layers() {
+        let fixture = load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH)
+            .expect("shared fixture should load");
+
+        let snapshot = build_writer_entry_snapshot_from_fixture(
+            WriterEntrySnapshotRequest {
+                project_id: "project-week3-001".to_string(),
+            },
+            &fixture,
+        );
+
+        assert!(snapshot.synopsis.contains("分钟"));
+        assert!(snapshot.story.contains("第 1 集"));
+        assert!(snapshot.screenplay.contains("Cut"));
+        assert!(snapshot.storyboard.contains("RenderSegment"));
+    }
+
+    #[test]
+    fn build_storyboard_rendersegment_cut_preview_snapshot_includes_runtime_details() {
+        let state = test_state();
+        let fixture = load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH)
+            .expect("shared fixture should load");
+
+        let snapshot = build_storyboard_rendersegment_cut_preview_snapshot_from_fixture(
+            &state,
+            StoryboardRenderSegmentCutPreviewSnapshotRequest {
+                project_id: "project-week3-001".to_string(),
+                episode_id: None,
+                narrative_scene_id: None,
+                render_segment_id: None,
+                scene_type: Some("daily_dialogue".to_string()),
+            },
+            &fixture,
+        );
+
+        assert!(!snapshot.storyboard.is_empty());
+        assert!(!snapshot.render_segment.is_empty());
+        assert!(!snapshot.cuts.is_empty());
+        assert!(snapshot.render_segment[0].note.contains("handoff"));
+        assert!(snapshot.render_segment[0].note.contains("scene"));
     }
 
     #[test]

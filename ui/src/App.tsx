@@ -5,13 +5,21 @@ import { Shell } from "./components/Shell";
 import { ROUTES, resolveRoute } from "./routes";
 import {
   HOPE_TAURI_COMMANDS,
+  getHopeBridgeStatus,
   invokeHopeCommand,
   loadExportValidationSnapshot,
   loadPreviewSnapshot,
   loadProjectList,
   loadWriterSnapshot,
 } from "./bridge/hopeBridge";
-import type { ExportValidationItem, PreviewItem, ProjectSummary, ViewId } from "./types";
+import type {
+  ExportValidationItem,
+  PreviewItem,
+  ProjectSummary,
+  ValidationExportPanelSnapshot,
+  ValidationRepairRecommendation,
+  ViewId,
+} from "./types";
 
 interface AsyncState<T> {
   status: "loading" | "ready" | "error";
@@ -48,7 +56,7 @@ function useHashView() {
   return { activeView, navigate };
 }
 
-function useMockCommand<T>(loader: () => Promise<T>, deps: unknown[]): AsyncState<T> {
+function useAsyncCommand<T>(loader: () => Promise<T>, deps: unknown[]): AsyncState<T> {
   const [state, setState] = useState<AsyncState<T>>({
     status: "loading",
     data: null,
@@ -86,6 +94,7 @@ function useMockCommand<T>(loader: () => Promise<T>, deps: unknown[]): AsyncStat
 export function App() {
   const { activeView, navigate } = useHashView();
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const bridgeStatus = useMemo(() => getHopeBridgeStatus(), []);
 
   return (
     <Shell activeView={activeView} onNavigate={navigate}>
@@ -95,8 +104,8 @@ export function App() {
           <h2>{ROUTES.find((route) => route.id === activeView)?.label ?? "Hope UI"}</h2>
         </div>
         <div className="workspace__status">
-          <span className="workspace__chip">IPC mirror aligned</span>
-          <span className="workspace__chip workspace__chip--soft">Shared fixture only</span>
+          <span className="workspace__chip">{bridgeStatus.label}</span>
+          <span className="workspace__chip workspace__chip--soft">{bridgeStatus.detail}</span>
         </div>
       </div>
 
@@ -142,10 +151,16 @@ interface ProjectsViewProps {
 }
 
 function ProjectsView({ selectedProjectId, setSelectedProjectId }: ProjectsViewProps) {
-  const projects = useMockCommand(loadProjectList, []);
+  const projects = useAsyncCommand(loadProjectList, []);
   const selectedProject = useMemo<ProjectSummary | null>(() => {
     return projects.data?.find((project) => project.id === selectedProjectId) ?? null;
   }, [projects.data, selectedProjectId]);
+
+  useEffect(() => {
+    if (!selectedProjectId && projects.status === "ready" && projects.data?.length) {
+      setSelectedProjectId(projects.data[0].id);
+    }
+  }, [projects.data, projects.status, selectedProjectId, setSelectedProjectId]);
 
   return (
     <section className="view-grid">
@@ -220,7 +235,10 @@ function ProjectsView({ selectedProjectId, setSelectedProjectId }: ProjectsViewP
 }
 
 function WriterView({ selectedProjectId }: { selectedProjectId: string | null }) {
-  const writer = useMockCommand(loadWriterSnapshot, [selectedProjectId]);
+  const writer = useAsyncCommand(
+    () => loadWriterSnapshot(selectedProjectId ?? undefined),
+    [selectedProjectId],
+  );
 
   return (
     <section className="panel">
@@ -248,7 +266,10 @@ function WriterView({ selectedProjectId }: { selectedProjectId: string | null })
 }
 
 function PreviewView({ selectedProjectId }: { selectedProjectId: string | null }) {
-  const preview = useMockCommand(loadPreviewSnapshot, [selectedProjectId]);
+  const preview = useAsyncCommand(
+    () => loadPreviewSnapshot(selectedProjectId ?? undefined),
+    [selectedProjectId],
+  );
 
   return (
     <section className="view-grid view-grid--preview">
@@ -309,7 +330,10 @@ function renderPreviewSection(
 }
 
 function ExportView({ selectedProjectId }: { selectedProjectId: string | null }) {
-  const validation = useMockCommand(loadExportValidationSnapshot, [selectedProjectId]);
+  const validation = useAsyncCommand<ValidationExportPanelSnapshot>(
+    () => loadExportValidationSnapshot(selectedProjectId ?? undefined),
+    [selectedProjectId],
+  );
 
   return (
     <section className="view-grid view-grid--export">
@@ -344,10 +368,33 @@ function ExportView({ selectedProjectId }: { selectedProjectId: string | null })
           <EmptyState title="校验加载失败" description={validation.error ?? "请稍后重试。"} />
         ) : (
           <div className="stack">
-            {validation.data?.map((item) => (
+            {validation.data?.summaryItems.map((item) => (
               <ValidationRow key={item.label} item={item} />
             ))}
           </div>
+        )}
+      </div>
+
+      <div className="panel">
+        <div className="panel__header">
+          <h3>Repair 建议</h3>
+          <span className="panel__hint">KB-backed recommendation</span>
+        </div>
+
+        {!selectedProjectId ? (
+          <EmptyState title="先选择项目" description="修复建议会跟随当前项目上下文。" />
+        ) : validation.status === "loading" ? (
+          <LoadingCard lines={4} />
+        ) : validation.status === "error" ? (
+          <EmptyState title="修复建议加载失败" description={validation.error ?? "请稍后重试。"} />
+        ) : validation.data?.repairRecommendations.length ? (
+          <div className="stack">
+            {validation.data.repairRecommendations.map((item) => (
+              <RepairRecommendationCard key={item.failureCode} item={item} />
+            ))}
+          </div>
+        ) : (
+          <EmptyState title="暂无修复建议" description="当前项目尚未返回 KB-backed repair 项。" />
         )}
       </div>
     </section>
@@ -369,7 +416,7 @@ function ValidationRow({ item }: { item: ExportValidationItem }) {
       ? "validation-row__state--ok"
       : item.state === "待补充"
         ? "validation-row__state--pending"
-        : "validation-row__state--track-a";
+        : "validation-row__state--blocked";
 
   return (
     <div className="validation-row">
@@ -379,5 +426,21 @@ function ValidationRow({ item }: { item: ExportValidationItem }) {
       </div>
       <span className={`validation-row__state ${stateClass}`}>{item.state}</span>
     </div>
+  );
+}
+
+function RepairRecommendationCard({ item }: { item: ValidationRepairRecommendation }) {
+  return (
+    <article className="detail-card">
+      <strong>{item.failureName}</strong>
+      <p>失败码：{item.failureCode}</p>
+      <p>策略：{item.repairStrategy}</p>
+      <p>优先级：{item.repairPriority}</p>
+      <p>范围：{item.repairScope}</p>
+      <p>校验提示：{item.validatorHint}</p>
+      <p className="detail-card__note">
+        模板：{item.promptTemplateNames.length ? item.promptTemplateNames.join(" / ") : "待补充"}
+      </p>
+    </article>
   );
 }

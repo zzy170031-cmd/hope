@@ -2,7 +2,9 @@ export type ViewId = "projects" | "writer" | "preview" | "export";
 
 export type LoadStatus = "loading" | "ready" | "empty" | "error";
 
-export type ExportValidationState = "正常" | "待补充" | "待对齐";
+export type BridgeMode = "desktop" | "mock";
+
+export type ExportValidationState = "正常" | "待补充" | "阻塞";
 
 export interface ProjectSummary {
   id: string;
@@ -30,6 +32,22 @@ export interface ExportValidationItem {
   label: string;
   value: string;
   state: ExportValidationState;
+}
+
+export interface ValidationRepairRecommendation {
+  failureCode: string;
+  failureName: string;
+  repairStrategy: string;
+  repairPriority: string;
+  repairScope: string;
+  validatorHint: string;
+  promptTemplateNames: string[];
+}
+
+export interface ValidationExportPanelSnapshot {
+  projectId: string;
+  summaryItems: ExportValidationItem[];
+  repairRecommendations: ValidationRepairRecommendation[];
 }
 
 export interface ProjectCreateOrSwitchRequest {

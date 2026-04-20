@@ -36,7 +36,7 @@ export function Shell({ activeView, onNavigate, children }: ShellProps) {
 
         <section className="sidebar__note">
           <strong>边界说明</strong>
-          <p>UI 仅通过 Tauri 占位层取数，不直接触碰 SQLite；字段与命令待 Track A 对齐。</p>
+          <p>桌面壳优先走 IPC，浏览器开发模式回落到 fixture mock；UI 不直接触碰 SQLite，也不扩展主线程 contract。</p>
         </section>
       </aside>
 
