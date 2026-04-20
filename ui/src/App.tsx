@@ -243,7 +243,7 @@ function WriterView({ selectedProjectId }: { selectedProjectId: string | null })
   return (
     <section className="panel">
       <div className="panel__header">
-        <h3>Synopsis -> Story -> Screenplay -> Storyboard</h3>
+        <h3>Synopsis -&gt; Story -&gt; Screenplay -&gt; Storyboard</h3>
         <span className="panel__hint">四层查看入口</span>
       </div>
 
@@ -348,7 +348,7 @@ function ExportView({ selectedProjectId }: { selectedProjectId: string | null })
         ) : (
           <div className="detail-card">
             <strong>当前导出链</strong>
-            <p>共享 fixture -> validation_report -> Excel / JSON / Markdown</p>
+            <p>共享 fixture -&gt; validation_report -&gt; Excel / JSON / Markdown</p>
             <p>命令：{HOPE_TAURI_COMMANDS.validationExportPanelSnapshot}</p>
           </div>
         )}

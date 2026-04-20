@@ -56,6 +56,9 @@ export interface HopeBridgeStatus {
 }
 
 const DEFAULT_PROJECT_ID = "project-week3-001";
+const PHASE1_REAL_COMMANDS = new Set<HopeCommandName>([
+  HOPE_TAURI_COMMANDS.projectCreateOrSwitch,
+]);
 
 function delay(ms: number) {
   return new Promise((resolve) => {
@@ -295,7 +298,7 @@ export async function invokeHopeCommand<T>(
   command: HopeCommandName,
   payload?: HopeCommandPayload,
 ): Promise<T> {
-  const desktopInvoke = resolveDesktopInvoke();
+  const desktopInvoke = PHASE1_REAL_COMMANDS.has(command) ? resolveDesktopInvoke() : null;
 
   if (desktopInvoke) {
     try {
