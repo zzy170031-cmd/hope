@@ -106,6 +106,12 @@ pub struct KbKnowledgeBundle {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedKbContext {
+    pub runtime: KbRuntimeHandle,
+    pub bundle: KbKnowledgeBundle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotBootstrapPreparePaths {
     pub snapshot_path: PathBuf,
     pub manifest_path: PathBuf,
@@ -299,6 +305,25 @@ pub fn bootstrap_verified_kb_runtime(
 ) -> Result<KbRuntimeHandle, KbRuntimeError> {
     let preparation = prepare_snapshot_bootstrap(paths)?;
     load_kb_runtime_from_preparation(preparation)
+}
+
+pub fn bootstrap_verified_kb_context(
+    snapshot_path: PathBuf,
+    manifest_path: PathBuf,
+    validator_result_path: PathBuf,
+    snapshot_meta_path: PathBuf,
+) -> Result<VerifiedKbContext, KbRuntimeError> {
+    let paths = build_snapshot_bootstrap_prepare_paths(
+        snapshot_path,
+        manifest_path,
+        validator_result_path,
+        snapshot_meta_path,
+    );
+    let preparation = prepare_snapshot_bootstrap(paths)?;
+    let runtime = load_kb_runtime_from_preparation(preparation)?;
+    let bundle = load_kb_knowledge_bundle(&runtime)?;
+
+    Ok(VerifiedKbContext { runtime, bundle })
 }
 
 fn build_kb_runtime_handle(
@@ -1187,14 +1212,88 @@ mod tests {
         fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
     }
 
+    #[test]
+    fn bootstrap_verified_kb_context_loads_runtime_and_bundle() {
+        let fixture = create_snapshot_bootstrap_fixture();
+        let expected_snapshot_path = fixture.paths.snapshot_path.display().to_string();
+
+        let context = bootstrap_verified_kb_context(
+            fixture.paths.snapshot_path.clone(),
+            fixture.paths.manifest_path.clone(),
+            fixture.paths.validator_result_path.clone(),
+            fixture.paths.snapshot_meta_path.clone(),
+        )
+        .expect("verified bootstrap context should load");
+
+        assert_eq!(
+            context.runtime.snapshot.snapshot_hash,
+            SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+        );
+        assert_eq!(
+            context.runtime.summary.snapshot_path,
+            expected_snapshot_path
+        );
+        assert!(context.runtime.supports_scene_taxonomy());
+        assert!(context.runtime.supports_failure_repairs());
+
+        assert_eq!(context.bundle.scene_taxonomies.len(), 1);
+        assert_eq!(context.bundle.failure_patterns.len(), 1);
+        assert_eq!(context.bundle.prompt_templates.len(), 1);
+        assert_eq!(
+            context.bundle.scene_taxonomies[0].scene_type,
+            "daily_dialogue"
+        );
+        assert_eq!(
+            context.bundle.failure_patterns[0].failure_code,
+            "style_drift"
+        );
+        assert_eq!(context.bundle.prompt_templates[0].stage, "repair_pass");
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
+    fn bootstrap_verified_kb_context_rejects_hash_mismatch() {
+        let fixture = create_snapshot_bootstrap_fixture();
+        fs::write(
+            &fixture.paths.validator_result_path,
+            r#"{"status":"passed","content_hash":"bundle-sha256:mismatch"}"#,
+        )
+        .expect("validator result should be writable");
+
+        let error = bootstrap_verified_kb_context(
+            fixture.paths.snapshot_path.clone(),
+            fixture.paths.manifest_path.clone(),
+            fixture.paths.validator_result_path.clone(),
+            fixture.paths.snapshot_meta_path.clone(),
+        )
+        .expect_err("verified bootstrap context should fail on hash mismatch");
+
+        assert_eq!(
+            error,
+            KbRuntimeError::SnapshotBootstrapReviewedHashMismatch {
+                expected: SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH.to_string(),
+                manifest_hash: SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH.to_string(),
+                validator_hash: "bundle-sha256:mismatch".to_string(),
+                snapshot_hash: SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH.to_string(),
+            }
+        );
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
     fn create_snapshot_bootstrap_fixture() -> SnapshotBootstrapFixture {
         let root = unique_test_dir("snapshot-bootstrap-prep");
-        fs::create_dir_all(&root).expect("fixture root should be creatable");
+        let repo_root = root.join("hope-kb-runtime");
+        let snapshots_dir = repo_root.join("snapshots");
+        let packet_root = repo_root.join("seed").join("v0.1");
+        fs::create_dir_all(&snapshots_dir).expect("snapshots dir should be creatable");
+        fs::create_dir_all(&packet_root).expect("packet root should be creatable");
 
-        let snapshot_path = root.join("hope-kb-v0.1.sqlite3");
+        let snapshot_path = snapshots_dir.join("hope-kb-v0.1.sqlite3");
         File::create(&snapshot_path).expect("snapshot file should be creatable");
 
-        let manifest_path = root.join(SNAPSHOT_BOOTSTRAP_MANIFEST_FILE_NAME);
+        let manifest_path = packet_root.join(SNAPSHOT_BOOTSTRAP_MANIFEST_FILE_NAME);
         fs::write(
             &manifest_path,
             format!(
@@ -1224,19 +1323,44 @@ mod tests {
         )
         .expect("snapshot meta should be writable");
 
-        let export_template_path = root.join(SNAPSHOT_BOOTSTRAP_EXPORT_TEMPLATE_FILE_NAME);
+        let export_template_path = packet_root.join(SNAPSHOT_BOOTSTRAP_EXPORT_TEMPLATE_FILE_NAME);
         fs::write(&export_template_path, "[]").expect("export templates should be writable");
 
-        let failure_pattern_path = root.join(SNAPSHOT_BOOTSTRAP_FAILURE_PATTERN_FILE_NAME);
-        fs::write(&failure_pattern_path, "[]").expect("failure patterns should be writable");
+        let failure_pattern_path = packet_root.join(SNAPSHOT_BOOTSTRAP_FAILURE_PATTERN_FILE_NAME);
+        fs::write(
+            &failure_pattern_path,
+            r#"[
+              {
+                "machine_id": "failure_01",
+                "failure_code": "style_drift",
+                "failure_name": "Style drift",
+                "failure_category": "style",
+                "symptom": "Adjacent cuts drift apart.",
+                "common_causes": ["hard lock missing"],
+                "detection_hint": "Check Style Unity Validator",
+                "repair_strategy": "Reapply hard locks.",
+                "affected_layers": ["prompt_packages"],
+                "validator_hint": "Style Unity Validator",
+                "repair_template_ids": ["prompt_09"],
+                "repair_priority": "high",
+                "repair_scope": "render_prompt_only",
+                "suggested_followup_validator": ["Style Unity Validator"],
+                "source_type": "team_distillation",
+                "source_notes": "test",
+                "confidence_level": "high",
+                "last_reviewed_at": "2026-04-20"
+              }
+            ]"#,
+        )
+        .expect("failure patterns should be writable");
 
         let degraded_input_example_path =
-            root.join(SNAPSHOT_BOOTSTRAP_DEGRADED_INPUT_EXAMPLE_FILE_NAME);
+            packet_root.join(SNAPSHOT_BOOTSTRAP_DEGRADED_INPUT_EXAMPLE_FILE_NAME);
         fs::write(&degraded_input_example_path, "[]")
             .expect("degraded input examples should be writable");
 
         let runtime_consume_contract_path =
-            root.join(SNAPSHOT_BOOTSTRAP_RUNTIME_CONSUME_CONTRACT_FILE_NAME);
+            packet_root.join(SNAPSHOT_BOOTSTRAP_RUNTIME_CONSUME_CONTRACT_FILE_NAME);
         fs::write(
             &runtime_consume_contract_path,
             r#"[
@@ -1263,6 +1387,43 @@ mod tests {
             ]"#,
         )
         .expect("runtime consume contract should be writable");
+
+        fs::write(
+            packet_root.join("scene_taxonomy.json"),
+            r#"[
+              {
+                "machine_id": "scene_tax_01",
+                "scene_type": "daily_dialogue",
+                "display_name": "Daily Dialogue",
+                "definition": "A stable dialogue scene.",
+                "default_duration_band": "30-60s",
+                "typical_committee_roles": ["chief","scene","emotion"],
+                "default_handoff_out": ["scene->emotion"],
+                "risk_flags": ["pace_flat"],
+                "continuity_priority": "high",
+                "prompt_focus": ["micro_expression","blocking"],
+                "source_type": "team_distillation",
+                "source_notes": "test",
+                "confidence_level": "high",
+                "last_reviewed_at": "2026-04-20"
+              }
+            ]"#,
+        )
+        .expect("scene taxonomy should be writable");
+
+        fs::write(
+            packet_root.join("prompt_templates.json"),
+            r#"[
+              {
+                "machine_id": "prompt_09",
+                "stage": "repair_pass",
+                "name": "Structure Repair Loop",
+                "target_model_family": "qwen-compatible",
+                "repairs_failure_codes": ["style_drift"]
+              }
+            ]"#,
+        )
+        .expect("prompt templates should be writable");
 
         SnapshotBootstrapFixture {
             root: root.clone(),
