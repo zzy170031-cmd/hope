@@ -245,9 +245,10 @@ fn build_external_prompt_body(
     source: &Value,
     prompt_row: &Map<String, Value>,
 ) -> Result<String, ExportError> {
-    let prompt_package_id = required_string(prompt_row, "PromptPackage??", "prompt_package")?;
-    let source_level = required_string(prompt_row, "????", "prompt_package")?;
-    let original_body = required_string(prompt_row, "??", "prompt_package")?;
+    let prompt_package_id =
+        required_string(prompt_row, "PromptPackage标识", "prompt_package")?;
+    let source_level = required_string(prompt_row, "来源层级", "prompt_package")?;
+    let original_body = required_string(prompt_row, "正文", "prompt_package")?;
 
     let render_segment_id = extract_render_segment_id(prompt_package_id);
     let scene_summary = sanitize_natural_text(
@@ -261,6 +262,7 @@ fn build_external_prompt_body(
         &scene_summary,
         &action_anchor,
         original_body,
+        source_level,
     );
     let style_clause = build_style_lock_clause(original_body);
     let shot_clause = build_shot_clause(source_level, &scene_summary);
@@ -297,6 +299,7 @@ fn build_character_appearance_constraint(
     scene_summary: &str,
     action_anchor: &str,
     original_body: &str,
+    source_level: &str,
 ) -> CharacterAppearanceConstraint {
     let style_hint = sanitize_natural_text(original_body);
     let reference_lock_clause =
@@ -310,6 +313,11 @@ fn build_character_appearance_constraint(
     } else {
         "????????????????????????????????????????????????????????????".to_string()
     };
+    let identity_baseline_clause = format!(
+        "{}{}",
+        identity_baseline_clause,
+        facial_detail_clause(source_level)
+    );
 
     let state_delta_clause = format!(
         "????????????????????????????????????????????????????{}",
@@ -321,8 +329,9 @@ fn build_character_appearance_constraint(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "?????????????????????????????????????????".to_string());
     let negative_guard_clause = format!(
-        "????????????????????????{}??????????????????????????",
-        hard_lock_negative
+        "????????????????????????{}??????????????????????????{}",
+        hard_lock_negative,
+        facial_negative_defaults()
     );
 
     CharacterAppearanceConstraint {
@@ -331,6 +340,18 @@ fn build_character_appearance_constraint(
         state_delta_clause,
         negative_guard_clause,
     }
+}
+
+fn facial_detail_clause(source_level: &str) -> &'static str {
+    if source_level == "layout_prompt" {
+        " 补充约束：面部细节保持干净清晰，五官边缘自然稳定，不出现脏污、涂抹或糊脸质感。"
+    } else {
+        " 补充约束：保持写实皮肤质感与干净清晰的面部细节，眼周、嘴周和鼻梁结构自然稳定，不出现脏污颗粒、涂抹痕迹或糊脸质感。"
+    }
+}
+
+fn facial_negative_defaults() -> &'static str {
+    " 默认负向约束补充：避免脏脸、花脸、糊脸、五官错位、重复眉眼、额外眼耳口鼻、局部涂抹、过度磨皮、压缩噪点和低清晰度面部纹理。"
 }
 
 fn build_style_lock_clause(original_body: &str) -> String {
@@ -497,6 +518,37 @@ mod tests {
         assert!(body.contains("????"));
         assert!(body.contains("???"));
         assert!(source.to_string().contains("render-segment-week3-001"));
+    }
+
+    #[test]
+    fn render_face_detail_clause_is_stronger_than_layout_clause() {
+        let layout = facial_detail_clause("layout_prompt");
+        let render = facial_detail_clause("render_prompt");
+
+        assert!(layout.contains("面部细节"));
+        assert!(render.contains("面部细节"));
+        assert!(render.contains("写实皮肤质感"));
+        assert!(render.contains("眼周、嘴周和鼻梁结构"));
+    }
+
+    #[test]
+    fn appearance_constraint_appends_face_cleanup_defaults() {
+        let constraint = build_character_appearance_constraint(
+            &json!({}),
+            "同一场景推进",
+            "人物保持中景推进",
+            "克制写实",
+            "render_prompt",
+        );
+
+        assert!(constraint.identity_baseline_clause.contains("面部细节"));
+        assert!(constraint.negative_guard_clause.contains("脏脸"));
+        assert!(constraint.negative_guard_clause.contains("五官错位"));
+        assert!(
+            constraint
+                .negative_guard_clause
+                .contains("低清晰度面部纹理")
+        );
     }
 }
 

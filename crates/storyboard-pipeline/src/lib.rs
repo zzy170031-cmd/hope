@@ -249,108 +249,47 @@ pub fn derive_scene_taxonomy_context(scene_taxonomy: &SceneTaxonomyRecord) -> Sc
 pub fn aggregate_director_assignment(
     scene_director_id: Option<String>,
     action_director_id: Option<String>,
-    scene_taxonomy: Option<&SceneTaxonomyContext>,
+    _scene_taxonomy: Option<&SceneTaxonomyContext>,
 ) -> Result<DirectorAssignment, StoryboardPlanningError> {
     match (scene_director_id, action_director_id) {
         (Some(scene_director_id), Some(action_director_id)) => Ok(DirectorAssignment {
             primary_scene_director_id: scene_director_id,
             primary_action_director_id: action_director_id,
         }),
-        (Some(scene_director_id), None) => {
-            let primary_action_director_id = scene_taxonomy
-                .map(|taxonomy| taxonomy_default_director_id(taxonomy, "action"))
-                .unwrap_or_else(|| scene_director_id.clone());
-            Ok(DirectorAssignment {
-                primary_scene_director_id: scene_director_id,
-                primary_action_director_id,
-            })
-        }
-        (None, Some(action_director_id)) => {
-            let primary_scene_director_id = scene_taxonomy
-                .map(|taxonomy| taxonomy_default_director_id(taxonomy, "scene"))
-                .unwrap_or_else(|| action_director_id.clone());
-            Ok(DirectorAssignment {
-                primary_scene_director_id,
-                primary_action_director_id: action_director_id,
-            })
-        }
-        (None, None) => {
-            if let Some(taxonomy) = scene_taxonomy {
-                Ok(DirectorAssignment {
-                    primary_scene_director_id: taxonomy_default_director_id(taxonomy, "scene"),
-                    primary_action_director_id: taxonomy_default_director_id(taxonomy, "action"),
-                })
-            } else {
-                Err(StoryboardPlanningError::MissingDirectorAssignment)
-            }
-        }
+        (Some(scene_director_id), None) => Ok(DirectorAssignment {
+            primary_scene_director_id: scene_director_id.clone(),
+            primary_action_director_id: scene_director_id,
+        }),
+        (None, Some(action_director_id)) => Ok(DirectorAssignment {
+            primary_scene_director_id: action_director_id.clone(),
+            primary_action_director_id: action_director_id,
+        }),
+        (None, None) => Err(StoryboardPlanningError::MissingDirectorAssignment),
     }
 }
 
 pub fn build_prompt_layers(
     layout_prompt: String,
     render_prompt: String,
-    scene_taxonomy: Option<&SceneTaxonomyContext>,
+    _scene_taxonomy: Option<&SceneTaxonomyContext>,
 ) -> PromptLayers {
-    if let Some(scene_taxonomy) = scene_taxonomy {
-        let prompt_focus = if scene_taxonomy.prompt_focus.is_empty() {
-            String::new()
-        } else {
-            format!("；焦点：{}", scene_taxonomy.prompt_focus.join("、"))
-        };
-
-        PromptLayers {
-            layout_prompt: format!(
-                "{}；场景分类：{}{}",
-                layout_prompt, scene_taxonomy.scene_type, prompt_focus
-            ),
-            render_prompt: format!(
-                "{}；连续性优先级：{}",
-                render_prompt, scene_taxonomy.continuity_priority
-            ),
-        }
-    } else {
-        PromptLayers {
-            layout_prompt,
-            render_prompt,
-        }
+    PromptLayers {
+        layout_prompt,
+        render_prompt,
     }
 }
 
 pub fn derive_handoff_zone(
     render_segment: &RenderSegmentPlan,
-    scene_taxonomy: Option<&SceneTaxonomyContext>,
+    _scene_taxonomy: Option<&SceneTaxonomyContext>,
 ) -> HandoffZonePlan {
-    let boundary_type = if let Some(scene_taxonomy) = scene_taxonomy {
-        if scene_taxonomy
-            .default_handoff_out
-            .iter()
-            .any(|value| value == "action")
-        {
-            "taxonomy_action_transition".to_string()
-        } else if scene_taxonomy
-            .continuity_priority
-            .eq_ignore_ascii_case("high")
-        {
-            "taxonomy_continuity_guard".to_string()
-        } else {
-            "render_segment_boundary".to_string()
-        }
-    } else {
-        "render_segment_boundary".to_string()
-    };
-
     HandoffZonePlan {
         handoff_zone_id: format!("handoff-zone-{}", render_segment.render_segment_id),
         render_segment_id: render_segment.render_segment_id.clone(),
         start_boundary: render_segment.start_shot_sequence_no.to_string(),
         end_boundary: render_segment.end_shot_sequence_no.to_string(),
-        boundary_type,
+        boundary_type: "render_segment_boundary".to_string(),
     }
-}
-
-fn taxonomy_default_director_id(scene_taxonomy: &SceneTaxonomyContext, role: &str) -> String {
-    format!("taxonomy:{}:{}", scene_taxonomy.scene_taxonomy_id, role)
 }
 
 #[cfg(test)]
@@ -396,7 +335,10 @@ mod tests {
     }
 
     #[test]
-    fn scene_taxonomy_drives_default_assignment_and_handoff() {
+    fn scene_taxonomy_stays_metadata_when_runtime_inputs_are_explicit() {
+        let provided_director = "director-profile-week3-001".to_string();
+        let layout_prompt = "冷色调，中景".to_string();
+        let render_prompt = "克制写实".to_string();
         let plan = build_storyboard_plan(StoryboardPlanRequest {
             render_segment_id: "render-segment-taxonomy-001".to_string(),
             narrative_scene_id: "narrative-scene-taxonomy-001".to_string(),
@@ -408,13 +350,13 @@ mod tests {
             cut_sequence_no: 1,
             shot_description: "中景对话".to_string(),
             dialogue: "我们得先把这一段收口。".to_string(),
-            scene_director_id: None,
+            scene_director_id: Some(provided_director.clone()),
             action_director_id: None,
             scene_taxonomy: Some(daily_dialogue_taxonomy()),
-            layout_prompt: "冷色调，中景".to_string(),
-            render_prompt: "克制写实".to_string(),
+            layout_prompt: layout_prompt.clone(),
+            render_prompt: render_prompt.clone(),
         })
-        .expect("taxonomy should provide default assignment");
+        .expect("explicit runtime inputs should stay valid");
 
         assert_eq!(
             plan.render_segment.scene_taxonomy_id.as_deref(),
@@ -428,26 +370,44 @@ mod tests {
             plan.committee_runtime
                 .director_assignment
                 .primary_scene_director_id,
-            "taxonomy:scene-taxonomy-daily-dialogue:scene"
+            provided_director
         );
         assert_eq!(
             plan.committee_runtime
                 .director_assignment
                 .primary_action_director_id,
-            "taxonomy:scene-taxonomy-daily-dialogue:action"
-        );
-        assert_eq!(plan.handoff_zone.boundary_type, "taxonomy_continuity_guard");
-        assert!(
-            plan.committee_runtime
-                .prompt_layers
-                .layout_prompt
-                .contains("场景分类：daily_dialogue")
+            "director-profile-week3-001"
         );
         assert!(
-            plan.committee_runtime
-                .prompt_layers
-                .render_prompt
-                .contains("连续性优先级：high")
+            plan.committee_runtime.prompt_layers.layout_prompt == layout_prompt
         );
+        assert!(
+            plan.committee_runtime.prompt_layers.render_prompt == render_prompt
+        );
+        assert_eq!(plan.handoff_zone.boundary_type, "render_segment_boundary");
+    }
+
+    #[test]
+    fn storyboard_plan_rejects_missing_directors_even_with_taxonomy() {
+        let err = build_storyboard_plan(StoryboardPlanRequest {
+            render_segment_id: "render-segment-taxonomy-002".to_string(),
+            narrative_scene_id: "narrative-scene-taxonomy-002".to_string(),
+            render_segment_sequence_no: 1,
+            start_shot_sequence_no: 10,
+            end_shot_sequence_no: 12,
+            target_duration_seconds: 45,
+            cut_id: "cut-taxonomy-002".to_string(),
+            cut_sequence_no: 1,
+            shot_description: "中景对话".to_string(),
+            dialogue: "这一段需要保持冻结契约。".to_string(),
+            scene_director_id: None,
+            action_director_id: None,
+            scene_taxonomy: Some(daily_dialogue_taxonomy()),
+            layout_prompt: "冷色调，中景".to_string(),
+            render_prompt: "克制写实".to_string(),
+        })
+        .expect_err("missing directors should fail under the frozen contract");
+
+        assert!(matches!(err, StoryboardPlanningError::MissingDirectorAssignment));
     }
 }
