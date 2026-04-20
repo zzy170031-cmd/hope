@@ -43,6 +43,59 @@ fn daily_dialogue_taxonomy() -> storyboard_pipeline::SceneTaxonomyRecord {
     }
 }
 
+fn overlapping_signal_taxonomy() -> storyboard_pipeline::SceneTaxonomyRecord {
+    storyboard_pipeline::SceneTaxonomyRecord {
+        scene_taxonomy_id: "scene-taxonomy-overlap-001".to_string(),
+        scene_type: "knowledge_overlap".to_string(),
+        display_name: "知识重叠".to_string(),
+        definition: "knowledge-side signals overlap with runtime inputs".to_string(),
+        default_duration_band: "30s-90s".to_string(),
+        typical_committee_roles: vec![
+            "scene".to_string(),
+            "action".to_string(),
+            "knowledge".to_string(),
+        ],
+        default_handoff_out: vec!["action".to_string()],
+        risk_flags: vec!["signal_collision".to_string()],
+        continuity_priority: "high".to_string(),
+        prompt_focus: vec!["重叠知识信号".to_string(), "taxonomy emphasis".to_string()],
+        source_type: "team_curated".to_string(),
+        source_notes: "10min benchmark overlap fixture".to_string(),
+        confidence_level: "high".to_string(),
+        last_reviewed_at: "2026-04-20".to_string(),
+    }
+}
+
+fn conflicting_signal_taxonomy() -> storyboard_pipeline::SceneTaxonomyRecord {
+    storyboard_pipeline::SceneTaxonomyRecord {
+        scene_taxonomy_id: "scene-taxonomy-conflict-001".to_string(),
+        scene_type: "knowledge_conflict".to_string(),
+        display_name: "知识冲突".to_string(),
+        definition: "knowledge-side signals attempt to conflict with runtime inputs"
+            .to_string(),
+        default_duration_band: "90s-120s".to_string(),
+        typical_committee_roles: vec![
+            "taxonomy_override".to_string(),
+            "knowledge".to_string(),
+            "scene".to_string(),
+        ],
+        default_handoff_out: vec!["knowledge".to_string()],
+        risk_flags: vec![
+            "signal_collision".to_string(),
+            "runtime_override_attempt".to_string(),
+        ],
+        continuity_priority: "low".to_string(),
+        prompt_focus: vec![
+            "taxonomy override attempt".to_string(),
+            "conflicting knowledge emphasis".to_string(),
+        ],
+        source_type: "team_curated".to_string(),
+        source_notes: "10min benchmark conflict fixture".to_string(),
+        confidence_level: "high".to_string(),
+        last_reviewed_at: "2026-04-20".to_string(),
+    }
+}
+
 #[test]
 fn benchmark_10min_single_episode_runs_end_to_end() {
     write_fixture(
@@ -241,9 +294,158 @@ fn benchmark_10min_single_episode_runs_end_to_end() {
             .iter()
             .find(|handoff| handoff.render_segment_id == render_segment.render_segment_id)
             .expect("each render segment should have a handoff zone");
-        assert_eq!(plan.handoff_zone.start_boundary, handoff.start_boundary);
-        assert_eq!(plan.handoff_zone.end_boundary, handoff.end_boundary);
-        assert_eq!(plan.handoff_zone.boundary_type, handoff.boundary_type);
+        let taxonomy_variants = vec![
+            ("none", None, None, None, None),
+            (
+                "daily",
+                Some(daily_dialogue_taxonomy()),
+                Some("scene-taxonomy-daily-dialogue"),
+                Some("daily_dialogue"),
+                Some("high"),
+            ),
+            (
+                "overlap",
+                Some(overlapping_signal_taxonomy()),
+                Some("scene-taxonomy-overlap-001"),
+                Some("knowledge_overlap"),
+                Some("high"),
+            ),
+            (
+                "conflict",
+                Some(conflicting_signal_taxonomy()),
+                Some("scene-taxonomy-conflict-001"),
+                Some("knowledge_conflict"),
+                Some("low"),
+            ),
+        ];
+
+        for (
+            label,
+            scene_taxonomy,
+            expected_taxonomy_id,
+            expected_scene_type,
+            expected_continuity_priority,
+        ) in taxonomy_variants
+        {
+            let plan = build_storyboard_plan(StoryboardPlanRequest {
+                render_segment_id: render_segment.render_segment_id.clone(),
+                narrative_scene_id: render_segment.narrative_scene_id.clone(),
+                render_segment_sequence_no: render_segment.sequence_no,
+                start_shot_sequence_no: render_segment.start_shot_sequence_no,
+                end_shot_sequence_no: render_segment.end_shot_sequence_no,
+                target_duration_seconds: render_segment.target_duration_seconds as u16,
+                cut_id: representative_cut.cut_id.clone(),
+                cut_sequence_no: representative_cut.sequence_no,
+                shot_description: representative_cut.shot_description.clone(),
+                dialogue: representative_cut.dialogue.clone(),
+                scene_director_id: Some(profile_id.clone()),
+                action_director_id: None,
+                scene_taxonomy,
+                layout_prompt: layout_prompt.body.clone(),
+                render_prompt: render_prompt.body.clone(),
+            })
+            .unwrap_or_else(|_| {
+                panic!(
+                    "storyboard plan should stay valid for every taxonomy variant: {}",
+                    label
+                )
+            });
+
+            assert_eq!(
+                plan.committee_runtime
+                    .director_assignment
+                    .primary_scene_director_id,
+                profile_id,
+                "scene director changed under taxonomy variant {}",
+                label
+            );
+            assert_eq!(
+                plan.committee_runtime
+                    .director_assignment
+                    .primary_action_director_id,
+                profile_id,
+                "action director changed under taxonomy variant {}",
+                label
+            );
+            assert_eq!(
+                plan.committee_runtime.prompt_layers.layout_prompt,
+                layout_prompt.body,
+                "layout prompt changed under taxonomy variant {}",
+                label
+            );
+            assert_eq!(
+                plan.committee_runtime.prompt_layers.render_prompt,
+                render_prompt.body,
+                "render prompt changed under taxonomy variant {}",
+                label
+            );
+            assert_eq!(
+                plan.handoff_zone.start_boundary,
+                handoff.start_boundary,
+                "handoff start changed under taxonomy variant {}",
+                label
+            );
+            assert_eq!(
+                plan.handoff_zone.end_boundary,
+                handoff.end_boundary,
+                "handoff end changed under taxonomy variant {}",
+                label
+            );
+            assert_eq!(
+                plan.handoff_zone.boundary_type,
+                handoff.boundary_type,
+                "handoff boundary changed under taxonomy variant {}",
+                label
+            );
+            assert_eq!(
+                plan.render_segment.target_duration_seconds as u32,
+                render_segment.target_duration_seconds,
+                "target duration changed under taxonomy variant {}",
+                label
+            );
+            assert_eq!(
+                plan.render_segment.start_shot_sequence_no,
+                render_segment.start_shot_sequence_no,
+                "shot window start changed under taxonomy variant {}",
+                label
+            );
+            assert_eq!(
+                plan.render_segment.end_shot_sequence_no,
+                render_segment.end_shot_sequence_no,
+                "shot window end changed under taxonomy variant {}",
+                label
+            );
+            assert_eq!(
+                plan.render_segment.scene_taxonomy_id.as_deref(),
+                expected_taxonomy_id,
+                "render-segment taxonomy visibility changed unexpectedly under variant {}",
+                label
+            );
+            assert_eq!(
+                plan.render_segment.scene_type.as_deref(),
+                expected_scene_type,
+                "render-segment scene type visibility changed unexpectedly under variant {}",
+                label
+            );
+            assert_eq!(
+                plan.render_segment.continuity_priority.as_deref(),
+                expected_continuity_priority,
+                "continuity priority visibility changed unexpectedly under variant {}",
+                label
+            );
+            assert_eq!(
+                plan.committee_runtime.scene_taxonomy_id.as_deref(),
+                expected_taxonomy_id,
+                "runtime taxonomy visibility changed unexpectedly under variant {}",
+                label
+            );
+            assert_eq!(
+                plan.committee_runtime.scene_type.as_deref(),
+                expected_scene_type,
+                "runtime scene type visibility changed unexpectedly under variant {}",
+                label
+            );
+        }
     }
 
     for hard_lock in &fixture.hard_lock {
