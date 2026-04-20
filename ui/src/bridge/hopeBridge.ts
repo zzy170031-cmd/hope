@@ -59,6 +59,7 @@ const DEFAULT_PROJECT_ID = "project-week3-001";
 const PHASE1_REAL_COMMANDS = new Set<HopeCommandName>([
   HOPE_TAURI_COMMANDS.projectCreateOrSwitch,
   HOPE_TAURI_COMMANDS.writerEntrySnapshot,
+  HOPE_TAURI_COMMANDS.storyboardRenderSegmentCutPreviewSnapshot,
 ]);
 
 function delay(ms: number) {
