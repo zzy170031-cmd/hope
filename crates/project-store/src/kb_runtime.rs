@@ -112,6 +112,14 @@ pub struct VerifiedKbContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotBootstrapCheckpointArtifacts {
+    pub snapshot_path: PathBuf,
+    pub manifest_path: PathBuf,
+    pub validator_result_path: PathBuf,
+    pub snapshot_meta_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotBootstrapPreparePaths {
     pub snapshot_path: PathBuf,
     pub manifest_path: PathBuf,
@@ -313,11 +321,24 @@ pub fn bootstrap_verified_kb_context(
     validator_result_path: PathBuf,
     snapshot_meta_path: PathBuf,
 ) -> Result<VerifiedKbContext, KbRuntimeError> {
-    let paths = build_snapshot_bootstrap_prepare_paths(
+    let artifacts = SnapshotBootstrapCheckpointArtifacts {
         snapshot_path,
         manifest_path,
         validator_result_path,
         snapshot_meta_path,
+    };
+
+    bootstrap_verified_kb_context_from_checkpoint(artifacts)
+}
+
+pub fn bootstrap_verified_kb_context_from_checkpoint(
+    artifacts: SnapshotBootstrapCheckpointArtifacts,
+) -> Result<VerifiedKbContext, KbRuntimeError> {
+    let paths = build_snapshot_bootstrap_prepare_paths(
+        artifacts.snapshot_path,
+        artifacts.manifest_path,
+        artifacts.validator_result_path,
+        artifacts.snapshot_meta_path,
     );
     let preparation = prepare_snapshot_bootstrap(paths)?;
     let runtime = load_kb_runtime_from_preparation(preparation)?;
@@ -1268,6 +1289,68 @@ mod tests {
             fixture.paths.snapshot_meta_path.clone(),
         )
         .expect_err("verified bootstrap context should fail on hash mismatch");
+
+        assert_eq!(
+            error,
+            KbRuntimeError::SnapshotBootstrapReviewedHashMismatch {
+                expected: SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH.to_string(),
+                manifest_hash: SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH.to_string(),
+                validator_hash: "bundle-sha256:mismatch".to_string(),
+                snapshot_hash: SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH.to_string(),
+            }
+        );
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
+    fn bootstrap_verified_kb_context_from_checkpoint_loads_runtime_and_bundle() {
+        let fixture = create_snapshot_bootstrap_fixture();
+        let expected_snapshot_path = fixture.paths.snapshot_path.display().to_string();
+        let artifacts = SnapshotBootstrapCheckpointArtifacts {
+            snapshot_path: fixture.paths.snapshot_path.clone(),
+            manifest_path: fixture.paths.manifest_path.clone(),
+            validator_result_path: fixture.paths.validator_result_path.clone(),
+            snapshot_meta_path: fixture.paths.snapshot_meta_path.clone(),
+        };
+
+        let context = bootstrap_verified_kb_context_from_checkpoint(artifacts)
+            .expect("verified checkpoint context should load");
+
+        assert_eq!(
+            context.runtime.snapshot.snapshot_hash,
+            SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+        );
+        assert_eq!(
+            context.runtime.summary.snapshot_path,
+            expected_snapshot_path
+        );
+        assert!(context.runtime.supports_scene_taxonomy());
+        assert!(context.runtime.supports_failure_repairs());
+        assert_eq!(context.bundle.scene_taxonomies.len(), 1);
+        assert_eq!(context.bundle.failure_patterns.len(), 1);
+        assert_eq!(context.bundle.prompt_templates.len(), 1);
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
+    fn bootstrap_verified_kb_context_from_checkpoint_rejects_hash_mismatch() {
+        let fixture = create_snapshot_bootstrap_fixture();
+        let artifacts = SnapshotBootstrapCheckpointArtifacts {
+            snapshot_path: fixture.paths.snapshot_path.clone(),
+            manifest_path: fixture.paths.manifest_path.clone(),
+            validator_result_path: fixture.paths.validator_result_path.clone(),
+            snapshot_meta_path: fixture.paths.snapshot_meta_path.clone(),
+        };
+        fs::write(
+            &fixture.paths.validator_result_path,
+            r#"{"status":"passed","content_hash":"bundle-sha256:mismatch"}"#,
+        )
+        .expect("validator result should be writable");
+
+        let error = bootstrap_verified_kb_context_from_checkpoint(artifacts)
+            .expect_err("verified checkpoint context should fail on hash mismatch");
 
         assert_eq!(
             error,
