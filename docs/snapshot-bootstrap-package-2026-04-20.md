@@ -6,13 +6,34 @@ Deliver the first controlled intake package for `snapshot_bootstrap` only.
 
 This package should move Hope away from the current bootstrap-era local path in `crates/project-store/src/kb_runtime.rs` and toward an explicit, reviewed snapshot-contract bootstrap boundary.
 
+This package is for controlled intake preparation only. It does not deliver a finished product hookup, and it must not bring `hope-kb` repo logic directly into `hope`.
+
 ## In Scope
 
 - `snapshot_bootstrap` only
+- controlled intake preparation only
 - runtime bootstrap metadata and bundle identity handling
+- reviewed bundle hash pinning
+- `manifest.json` / validator result / snapshot result consistency checks
 - loading trusted bootstrap inputs from the reviewed snapshot contract
 - targeted tests for bootstrap behavior and guardrails
 - narrow interface changes only when required to carry explicit snapshot identity
+
+## Entry Conditions
+
+This package should proceed only if all of the following remain true:
+
+1. the working branch is a dedicated `snapshot_bootstrap` branch and is not `codex/contracts-freeze`
+2. the branch still traces back to `ecff1da`
+3. the reviewed bundle hash is pinned to `bundle-sha256:5f042c10ada3726bdbd71d5f4cbad2187b3895dd85e1e5195d6938a3a22d20b6` or a later explicitly re-reviewed checkpoint
+4. `manifest.json`, validator result, and snapshot result are mutually consistent at the selected checkpoint
+5. the package plan names only these trusted bootstrap inputs:
+   - `snapshot_meta`
+   - `export_template`
+   - `failure_pattern`
+   - `degraded_input_example`
+   - `runtime_consume_contract`
+6. no code path in this package depends on reopening merge-readiness or editing `hope-kb`
 
 ## Trusted Inputs
 
@@ -52,6 +73,8 @@ Do not include any work for:
 - validator blocking semantics changes
 - merge-readiness reopening
 - repo merge with `hope-kb`
+- copying `hope-kb` repo logic into `hope`
+- desktop-shell, UI shell, or unrelated UI file changes
 - any new local fallback that substitutes for the reviewed contract
 
 ## Guardrails
@@ -63,6 +86,18 @@ The package must preserve these intake guardrails:
 - no local `render_segment` backfill
 - no local handoff safe default
 - no local negative/default prompt fill
+
+## Verification Lens
+
+Each work package must explicitly report:
+
+- branch detection result
+- scope detection result
+- route detection result
+- Git detection result
+- entry condition result
+- exit condition result
+- conclusion: continue, pause, or bounded feedback needed
 
 ## Exit Criteria
 
