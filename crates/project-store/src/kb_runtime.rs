@@ -84,6 +84,13 @@ pub const SNAPSHOT_BOOTSTRAP_TRUSTED_INPUTS: &[&str] = &[
     "degraded_input_example",
     "runtime_consume_contract",
 ];
+pub const SNAPSHOT_BOOTSTRAP_MANIFEST_FILE_NAME: &str = "manifest.json";
+pub const SNAPSHOT_BOOTSTRAP_EXPORT_TEMPLATE_FILE_NAME: &str = "export_templates.json";
+pub const SNAPSHOT_BOOTSTRAP_FAILURE_PATTERN_FILE_NAME: &str = "failure_pattern_library.json";
+pub const SNAPSHOT_BOOTSTRAP_DEGRADED_INPUT_EXAMPLE_FILE_NAME: &str =
+    "degraded_input_examples.json";
+pub const SNAPSHOT_BOOTSTRAP_RUNTIME_CONSUME_CONTRACT_FILE_NAME: &str =
+    "runtime_consume_contracts.json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KbRuntimeHandle {
@@ -254,6 +261,31 @@ pub enum KbRuntimeError {
 
 pub fn load_kb_runtime(snapshot_path: PathBuf) -> Result<KbRuntimeHandle, KbRuntimeError> {
     build_kb_runtime_handle(snapshot_path, "runtime-unverified".to_string())
+}
+
+pub fn build_snapshot_bootstrap_prepare_paths(
+    snapshot_path: PathBuf,
+    manifest_path: PathBuf,
+    validator_result_path: PathBuf,
+    snapshot_meta_path: PathBuf,
+) -> SnapshotBootstrapPreparePaths {
+    let packet_root = manifest_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+
+    SnapshotBootstrapPreparePaths {
+        snapshot_path,
+        manifest_path,
+        validator_result_path,
+        snapshot_meta_path,
+        export_template_path: packet_root.join(SNAPSHOT_BOOTSTRAP_EXPORT_TEMPLATE_FILE_NAME),
+        failure_pattern_path: packet_root.join(SNAPSHOT_BOOTSTRAP_FAILURE_PATTERN_FILE_NAME),
+        degraded_input_example_path: packet_root
+            .join(SNAPSHOT_BOOTSTRAP_DEGRADED_INPUT_EXAMPLE_FILE_NAME),
+        runtime_consume_contract_path: packet_root
+            .join(SNAPSHOT_BOOTSTRAP_RUNTIME_CONSUME_CONTRACT_FILE_NAME),
+    }
 }
 
 pub fn load_kb_runtime_from_preparation(
@@ -1057,6 +1089,54 @@ mod tests {
     }
 
     #[test]
+    fn build_snapshot_bootstrap_prepare_paths_uses_canonical_packet_file_names() {
+        let fixture = create_snapshot_bootstrap_fixture();
+
+        assert_eq!(
+            fixture
+                .paths
+                .manifest_path
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some(SNAPSHOT_BOOTSTRAP_MANIFEST_FILE_NAME)
+        );
+        assert_eq!(
+            fixture
+                .paths
+                .export_template_path
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some(SNAPSHOT_BOOTSTRAP_EXPORT_TEMPLATE_FILE_NAME)
+        );
+        assert_eq!(
+            fixture
+                .paths
+                .failure_pattern_path
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some(SNAPSHOT_BOOTSTRAP_FAILURE_PATTERN_FILE_NAME)
+        );
+        assert_eq!(
+            fixture
+                .paths
+                .degraded_input_example_path
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some(SNAPSHOT_BOOTSTRAP_DEGRADED_INPUT_EXAMPLE_FILE_NAME)
+        );
+        assert_eq!(
+            fixture
+                .paths
+                .runtime_consume_contract_path
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some(SNAPSHOT_BOOTSTRAP_RUNTIME_CONSUME_CONTRACT_FILE_NAME)
+        );
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
     fn bootstrap_verified_kb_runtime_uses_reviewed_hash_and_preserves_summary() {
         let fixture = create_snapshot_bootstrap_fixture();
         let expected_snapshot_path = fixture.paths.snapshot_path.display().to_string();
@@ -1114,7 +1194,7 @@ mod tests {
         let snapshot_path = root.join("hope-kb-v0.1.sqlite3");
         File::create(&snapshot_path).expect("snapshot file should be creatable");
 
-        let manifest_path = root.join("manifest.json");
+        let manifest_path = root.join(SNAPSHOT_BOOTSTRAP_MANIFEST_FILE_NAME);
         fs::write(
             &manifest_path,
             format!(
@@ -1144,17 +1224,19 @@ mod tests {
         )
         .expect("snapshot meta should be writable");
 
-        let export_template_path = root.join("export_templates.json");
+        let export_template_path = root.join(SNAPSHOT_BOOTSTRAP_EXPORT_TEMPLATE_FILE_NAME);
         fs::write(&export_template_path, "[]").expect("export templates should be writable");
 
-        let failure_pattern_path = root.join("failure_patterns.json");
+        let failure_pattern_path = root.join(SNAPSHOT_BOOTSTRAP_FAILURE_PATTERN_FILE_NAME);
         fs::write(&failure_pattern_path, "[]").expect("failure patterns should be writable");
 
-        let degraded_input_example_path = root.join("degraded_input_examples.json");
+        let degraded_input_example_path =
+            root.join(SNAPSHOT_BOOTSTRAP_DEGRADED_INPUT_EXAMPLE_FILE_NAME);
         fs::write(&degraded_input_example_path, "[]")
             .expect("degraded input examples should be writable");
 
-        let runtime_consume_contract_path = root.join("runtime_consume_contracts.json");
+        let runtime_consume_contract_path =
+            root.join(SNAPSHOT_BOOTSTRAP_RUNTIME_CONSUME_CONTRACT_FILE_NAME);
         fs::write(
             &runtime_consume_contract_path,
             r#"[
@@ -1184,16 +1266,12 @@ mod tests {
 
         SnapshotBootstrapFixture {
             root: root.clone(),
-            paths: SnapshotBootstrapPreparePaths {
+            paths: build_snapshot_bootstrap_prepare_paths(
                 snapshot_path,
                 manifest_path,
                 validator_result_path,
                 snapshot_meta_path,
-                export_template_path,
-                failure_pattern_path,
-                degraded_input_example_path,
-                runtime_consume_contract_path,
-            },
+            ),
         }
     }
 
