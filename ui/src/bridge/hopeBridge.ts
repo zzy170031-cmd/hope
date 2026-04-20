@@ -60,6 +60,7 @@ const PHASE1_REAL_COMMANDS = new Set<HopeCommandName>([
   HOPE_TAURI_COMMANDS.projectCreateOrSwitch,
   HOPE_TAURI_COMMANDS.writerEntrySnapshot,
   HOPE_TAURI_COMMANDS.storyboardRenderSegmentCutPreviewSnapshot,
+  HOPE_TAURI_COMMANDS.validationExportPanelSnapshot,
 ]);
 
 function delay(ms: number) {
