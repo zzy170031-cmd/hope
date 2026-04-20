@@ -1,11 +1,33 @@
 # Hope RC Release Confirmation 2026-04-20
 
-## Route
+See [rc-release-packet-2026-04-20.md](E:\codex\hope\docs\rc-release-packet-2026-04-20.md) for the canonical release-confirmation summary and frozen-boundary statement for the current RC line.
+
+## Release State
 
 - Repo: `E:\codex\hope`
 - Branch: `codex/contracts-freeze`
-- Baseline: `RC_READY`
-- Scope: keep main thread frozen; allow RC confirmation, baseline protection / benchmark recovery, and exporter-only non-blocking polish
+- Release state: `RC_READY`
+- Main thread state: current RC baseline is locked and the main thread remains scope-frozen
+
+This document confirms the current Hope main-thread RC baseline. It is not a feature-progress report and does not reopen product scope.
+
+## Baseline Commit
+
+- Baseline commit: `f75c847`
+- Commit subject: `Confirm Hope RC recovery baseline`
+- Release reference point: all current RC confirmation materials trace back to this commit on `codex/contracts-freeze`
+- `角色面部细节清洁度优化` is already included in the locked baseline and must not be patched again unless it becomes a new RC blocker
+
+## RC Release Confirmation Materials
+
+Current release-confirmation packet for the Hope main thread consists of:
+
+- locked baseline commit
+- frozen benchmark ladder results
+- refreshed fixture / validation / export baseline artifacts
+- documented freeze boundary and prohibited scope
+
+This packet is intended to support RC publication confirmation, not a new implementation cycle.
 
 ## Confirmed Main-Thread Changes
 
@@ -62,9 +84,9 @@ Results:
 
 This round confirms that the RC recovery is not limited to a single benchmark path; the frozen benchmark ladder remains green after the storyboard runtime protection change.
 
-## Baseline Artifacts Refreshed
+## Baseline Artifacts
 
-The 10min RC benchmark rewrites tracked baseline artifacts as part of fixture / export confirmation:
+The frozen benchmark ladder exercises the tracked baseline artifacts as part of fixture / validation / export confirmation:
 
 - `contracts/fixtures/week3-shared-fixture.json`
 - `contracts/fixtures/week3-validation-report.json`
@@ -72,14 +94,27 @@ The 10min RC benchmark rewrites tracked baseline artifacts as part of fixture / 
 - `contracts/fixtures/exports/week3-export.md`
 - `contracts/fixtures/exports/week3-export.xlsx`
 
-These outputs are part of the RC confirmation surface for the current main-thread route.
+These outputs are part of the RC confirmation surface for the current main-thread route, and the committed snapshot at `f75c847` is the canonical baseline artifact set.
+
+## Frozen Boundary
+
+The Hope main thread remains frozen at the current RC baseline. Do not use this thread to:
+
+- add new features
+- add new contracts
+- widen KB scope
+- deepen runtime integration
+- repeat the face-detail cleanup patch
+- merge with `hope-kb`
+
+Any post-release work that does not directly belong to RC confirmation must be scheduled into follow-up material instead of reopening implementation scope here.
 
 ## Current Progress Snapshot
 
 Compared against `docs/nightly-handoff-2026-04-20.md`, the main thread is still on the required Git route:
 
 - branch stays on `codex/contracts-freeze`
-- `HEAD` stays aligned to `origin/codex/contracts-freeze` at `ca78b43`
+- `HEAD` stays aligned to `origin/codex/contracts-freeze` at `f75c847`
 - release state stays at `RC_READY`
 - current work remains inside RC confirmation, baseline protection / benchmark recovery, and exporter-only non-blocking polish
 
@@ -101,7 +136,7 @@ Local-only noise on this device that is not part of the release deliverable set:
 - CRLF/index-only working-tree markers on `crates/writer-pipeline/src/lib.rs`
 - CRLF/index-only working-tree markers on `docs/project-thread-startup.md`
 
-If this round is staged later, the main-thread boundary should include the tracked deliverables above and exclude the temporary target directories.
+The main-thread release boundary includes the tracked deliverables above and excludes the temporary target directories.
 
 ## Route Comparison
 
