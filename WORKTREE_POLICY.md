@@ -37,3 +37,9 @@ Use one main checkout and multiple worktrees.
 - do not share the same branch across devices at the same time
 - merge back through the integration branch only
 - keep uncommitted changes out of the integration checkout
+- at every key node, maintain one canonical thread label in the format `线程名【状态标签】`
+- use the shared policy in `E:\codex\ENGINEERING_THREAD_LABEL_POLICY.md`
+- labels must be updated from the actual local worktree state, not only from the remote branch state
+- before handoff or commit decisions, record the anchor commit, clean / dirty state, and one-line scope boundary behind the current label
+- every key-node handoff must end with `关键节点提醒：请立即刷新线程标签、锚点提交、工作树状态和边界说明。`
+- if a bounded package has already reached a remote stable point, prefer a pushed-state label such as `包1已推送`
