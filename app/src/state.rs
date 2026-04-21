@@ -1,10 +1,10 @@
 use std::{io, path::PathBuf};
 
 use project_store::{
-    load_kb_knowledge_bundle, load_kb_runtime, DualSqliteConnectionPolicy, KbKnowledgeBundle,
-    KbRuntimeError, KbRuntimeHandle, StoreSkeleton,
+    DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeError, KbRuntimeHandle, StoreSkeleton,
+    load_kb_knowledge_bundle, load_kb_runtime,
 };
-use validators::{load_week3_shared_fixture, Week3SharedFixture};
+use validators::{Week3SharedFixture, load_week3_shared_fixture};
 
 pub const DEFAULT_HOPE_KB_SNAPSHOT_PATH: &str = "E:/codex/hope-kb/snapshots/hope-kb-v0.1.sqlite3";
 pub const DEFAULT_HOPE_DB_PATH: &str = "E:/codex/hope/data/hope.sqlite3";
@@ -18,16 +18,19 @@ pub struct DesktopSourceConfig {
     pub hope_db_path: PathBuf,
     pub shared_fixture_path: PathBuf,
     pub hope_db_available: bool,
+    pub shared_fixture_available: bool,
 }
 
 impl DesktopSourceConfig {
     pub fn new(hope_db_path: PathBuf, shared_fixture_path: PathBuf) -> Self {
         let hope_db_available = hope_db_path.is_file();
+        let shared_fixture_available = shared_fixture_path.is_file();
 
         Self {
             hope_db_path,
             shared_fixture_path,
             hope_db_available,
+            shared_fixture_available,
         }
     }
 }
@@ -82,6 +85,18 @@ impl AppState {
         hope_kb_snapshot_path: PathBuf,
         hope_db_path: PathBuf,
     ) -> io::Result<Self> {
+        Self::load_from_paths_with_fixture(
+            hope_kb_snapshot_path,
+            hope_db_path,
+            PathBuf::from(DEFAULT_DESKTOP_SHARED_FIXTURE_PATH),
+        )
+    }
+
+    pub fn load_from_paths_with_fixture(
+        hope_kb_snapshot_path: PathBuf,
+        hope_db_path: PathBuf,
+        shared_fixture_path: PathBuf,
+    ) -> io::Result<Self> {
         let store = StoreSkeleton::new(DualSqliteConnectionPolicy::new(
             hope_kb_snapshot_path.clone(),
             hope_db_path.clone(),
@@ -93,10 +108,7 @@ impl AppState {
             store,
             kb_runtime,
             kb_knowledge,
-            DesktopSourceConfig::new(
-                hope_db_path,
-                PathBuf::from(DEFAULT_DESKTOP_SHARED_FIXTURE_PATH),
-            ),
+            DesktopSourceConfig::new(hope_db_path, shared_fixture_path),
         ))
     }
 
@@ -168,7 +180,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::{load_desktop_shared_fixture, AppState, DEFAULT_DESKTOP_SHARED_FIXTURE_PATH};
+    use super::{AppState, DEFAULT_DESKTOP_SHARED_FIXTURE_PATH, load_desktop_shared_fixture};
 
     #[test]
     fn load_from_paths_builds_app_state_from_kb_runtime_assets() {
@@ -195,6 +207,7 @@ mod tests {
         assert_eq!(state.kb_knowledge.failure_patterns.len(), 1);
         assert_eq!(state.kb_knowledge.prompt_templates.len(), 1);
         assert!(!state.desktop_sources.hope_db_available);
+        assert!(state.desktop_sources.shared_fixture_available);
         assert_eq!(
             state.desktop_sources.shared_fixture_path,
             PathBuf::from(DEFAULT_DESKTOP_SHARED_FIXTURE_PATH)
@@ -214,6 +227,41 @@ mod tests {
 
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
         assert!(error.to_string().contains("KB snapshot is missing"));
+    }
+
+    #[test]
+    fn load_shared_fixture_reports_configured_missing_source() {
+        let repo_root = unique_temp_dir("hope-app-missing-fixture");
+        let snapshots_dir = repo_root.join("snapshots");
+        let seed_dir = repo_root.join("seed").join("v0.1");
+        fs::create_dir_all(&snapshots_dir).expect("snapshots dir should be creatable");
+        fs::create_dir_all(&seed_dir).expect("seed dir should be creatable");
+
+        let snapshot_path = snapshots_dir.join("hope-kb-v0.1.sqlite3");
+        let missing_fixture_path = repo_root.join("fixtures").join("missing.json");
+        File::create(&snapshot_path).expect("snapshot file should be creatable");
+        write_seed_bundle(&seed_dir);
+
+        let state = AppState::load_from_paths_with_fixture(
+            snapshot_path,
+            repo_root.join("hope.sqlite3"),
+            missing_fixture_path.clone(),
+        )
+        .expect("app state should load even when the content source is unavailable");
+
+        assert!(!state.desktop_sources.shared_fixture_available);
+        let error = state
+            .load_shared_fixture()
+            .expect_err("missing shared source should fail at panel load time");
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(
+            error
+                .to_string()
+                .contains(&missing_fixture_path.display().to_string())
+        );
+
+        fs::remove_dir_all(repo_root).expect("temp repo root should be removable");
     }
 
     #[test]

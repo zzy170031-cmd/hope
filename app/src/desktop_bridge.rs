@@ -2,17 +2,18 @@ use std::io;
 
 use crate::{
     ipc::{
-        ProjectCreateOrSwitchRequest, StoryboardRenderSegmentCutPreviewSnapshotRequest,
-        ValidationExportPanelSnapshotRequest, WriterEntrySnapshotRequest,
-        PROJECT_CREATE_OR_SWITCH_COMMAND, STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
-        VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND, WRITER_ENTRY_SNAPSHOT_COMMAND,
+        PROJECT_CREATE_OR_SWITCH_COMMAND, ProjectCreateOrSwitchRequest,
+        STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
+        StoryboardRenderSegmentCutPreviewSnapshotRequest, VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
+        ValidationExportPanelSnapshotRequest, WRITER_ENTRY_SNAPSHOT_COMMAND,
+        WriterEntrySnapshotRequest,
     },
     runtime::{
+        ProjectCreateOrSwitchSnapshot, StoryboardRenderSegmentCutPreviewSnapshot,
+        ValidationExportPanelSnapshot, WriterEntrySnapshot,
         build_project_create_or_switch_snapshot,
         build_storyboard_rendersegment_cut_preview_snapshot,
         build_validation_export_panel_snapshot, build_writer_entry_snapshot,
-        ProjectCreateOrSwitchSnapshot, StoryboardRenderSegmentCutPreviewSnapshot,
-        ValidationExportPanelSnapshot, WriterEntrySnapshot,
     },
     state::AppState,
 };
@@ -73,12 +74,42 @@ pub fn desktop_invoke_contract() -> &'static [&'static str] {
     DESKTOP_INVOKE_COMMANDS
 }
 
+fn command_accepts_request(command: &str, request: &DesktopInvokeRequest) -> bool {
+    matches!(
+        (command, request),
+        (
+            PROJECT_CREATE_OR_SWITCH_COMMAND,
+            DesktopInvokeRequest::ProjectCreateOrSwitch(_)
+        ) | (
+            WRITER_ENTRY_SNAPSHOT_COMMAND,
+            DesktopInvokeRequest::WriterEntrySnapshot(_)
+        ) | (
+            STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
+            DesktopInvokeRequest::StoryboardRenderSegmentCutPreviewSnapshot(_)
+        ) | (
+            VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
+            DesktopInvokeRequest::ValidationExportPanelSnapshot(_)
+        )
+    )
+}
+
 fn invoke_desktop_command_with_state(
     state: &AppState,
     command: &str,
     request: DesktopInvokeRequest,
 ) -> Result<DesktopInvokeResponse, DesktopInvokeError> {
     match (command, request) {
+        (
+            PROJECT_CREATE_OR_SWITCH_COMMAND,
+            DesktopInvokeRequest::ProjectCreateOrSwitch(request),
+        ) => {
+            let snapshot = build_project_create_or_switch_snapshot(state, request)?;
+            Ok(DesktopInvokeResponse::ProjectCreateOrSwitch(snapshot))
+        }
+        (WRITER_ENTRY_SNAPSHOT_COMMAND, DesktopInvokeRequest::WriterEntrySnapshot(request)) => {
+            let snapshot = build_writer_entry_snapshot(state, request)?;
+            Ok(DesktopInvokeResponse::WriterEntrySnapshot(snapshot))
+        }
         (
             STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
             DesktopInvokeRequest::StoryboardRenderSegmentCutPreviewSnapshot(request),
@@ -105,36 +136,14 @@ pub fn invoke_desktop_command(
     command: &str,
     request: DesktopInvokeRequest,
 ) -> Result<DesktopInvokeResponse, DesktopInvokeError> {
-    match (command, request) {
-        (
-            PROJECT_CREATE_OR_SWITCH_COMMAND,
-            DesktopInvokeRequest::ProjectCreateOrSwitch(request),
-        ) => {
-            let snapshot = build_project_create_or_switch_snapshot(request)?;
-            Ok(DesktopInvokeResponse::ProjectCreateOrSwitch(snapshot))
-        }
-        (WRITER_ENTRY_SNAPSHOT_COMMAND, DesktopInvokeRequest::WriterEntrySnapshot(request)) => {
-            let snapshot = build_writer_entry_snapshot(request)?;
-            Ok(DesktopInvokeResponse::WriterEntrySnapshot(snapshot))
-        }
-        (
-            STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
-            request @ DesktopInvokeRequest::StoryboardRenderSegmentCutPreviewSnapshot(_),
-        ) => {
-            let state = AppState::load_desktop_runtime()?;
-            invoke_desktop_command_with_state(&state, command, request)
-        }
-        (
-            VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
-            request @ DesktopInvokeRequest::ValidationExportPanelSnapshot(_),
-        ) => {
-            let state = AppState::load_desktop_runtime()?;
-            invoke_desktop_command_with_state(&state, command, request)
-        }
-        _ => Err(DesktopInvokeError::UnsupportedCommand {
+    if !command_accepts_request(command, &request) {
+        return Err(DesktopInvokeError::UnsupportedCommand {
             command: command.to_string(),
-        }),
+        });
     }
+
+    let state = AppState::load_desktop_runtime()?;
+    invoke_desktop_command_with_state(&state, command, request)
 }
 
 #[cfg(test)]
@@ -153,10 +162,10 @@ mod tests {
     };
 
     use super::{
-        desktop_invoke_contract, invoke_desktop_command, invoke_desktop_command_with_state,
-        DesktopInvokeRequest, DesktopInvokeResponse, DESKTOP_INVOKE_COMMANDS,
+        DESKTOP_INVOKE_COMMANDS, DesktopInvokeRequest, DesktopInvokeResponse,
         PROJECT_CREATE_OR_SWITCH_COMMAND, STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
         VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND, WRITER_ENTRY_SNAPSHOT_COMMAND,
+        desktop_invoke_contract, invoke_desktop_command, invoke_desktop_command_with_state,
     };
     use crate::{runtime::ValidationExportPanelState, state::AppState};
 
@@ -175,8 +184,27 @@ mod tests {
     }
 
     #[test]
+    fn invoke_desktop_command_rejects_mismatched_request_before_loading_state() {
+        let error = invoke_desktop_command(
+            VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
+            DesktopInvokeRequest::ProjectCreateOrSwitch(ProjectCreateOrSwitchRequest {
+                project_id: None,
+                project_name: None,
+            }),
+        )
+        .expect_err("mismatched request variant should be rejected before state load");
+
+        assert!(
+            error
+                .to_string()
+                .contains("desktop invoke command is not registered yet")
+        );
+    }
+
+    #[test]
     fn invoke_desktop_command_returns_real_project_snapshot() {
-        let response = invoke_desktop_command(
+        let response = invoke_desktop_command_with_state(
+            &test_state(),
             PROJECT_CREATE_OR_SWITCH_COMMAND,
             DesktopInvokeRequest::ProjectCreateOrSwitch(ProjectCreateOrSwitchRequest {
                 project_id: None,
@@ -199,7 +227,8 @@ mod tests {
 
     #[test]
     fn invoke_desktop_command_returns_real_writer_snapshot() {
-        let response = invoke_desktop_command(
+        let response = invoke_desktop_command_with_state(
+            &test_state(),
             WRITER_ENTRY_SNAPSHOT_COMMAND,
             DesktopInvokeRequest::WriterEntrySnapshot(WriterEntrySnapshotRequest {
                 project_id: "project-week3-001".to_string(),
@@ -263,10 +292,12 @@ mod tests {
             DesktopInvokeResponse::ValidationExportPanelSnapshot(snapshot) => {
                 assert_eq!(snapshot.project_id, "project-week3-001");
                 assert!(!snapshot.summary_items.is_empty());
-                assert!(snapshot
-                    .summary_items
-                    .iter()
-                    .any(|item| item.label == "repair_recommendations"));
+                assert!(
+                    snapshot
+                        .summary_items
+                        .iter()
+                        .any(|item| item.label == "repair_recommendations")
+                );
                 assert_eq!(snapshot.repair_recommendations.len(), 0);
                 assert!(snapshot.summary_items.iter().any(|item| {
                     item.label == "repair_recommendations"

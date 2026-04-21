@@ -5,13 +5,13 @@ use crate::{
         ProjectCreateOrSwitchRequest, StoryboardRenderSegmentCutPreviewSnapshotRequest,
         ValidationExportPanelSnapshotRequest, WriterEntrySnapshotRequest,
     },
-    state::{load_desktop_shared_fixture, AppState},
+    state::AppState,
 };
 
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
 use validators::{
-    generate_week3_repair_recommendations, generate_week3_validation_report, RepairRecommendation,
-    Week3SharedFixture,
+    RepairRecommendation, Week3SharedFixture, generate_week3_repair_recommendations,
+    generate_week3_validation_report,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,18 +106,20 @@ pub struct ValidationRepairRecommendationItem {
 }
 
 pub fn build_project_create_or_switch_snapshot(
+    state: &AppState,
     request: ProjectCreateOrSwitchRequest,
 ) -> io::Result<ProjectCreateOrSwitchSnapshot> {
-    let fixture = load_desktop_shared_fixture()?;
+    let fixture = state.load_shared_fixture()?;
     Ok(build_project_create_or_switch_snapshot_from_fixture(
         request, &fixture,
     ))
 }
 
 pub fn build_writer_entry_snapshot(
+    state: &AppState,
     request: WriterEntrySnapshotRequest,
 ) -> io::Result<WriterEntrySnapshot> {
-    let fixture = load_desktop_shared_fixture()?;
+    let fixture = state.load_shared_fixture()?;
     Ok(build_writer_entry_snapshot_from_fixture(request, &fixture))
 }
 
@@ -631,11 +633,11 @@ mod tests {
     };
 
     use super::{
+        StoryboardPreviewPlanRequest, ValidationExportPanelState,
         build_project_create_or_switch_snapshot_from_fixture, build_storyboard_preview_plan,
         build_storyboard_rendersegment_cut_preview_snapshot_from_fixture,
         build_validation_export_panel_snapshot_from_fixture,
         build_writer_entry_snapshot_from_fixture, resolve_scene_taxonomy,
-        StoryboardPreviewPlanRequest, ValidationExportPanelState,
     };
     use crate::state::load_desktop_shared_fixture;
     use crate::{
@@ -822,11 +824,12 @@ mod tests {
                 .primary_scene_director_id,
             "taxonomy:scene-taxonomy-daily-dialogue:scene"
         );
-        assert!(plan
-            .committee_runtime
-            .prompt_layers
-            .layout_prompt
-            .contains("场景分类：daily_dialogue"));
+        assert!(
+            plan.committee_runtime
+                .prompt_layers
+                .layout_prompt
+                .contains("场景分类：daily_dialogue")
+        );
     }
 
     #[test]
@@ -951,15 +954,19 @@ mod tests {
             snapshot.summary_items[2].state,
             ValidationExportPanelState::Ready
         );
-        assert!(snapshot
-            .repair_recommendations
-            .iter()
-            .any(|item| item.failure_code == "chinese_prompt_noise"));
-        assert!(snapshot
-            .repair_recommendations
-            .iter()
-            .flat_map(|item| item.prompt_template_names.iter())
-            .any(|name| name == "Repair Prompt Language"));
+        assert!(
+            snapshot
+                .repair_recommendations
+                .iter()
+                .any(|item| item.failure_code == "chinese_prompt_noise")
+        );
+        assert!(
+            snapshot
+                .repair_recommendations
+                .iter()
+                .flat_map(|item| item.prompt_template_names.iter())
+                .any(|name| name == "Repair Prompt Language")
+        );
     }
 
     #[test]
