@@ -370,6 +370,189 @@ button {
   gap: 12px;
 }
 
+.storyboard-workbench {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(0, 2fr);
+  gap: 18px;
+}
+
+.storyboard-workbench__rail,
+.storyboard-workbench__main,
+.storyboard-input-card,
+.storyboard-revision-card,
+.prompt-preview {
+  min-width: 0;
+}
+
+.storyboard-workbench__rail,
+.storyboard-input-card,
+.storyboard-revision-card,
+.prompt-preview,
+.storyboard-table-wrap {
+  border: 1px solid rgba(83, 65, 42, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.storyboard-workbench__rail {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 16px;
+}
+
+.storyboard-workbench__rail h4,
+.storyboard-input-card h4,
+.storyboard-revision-card h4,
+.prompt-preview h4,
+.storyboard-table-wrap h4 {
+  margin: 0;
+}
+
+.storyboard-workbench__rail p,
+.storyboard-input-card span,
+.storyboard-lock-card p,
+.storyboard-semantic-card p,
+.prompt-preview p,
+.storyboard-table-wrap__header span {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.storyboard-lock-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(31, 27, 22, 0.04);
+}
+
+.storyboard-workbench__main {
+  display: grid;
+  gap: 14px;
+}
+
+.storyboard-input-card,
+.storyboard-revision-card,
+.prompt-preview {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.storyboard-input-card__field {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  padding: 12px;
+  background: white;
+  color: var(--text);
+}
+
+.storyboard-input-card__actions,
+.storyboard-table-wrap__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.readiness-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.readiness-pill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.readiness-pill--draft {
+  background: rgba(31, 27, 22, 0.06);
+  color: var(--muted);
+}
+
+.readiness-pill--pending {
+  background: rgba(157, 92, 47, 0.12);
+  color: var(--accent);
+}
+
+.readiness-pill--ok {
+  background: rgba(36, 117, 74, 0.12);
+  color: #24754a;
+}
+
+.readiness-pill--blocked {
+  background: rgba(124, 42, 42, 0.12);
+  color: #7c2a2a;
+}
+
+.storyboard-semantic-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.storyboard-semantic-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(83, 65, 42, 0.1);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.storyboard-semantic-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 10px;
+}
+
+.storyboard-table-wrap {
+  overflow: hidden;
+}
+
+.storyboard-table-wrap__header {
+  padding: 16px;
+  border-bottom: 1px solid rgba(83, 65, 42, 0.08);
+}
+
+.storyboard-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.storyboard-table th,
+.storyboard-table td {
+  padding: 12px;
+  border-bottom: 1px solid rgba(83, 65, 42, 0.08);
+  text-align: left;
+  vertical-align: top;
+}
+
+.storyboard-table th {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.storyboard-table tr:last-child td {
+  border-bottom: 0;
+}
+
 .project-list {
   display: grid;
   gap: 12px;
@@ -519,6 +702,8 @@ button {
   .view-grid,
   .view-grid--preview,
   .view-grid--export,
+  .storyboard-workbench,
+  .storyboard-semantic-grid,
   .readonly-landing,
   .readonly-landing__grid {
     grid-template-columns: 1fr;
@@ -534,7 +719,9 @@ button {
   .workspace__header,
   .panel__header,
   .project-card__title,
-  .validation-row {
+  .validation-row,
+  .storyboard-input-card__actions,
+  .storyboard-table-wrap__header {
     flex-direction: column;
     align-items: start;
   }
@@ -551,5 +738,9 @@ button {
 
   .qwen-secret__input {
     width: 100%;
+  }
+
+  .storyboard-table-wrap {
+    overflow-x: auto;
   }
 }

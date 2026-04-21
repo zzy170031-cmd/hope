@@ -19,6 +19,8 @@ import type {
   PreviewItem,
   ProjectSummary,
   QwenRuntimeStatus,
+  StoryboardReadinessStatus,
+  StoryboardSemanticGroup,
   ValidationExportPanelSnapshot,
   ValidationRepairRecommendation,
   ViewId,
@@ -31,6 +33,89 @@ interface AsyncState<T> {
 }
 
 const QWEN_MOCK_CHECK_DELAY_MS = 220;
+
+const STORYBOARD_REQUIREMENT_PLACEHOLDER =
+  "例：一位年轻工程师在清晨地铁里发现异常信号，节奏克制，结尾留下继续追查的悬念。";
+
+const STORYBOARD_READINESS_FLOW: StoryboardReadinessStatus[] = [
+  "草案",
+  "待补全",
+  "待修正",
+  "校验通过",
+  "可导出",
+  "阻断",
+];
+
+const STORYBOARD_SEMANTIC_GROUPS: Array<{
+  group: StoryboardSemanticGroup;
+  status: StoryboardReadinessStatus;
+  detail: string;
+}> = [
+  {
+    group: "画面意图",
+    status: "草案",
+    detail: "先锁定每格镜头的视觉目标与情绪方向。",
+  },
+  {
+    group: "运动与镜头",
+    status: "待补全",
+    detail: "镜头运动、景别与切换节奏等待生成链路补全。",
+  },
+  {
+    group: "声音与对白",
+    status: "待修正",
+    detail: "对白与环境声只做语义占位，后续由校验链确认。",
+  },
+  {
+    group: "连续性与交接",
+    status: "校验通过",
+    detail: "同一角色不同形态需保持身份、动作与场景交接一致。",
+  },
+  {
+    group: "参考与锁定",
+    status: "待补全",
+    detail: "角色、场景和参考素材只做锁定提示，不做实体管理。",
+  },
+  {
+    group: "导出就绪",
+    status: "可导出",
+    detail: "主交付路径固定为导出 Excel。",
+  },
+];
+
+const STORYBOARD_DRAFT_ROWS: Array<{
+  shot: string;
+  intent: string;
+  camera: string;
+  sound: string;
+  handoff: string;
+  status: StoryboardReadinessStatus;
+}> = [
+  {
+    shot: "镜头 01",
+    intent: "建立角色处境和清晨空间气氛。",
+    camera: "中景推近，保持人物与环境关系。",
+    sound: "低频环境声，保留一句内心提示。",
+    handoff: "交接到异常信号的首次出现。",
+    status: "草案",
+  },
+  {
+    shot: "镜头 02",
+    intent: "突出异常信号带来的认知偏移。",
+    camera: "近景切到屏幕反光，避免跳出叙事。",
+    sound: "提示音短促，不引入额外实体管理。",
+    handoff: "同一角色视线方向保持连续。",
+    status: "待修正",
+  },
+  {
+    shot: "镜头 03",
+    intent: "留下继续追查的动作出口。",
+    camera: "跟拍到车门开启，切点对齐动作。",
+    sound: "对白留白，环境声承接下一场。",
+    handoff: "导出前等待 validator 确认。",
+    status: "待补全",
+  },
+];
 
 function useHashView() {
   const [activeView, setActiveView] = useState<ViewId>(() => resolveRoute(window.location.hash));
@@ -408,30 +493,191 @@ function WriterView({ selectedProjectId }: { selectedProjectId: string | null })
     () => loadWriterSnapshot(selectedProjectId ?? undefined),
     [selectedProjectId],
   );
+  const [storyboardNeed, setStoryboardNeed] = useState("");
 
   return (
     <section className="panel">
       <div className="panel__header">
-        <h3>Synopsis -&gt; Story -&gt; Screenplay -&gt; Storyboard</h3>
-        <span className="panel__hint">四层查看入口</span>
+        <h3>分镜脚本工作台</h3>
+        <span className="panel__hint">需求输入 -&gt; 分镜草案 -&gt; 校验 -&gt; 导出 Excel</span>
       </div>
 
       {!selectedProjectId ? (
-        <EmptyState title="先选择项目" description="Writer 视图只展示当前项目的四层结构。" />
+        <EmptyState title="先选择项目" description="分镜工作台需要项目上下文。" />
       ) : writer.status === "loading" ? (
         <LoadingCard lines={4} />
       ) : writer.status === "error" ? (
         <EmptyState title="Writer 加载失败" description={writer.error ?? "请稍后重试。"} />
       ) : (
-        <div className="stack">
-          <LayerCard title="Synopsis" text={writer.data?.synopsis ?? ""} />
-          <LayerCard title="Story" text={writer.data?.story ?? ""} />
-          <LayerCard title="Screenplay" text={writer.data?.screenplay ?? ""} />
-          <LayerCard title="Storyboard" text={writer.data?.storyboard ?? ""} />
+        <div className="storyboard-workbench">
+          <aside className="storyboard-workbench__rail" aria-label="分镜参数占位">
+            <div>
+              <p className="workspace__eyebrow">轻量参数</p>
+              <h4>风格预设</h4>
+              <p>用户语义的风格组合预设，占位不展示后台规则。</p>
+            </div>
+            <div className="storyboard-lock-card">
+              <strong>参考与锁定</strong>
+              <p>角色、场景、形态变化只保留一致性提示，不做实体库管理。</p>
+            </div>
+            <div className="storyboard-lock-card">
+              <strong>生成边界</strong>
+              <p>当前仅本地占位，不触发外部生成服务。</p>
+            </div>
+          </aside>
+
+          <div className="storyboard-workbench__main">
+            <div className="storyboard-input-card">
+              <div>
+                <p className="workspace__eyebrow">用户需求</p>
+                <h4>输入分镜目标</h4>
+              </div>
+              <textarea
+                className="storyboard-input-card__field"
+                onChange={(event) => setStoryboardNeed(event.target.value)}
+                placeholder={STORYBOARD_REQUIREMENT_PLACEHOLDER}
+                value={storyboardNeed}
+              />
+              <div className="storyboard-input-card__actions">
+                <span>本包只做 UI/local mock 占位，不触发真实生成。</span>
+                <button className="panel__button" disabled type="button">
+                  生成分镜草案（待接入）
+                </button>
+              </div>
+            </div>
+
+            <ReadinessStrip />
+            <StoryboardSemanticGrid />
+            <StoryboardDraftTable />
+            <PromptPreview storyboardNeed={storyboardNeed} />
+
+            <div className="storyboard-revision-card">
+              <div>
+                <p className="workspace__eyebrow">全局修改</p>
+                <h4>底部修改区</h4>
+              </div>
+              <textarea
+                className="storyboard-input-card__field"
+                placeholder="例：强化第三个镜头的悬念，但不要改变角色身份和场景连续性。"
+              />
+            </div>
+
+            <div className="stack">
+              <LayerCard title="Synopsis" text={writer.data?.synopsis ?? ""} />
+              <LayerCard title="Story" text={writer.data?.story ?? ""} />
+              <LayerCard title="Screenplay" text={writer.data?.screenplay ?? ""} />
+              <LayerCard title="Storyboard" text={writer.data?.storyboard ?? ""} />
+            </div>
+          </div>
         </div>
       )}
     </section>
   );
+}
+
+function ReadinessStrip() {
+  return (
+    <div className="readiness-strip" aria-label="分镜 readiness 状态">
+      {STORYBOARD_READINESS_FLOW.map((status) => (
+        <span key={status} className={`readiness-pill ${readinessClassName(status)}`}>
+          {status}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function StoryboardSemanticGrid() {
+  return (
+    <div className="storyboard-semantic-grid" aria-label="分镜语义分组">
+      {STORYBOARD_SEMANTIC_GROUPS.map((item) => (
+        <article key={item.group} className="storyboard-semantic-card">
+          <div className="storyboard-semantic-card__header">
+            <strong>{item.group}</strong>
+            <span className={`readiness-pill ${readinessClassName(item.status)}`}>
+              {item.status}
+            </span>
+          </div>
+          <p>{item.detail}</p>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function StoryboardDraftTable() {
+  return (
+    <div className="storyboard-table-wrap" aria-label="分镜草案展示区">
+      <div className="storyboard-table-wrap__header">
+        <div>
+          <p className="workspace__eyebrow">分镜草案</p>
+          <h4>最小脚本表格</h4>
+        </div>
+        <span>本地占位数据，等待生成链路接入。</span>
+      </div>
+      <table className="storyboard-table">
+        <thead>
+          <tr>
+            <th>镜头</th>
+            <th>画面意图</th>
+            <th>运动与镜头</th>
+            <th>声音与对白</th>
+            <th>连续性与交接</th>
+            <th>状态</th>
+          </tr>
+        </thead>
+        <tbody>
+          {STORYBOARD_DRAFT_ROWS.map((row) => (
+            <tr key={row.shot}>
+              <td>{row.shot}</td>
+              <td>{row.intent}</td>
+              <td>{row.camera}</td>
+              <td>{row.sound}</td>
+              <td>{row.handoff}</td>
+              <td>
+                <span className={`readiness-pill ${readinessClassName(row.status)}`}>
+                  {row.status}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PromptPreview({ storyboardNeed }: { storyboardNeed: string }) {
+  const requirement = storyboardNeed.trim() || "等待用户输入需求";
+
+  return (
+    <article className="prompt-preview" aria-label="分镜提示词预览区">
+      <div>
+        <p className="workspace__eyebrow">提示词预览</p>
+        <h4>最终提示预览</h4>
+      </div>
+      <p>
+        以用户需求“{requirement}”为核心，生成分镜草案时需覆盖画面意图、运动与镜头、声音与对白、
+        连续性与交接、参考与锁定、导出就绪六类语义，不展示后台内部内容。
+      </p>
+    </article>
+  );
+}
+
+function readinessClassName(status: StoryboardReadinessStatus) {
+  switch (status) {
+    case "校验通过":
+    case "可导出":
+      return "readiness-pill--ok";
+    case "待补全":
+    case "待修正":
+      return "readiness-pill--pending";
+    case "阻断":
+      return "readiness-pill--blocked";
+    case "草案":
+    default:
+      return "readiness-pill--draft";
+  }
 }
 
 function PreviewView({ selectedProjectId }: { selectedProjectId: string | null }) {
@@ -445,21 +691,21 @@ function PreviewView({ selectedProjectId }: { selectedProjectId: string | null }
       <div className="panel">
         <div className="panel__header">
           <h3>Storyboard</h3>
-          <span className="panel__hint">共享 fixture 预览</span>
+          <span className="panel__hint">分镜草案预览</span>
         </div>
         {renderPreviewSection(selectedProjectId, preview, "storyboard")}
       </div>
       <div className="panel">
         <div className="panel__header">
           <h3>RenderSegment</h3>
-          <span className="panel__hint">30s - 90s / 不跨 NarrativeScene</span>
+          <span className="panel__hint">运动与镜头语义</span>
         </div>
         {renderPreviewSection(selectedProjectId, preview, "renderSegment")}
       </div>
       <div className="panel">
         <div className="panel__header">
           <h3>Cuts</h3>
-          <span className="panel__hint">共享 fixture 中的 cut</span>
+          <span className="panel__hint">连续性与交接</span>
         </div>
         {renderPreviewSection(selectedProjectId, preview, "cuts")}
       </div>
@@ -486,7 +732,7 @@ function renderPreviewSection(
 
   const items = preview.data?.[key] ?? [];
   if (items.length === 0) {
-    return <EmptyState title="暂无预览条目" description="等待共享 fixture 注入更多数据。" />;
+    return <EmptyState title="暂无预览条目" description="等待分镜草案补全。" />;
   }
 
   return (
@@ -508,25 +754,27 @@ function ExportView({ selectedProjectId }: { selectedProjectId: string | null })
     <section className="view-grid view-grid--export">
       <div className="panel">
         <div className="panel__header">
-          <h3>Export 面板</h3>
-          <span className="panel__hint">仅展示共享导出链状态</span>
+          <h3>导出 Excel</h3>
+          <span className="panel__hint">主交付路径</span>
         </div>
 
         {!selectedProjectId ? (
           <EmptyState title="先选择项目" description="导出面板需要项目上下文。" />
         ) : (
           <div className="detail-card">
-            <strong>当前导出链</strong>
-            <p>共享 fixture -&gt; validation_report -&gt; Excel / JSON / Markdown</p>
-            <p>命令：{HOPE_TAURI_COMMANDS.validationExportPanelSnapshot}</p>
+            <strong>分镜结果表格</strong>
+            <p>分镜草案经过校验后，主交付锁定为导出 Excel。</p>
+            <button className="panel__button" disabled type="button">
+              导出 Excel（待校验通过）
+            </button>
           </div>
         )}
       </div>
 
       <div className="panel">
         <div className="panel__header">
-          <h3>Validation 面板</h3>
-          <span className="panel__hint">与 Validation sheet 同步</span>
+          <h3>Validator 状态</h3>
+          <span className="panel__hint">草案 readiness 检查</span>
         </div>
 
         {!selectedProjectId ? (

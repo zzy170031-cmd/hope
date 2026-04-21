@@ -10,6 +10,22 @@ export type QwenRuntimeStatus =
   | "已连接"
   | "连接失败";
 
+export type StoryboardReadinessStatus =
+  | "草案"
+  | "待补全"
+  | "待修正"
+  | "校验通过"
+  | "可导出"
+  | "阻断";
+
+export type StoryboardSemanticGroup =
+  | "画面意图"
+  | "运动与镜头"
+  | "声音与对白"
+  | "连续性与交接"
+  | "参考与锁定"
+  | "导出就绪";
+
 export type ExportValidationState = "正常" | "待补充" | "阻塞";
 
 export interface ProjectSummary {
