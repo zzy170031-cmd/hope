@@ -2,14 +2,15 @@ use std::io;
 
 use crate::state::AppState;
 use project_store::{
-    bootstrap_verified_kb_context_from_checkpoint, KbRuntimeError,
-    SnapshotBootstrapCheckpointArtifacts, StoreSkeleton,
+    KbRuntimeError, SnapshotBootstrapCheckpointArtifacts, StoreSkeleton,
+    bootstrap_verified_kb_context_from_checkpoint,
 };
 
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
 use validators::{
+    RepairRecommendation, WEEK3_SHARED_FIXTURE_PATH, Week3SharedFixture,
     generate_week3_repair_recommendations, generate_week3_validation_report,
-    load_week3_shared_fixture, RepairRecommendation, Week3SharedFixture, WEEK3_SHARED_FIXTURE_PATH,
+    load_week3_shared_fixture,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,19 +280,19 @@ mod tests {
     };
     use project_store::{
         DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeError, KbRuntimeHandle,
-        SnapshotBootstrapCheckpointArtifacts, StoreSkeleton,
-        SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH,
+        SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH, SnapshotBootstrapCheckpointArtifacts,
+        StoreSkeleton,
     };
 
     use super::{
+        StoryboardPreviewPlanFromCheckpointError, StoryboardPreviewPlanRequest,
+        ValidationExportPanelSnapshotRequest, ValidationExportPanelState,
         bootstrap_app_state_from_checkpoint, build_storyboard_preview_plan,
         build_storyboard_preview_plan_from_checkpoint,
         build_validation_export_panel_snapshot_from_fixture, resolve_scene_taxonomy,
-        StoryboardPreviewPlanFromCheckpointError, StoryboardPreviewPlanRequest,
-        ValidationExportPanelSnapshotRequest, ValidationExportPanelState,
     };
     use crate::state::AppState;
-    use validators::{load_week3_shared_fixture, WEEK3_SHARED_FIXTURE_PATH};
+    use validators::{WEEK3_SHARED_FIXTURE_PATH, load_week3_shared_fixture};
 
     fn test_state() -> AppState {
         let store = StoreSkeleton::new(DualSqliteConnectionPolicy::new(
@@ -507,16 +508,18 @@ mod tests {
                 .primary_action_director_id,
             "taxonomy:scene_tax_01:action"
         );
-        assert!(plan
-            .committee_runtime
-            .prompt_layers
-            .layout_prompt
-            .contains("场景分类：daily_dialogue"));
-        assert!(plan
-            .committee_runtime
-            .prompt_layers
-            .render_prompt
-            .contains("连续性优先级：high"));
+        assert!(
+            plan.committee_runtime
+                .prompt_layers
+                .layout_prompt
+                .contains("场景分类：daily_dialogue")
+        );
+        assert!(
+            plan.committee_runtime
+                .prompt_layers
+                .render_prompt
+                .contains("连续性优先级：high")
+        );
 
         fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
     }
@@ -627,11 +630,12 @@ mod tests {
                 .primary_scene_director_id,
             "taxonomy:scene-taxonomy-daily-dialogue:scene"
         );
-        assert!(plan
-            .committee_runtime
-            .prompt_layers
-            .layout_prompt
-            .contains("场景分类：daily_dialogue"));
+        assert!(
+            plan.committee_runtime
+                .prompt_layers
+                .layout_prompt
+                .contains("场景分类：daily_dialogue")
+        );
     }
 
     #[test]
@@ -695,15 +699,19 @@ mod tests {
             snapshot.summary_items[2].state,
             ValidationExportPanelState::Ready
         );
-        assert!(snapshot
-            .repair_recommendations
-            .iter()
-            .any(|item| item.failure_code == "chinese_prompt_noise"));
-        assert!(snapshot
-            .repair_recommendations
-            .iter()
-            .flat_map(|item| item.prompt_template_names.iter())
-            .any(|name| name == "Repair Prompt Language"));
+        assert!(
+            snapshot
+                .repair_recommendations
+                .iter()
+                .any(|item| item.failure_code == "chinese_prompt_noise")
+        );
+        assert!(
+            snapshot
+                .repair_recommendations
+                .iter()
+                .flat_map(|item| item.prompt_template_names.iter())
+                .any(|name| name == "Repair Prompt Language")
+        );
     }
 
     #[test]
