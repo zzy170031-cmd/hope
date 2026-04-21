@@ -105,6 +105,18 @@ pub struct SnapshotBootstrapKnowledgeBundleStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationFeedbackReadonlyState {
+    pub source_snapshot_id: String,
+    pub source_snapshot_hash: String,
+    pub source_snapshot_path: String,
+    pub has_failure_patterns: bool,
+    pub has_repair_template_mapping: bool,
+    pub failure_pattern_count: usize,
+    pub prompt_template_count: usize,
+    pub repair_mapping_ready: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoryboardPreviewPlanFromCheckpointError {
     Bootstrap(KbRuntimeError),
     Planning(StoryboardPlanningError),
@@ -164,6 +176,38 @@ pub fn snapshot_bootstrap_readonly_state_from_verified_app_state(
                 && failure_pattern_count > 0
                 && prompt_template_count > 0,
         },
+    }
+}
+
+pub fn bootstrap_validation_feedback_readonly_state_from_checkpoint(
+    store: StoreSkeleton,
+    checkpoint_artifacts: SnapshotBootstrapCheckpointArtifacts,
+) -> Result<ValidationFeedbackReadonlyState, KbRuntimeError> {
+    let state = bootstrap_app_state_from_checkpoint(store, checkpoint_artifacts)?;
+
+    Ok(validation_feedback_readonly_state_from_verified_app_state(
+        &state,
+    ))
+}
+
+pub fn validation_feedback_readonly_state_from_verified_app_state(
+    state: &AppState,
+) -> ValidationFeedbackReadonlyState {
+    let failure_pattern_count = state.kb_knowledge.failure_patterns.len();
+    let prompt_template_count = state.kb_knowledge.prompt_templates.len();
+    let summary = &state.kb_runtime.summary;
+
+    ValidationFeedbackReadonlyState {
+        source_snapshot_id: state.kb_runtime.snapshot.snapshot_id.clone(),
+        source_snapshot_hash: state.kb_runtime.snapshot.snapshot_hash.clone(),
+        source_snapshot_path: summary.snapshot_path.clone(),
+        has_failure_patterns: summary.has_failure_patterns,
+        has_repair_template_mapping: summary.has_repair_template_mapping,
+        failure_pattern_count,
+        prompt_template_count,
+        repair_mapping_ready: summary.has_repair_template_mapping
+            && failure_pattern_count > 0
+            && prompt_template_count > 0,
     }
 }
 
@@ -371,10 +415,12 @@ mod tests {
         StoryboardPreviewPlanFromCheckpointError, StoryboardPreviewPlanRequest,
         ValidationExportPanelSnapshotRequest, ValidationExportPanelState,
         bootstrap_app_state_from_checkpoint,
-        bootstrap_snapshot_bootstrap_readonly_state_from_checkpoint, build_storyboard_preview_plan,
-        build_storyboard_preview_plan_from_checkpoint,
+        bootstrap_snapshot_bootstrap_readonly_state_from_checkpoint,
+        bootstrap_validation_feedback_readonly_state_from_checkpoint,
+        build_storyboard_preview_plan, build_storyboard_preview_plan_from_checkpoint,
         build_validation_export_panel_snapshot_from_fixture, resolve_scene_taxonomy,
         snapshot_bootstrap_readonly_state_from_verified_app_state,
+        validation_feedback_readonly_state_from_verified_app_state,
     };
     use crate::state::AppState;
     use validators::{WEEK3_SHARED_FIXTURE_PATH, load_week3_shared_fixture};
@@ -641,6 +687,103 @@ mod tests {
         let error =
             bootstrap_snapshot_bootstrap_readonly_state_from_checkpoint(store, fixture.artifacts)
                 .expect_err("readonly state should not add a local fallback");
+
+        assert_eq!(
+            error,
+            KbRuntimeError::SnapshotBootstrapInputMissing {
+                input_name: "export_template".to_string(),
+                path: missing_path,
+            }
+        );
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
+    fn bootstrap_validation_feedback_readonly_state_from_checkpoint_exposes_verified_kb_readiness()
+    {
+        let fixture = create_snapshot_bootstrap_fixture();
+        let store = StoreSkeleton::new(DualSqliteConnectionPolicy::new(
+            fixture.artifacts.snapshot_path.clone(),
+            fixture.root.join("hope.sqlite3"),
+        ));
+
+        let readonly_state = bootstrap_validation_feedback_readonly_state_from_checkpoint(
+            store,
+            fixture.artifacts.clone(),
+        )
+        .expect("checkpoint bootstrap should expose validation feedback readiness metadata");
+
+        assert_eq!(readonly_state.source_snapshot_id, "hope-kb-v0.1");
+        assert_eq!(
+            readonly_state.source_snapshot_hash,
+            SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+        );
+        assert_eq!(
+            readonly_state.source_snapshot_path,
+            fixture.artifacts.snapshot_path.display().to_string()
+        );
+        assert!(readonly_state.has_failure_patterns);
+        assert!(readonly_state.has_repair_template_mapping);
+        assert_eq!(readonly_state.failure_pattern_count, 1);
+        assert_eq!(readonly_state.prompt_template_count, 1);
+        assert!(readonly_state.repair_mapping_ready);
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
+    fn validation_feedback_readonly_state_from_verified_app_state_uses_verified_state_fields() {
+        let fixture = create_snapshot_bootstrap_fixture();
+        let store = StoreSkeleton::new(DualSqliteConnectionPolicy::new(
+            fixture.artifacts.snapshot_path.clone(),
+            fixture.root.join("hope.sqlite3"),
+        ));
+        let state = bootstrap_app_state_from_checkpoint(store, fixture.artifacts.clone())
+            .expect("checkpoint bootstrap should hydrate verified app state");
+
+        let readonly_state = validation_feedback_readonly_state_from_verified_app_state(&state);
+
+        assert_eq!(
+            readonly_state.source_snapshot_hash,
+            SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH
+        );
+        assert_eq!(
+            readonly_state.source_snapshot_path,
+            state.kb_runtime.summary.snapshot_path
+        );
+        assert_eq!(
+            readonly_state.failure_pattern_count,
+            state.kb_knowledge.failure_patterns.len()
+        );
+        assert_eq!(
+            readonly_state.prompt_template_count,
+            state.kb_knowledge.prompt_templates.len()
+        );
+        assert_eq!(
+            readonly_state.repair_mapping_ready,
+            state.kb_runtime.summary.has_repair_template_mapping
+                && !state.kb_knowledge.failure_patterns.is_empty()
+                && !state.kb_knowledge.prompt_templates.is_empty()
+        );
+
+        fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
+    }
+
+    #[test]
+    fn bootstrap_validation_feedback_readonly_state_from_checkpoint_rejects_missing_trusted_input()
+    {
+        let fixture = create_snapshot_bootstrap_fixture();
+        let store = StoreSkeleton::new(DualSqliteConnectionPolicy::new(
+            fixture.artifacts.snapshot_path.clone(),
+            fixture.root.join("hope.sqlite3"),
+        ));
+        let missing_path = fixture.packet_root.join("export_templates.json");
+        fs::remove_file(&missing_path).expect("trusted input should be removable for the test");
+
+        let error =
+            bootstrap_validation_feedback_readonly_state_from_checkpoint(store, fixture.artifacts)
+                .expect_err("validation feedback readiness should not add a local fallback");
 
         assert_eq!(
             error,
