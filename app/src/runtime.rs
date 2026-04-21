@@ -507,11 +507,16 @@ fn build_validation_export_panel_snapshot_from_fixture(
     fixture: &Week3SharedFixture,
 ) -> io::Result<ValidationExportPanelSnapshot> {
     let workbook = generate_week3_validation_report(fixture)?;
-    let repair_recommendations = generate_week3_repair_recommendations(
-        fixture,
-        &state.kb_knowledge.failure_patterns,
-        &state.kb_knowledge.prompt_templates,
-    )?;
+    let readonly_state = state.snapshot_bootstrap_readonly_state();
+    let repair_recommendations = if readonly_state.knowledge_bundle.repair_mappings_ready {
+        generate_week3_repair_recommendations(
+            fixture,
+            &state.kb_knowledge.failure_patterns,
+            &state.kb_knowledge.prompt_templates,
+        )?
+    } else {
+        Vec::new()
+    };
 
     let validation_row_count = workbook.validation_report.len();
     let block_count = workbook
@@ -546,7 +551,7 @@ fn build_validation_export_panel_snapshot_from_fixture(
             value: format!(
                 "{} kb-backed recommendations / snapshot {}",
                 repair_recommendations.len(),
-                state.kb_runtime.snapshot.snapshot_id
+                readonly_state.snapshot_identity.snapshot_id
             ),
             state: repair_state,
         },
@@ -953,6 +958,11 @@ mod tests {
         assert_eq!(
             snapshot.summary_items[2].state,
             ValidationExportPanelState::Ready
+        );
+        assert!(
+            snapshot.summary_items[2]
+                .value
+                .contains("snapshot hope-kb-v0.1")
         );
         assert!(
             snapshot

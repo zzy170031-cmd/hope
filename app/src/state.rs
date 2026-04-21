@@ -35,12 +35,88 @@ impl DesktopSourceConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotBootstrapReadonlyState {
+    pub snapshot_identity: SnapshotBootstrapSnapshotIdentity,
+    pub summary_capabilities: SnapshotBootstrapSummaryCapabilities,
+    pub knowledge_bundle: SnapshotBootstrapKnowledgeBundleStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotBootstrapSnapshotIdentity {
+    pub snapshot_id: String,
+    pub snapshot_hash: String,
+    pub seed_format: String,
+    pub source_name: String,
+    pub created_at_timestamp: i64,
+    pub snapshot_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotBootstrapSummaryCapabilities {
+    pub has_scene_taxonomy: bool,
+    pub has_failure_patterns: bool,
+    pub has_repair_template_mapping: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotBootstrapKnowledgeBundleStatus {
+    pub scene_taxonomy_count: usize,
+    pub failure_pattern_count: usize,
+    pub prompt_template_count: usize,
+    pub scene_taxonomies_ready: bool,
+    pub failure_patterns_ready: bool,
+    pub prompt_templates_ready: bool,
+    pub repair_mappings_ready: bool,
+}
+
+impl SnapshotBootstrapReadonlyState {
+    pub fn from_verified_sources(
+        kb_runtime: &KbRuntimeHandle,
+        kb_knowledge: &KbKnowledgeBundle,
+    ) -> Self {
+        let scene_taxonomy_count = kb_knowledge.scene_taxonomies.len();
+        let failure_pattern_count = kb_knowledge.failure_patterns.len();
+        let prompt_template_count = kb_knowledge.prompt_templates.len();
+        let summary = &kb_runtime.summary;
+
+        Self {
+            snapshot_identity: SnapshotBootstrapSnapshotIdentity {
+                snapshot_id: kb_runtime.snapshot.snapshot_id.clone(),
+                snapshot_hash: kb_runtime.snapshot.snapshot_hash.clone(),
+                seed_format: kb_runtime.snapshot.seed_format.clone(),
+                source_name: kb_runtime.snapshot.source_name.clone(),
+                created_at_timestamp: kb_runtime.snapshot.created_at_timestamp,
+                snapshot_path: summary.snapshot_path.clone(),
+            },
+            summary_capabilities: SnapshotBootstrapSummaryCapabilities {
+                has_scene_taxonomy: summary.has_scene_taxonomy,
+                has_failure_patterns: summary.has_failure_patterns,
+                has_repair_template_mapping: summary.has_repair_template_mapping,
+            },
+            knowledge_bundle: SnapshotBootstrapKnowledgeBundleStatus {
+                scene_taxonomy_count,
+                failure_pattern_count,
+                prompt_template_count,
+                scene_taxonomies_ready: summary.has_scene_taxonomy && scene_taxonomy_count > 0,
+                failure_patterns_ready: summary.has_failure_patterns && failure_pattern_count > 0,
+                prompt_templates_ready: summary.has_repair_template_mapping
+                    && prompt_template_count > 0,
+                repair_mappings_ready: summary.has_repair_template_mapping
+                    && failure_pattern_count > 0
+                    && prompt_template_count > 0,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub store: StoreSkeleton,
     pub kb_runtime: KbRuntimeHandle,
     pub kb_knowledge: KbKnowledgeBundle,
     pub desktop_sources: DesktopSourceConfig,
+    pub snapshot_bootstrap_readonly: SnapshotBootstrapReadonlyState,
 }
 
 impl AppState {
@@ -66,11 +142,15 @@ impl AppState {
         kb_knowledge: KbKnowledgeBundle,
         desktop_sources: DesktopSourceConfig,
     ) -> Self {
+        let snapshot_bootstrap_readonly =
+            SnapshotBootstrapReadonlyState::from_verified_sources(&kb_runtime, &kb_knowledge);
+
         Self {
             store,
             kb_runtime,
             kb_knowledge,
             desktop_sources,
+            snapshot_bootstrap_readonly,
         }
     }
 
@@ -114,6 +194,10 @@ impl AppState {
 
     pub fn load_shared_fixture(&self) -> io::Result<Week3SharedFixture> {
         load_shared_fixture_from_path(&self.desktop_sources.shared_fixture_path)
+    }
+
+    pub fn snapshot_bootstrap_readonly_state(&self) -> &SnapshotBootstrapReadonlyState {
+        &self.snapshot_bootstrap_readonly
     }
 }
 
@@ -212,6 +296,36 @@ mod tests {
             state.desktop_sources.shared_fixture_path,
             PathBuf::from(DEFAULT_DESKTOP_SHARED_FIXTURE_PATH)
         );
+        let readonly_state = state.snapshot_bootstrap_readonly_state();
+        assert_eq!(readonly_state.snapshot_identity.snapshot_id, "hope-kb-v0.1");
+        assert_eq!(
+            readonly_state.snapshot_identity.snapshot_hash,
+            "runtime-unverified"
+        );
+        assert_eq!(
+            readonly_state.snapshot_identity.seed_format,
+            "hope-kb-sqlite-snapshot-v0.1"
+        );
+        assert_eq!(readonly_state.snapshot_identity.source_name, "hope-kb");
+        assert!(readonly_state.snapshot_identity.created_at_timestamp >= 0);
+        assert_eq!(
+            readonly_state.snapshot_identity.snapshot_path,
+            snapshot_path.display().to_string()
+        );
+        assert!(readonly_state.summary_capabilities.has_scene_taxonomy);
+        assert!(readonly_state.summary_capabilities.has_failure_patterns);
+        assert!(
+            readonly_state
+                .summary_capabilities
+                .has_repair_template_mapping
+        );
+        assert_eq!(readonly_state.knowledge_bundle.scene_taxonomy_count, 1);
+        assert_eq!(readonly_state.knowledge_bundle.failure_pattern_count, 1);
+        assert_eq!(readonly_state.knowledge_bundle.prompt_template_count, 1);
+        assert!(readonly_state.knowledge_bundle.scene_taxonomies_ready);
+        assert!(readonly_state.knowledge_bundle.failure_patterns_ready);
+        assert!(readonly_state.knowledge_bundle.prompt_templates_ready);
+        assert!(readonly_state.knowledge_bundle.repair_mappings_ready);
 
         fs::remove_dir_all(repo_root).expect("temp repo root should be removable");
     }
