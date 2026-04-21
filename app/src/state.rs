@@ -110,6 +110,42 @@ impl SnapshotBootstrapReadonlyState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationFeedbackReadonlyState {
+    pub source_snapshot_id: String,
+    pub source_snapshot_hash: String,
+    pub source_snapshot_path: String,
+    pub has_failure_patterns: bool,
+    pub has_repair_template_mapping: bool,
+    pub failure_pattern_count: usize,
+    pub prompt_template_count: usize,
+    pub repair_mapping_ready: bool,
+}
+
+impl ValidationFeedbackReadonlyState {
+    pub fn from_verified_sources(
+        kb_runtime: &KbRuntimeHandle,
+        kb_knowledge: &KbKnowledgeBundle,
+    ) -> Self {
+        let failure_pattern_count = kb_knowledge.failure_patterns.len();
+        let prompt_template_count = kb_knowledge.prompt_templates.len();
+        let summary = &kb_runtime.summary;
+
+        Self {
+            source_snapshot_id: kb_runtime.snapshot.snapshot_id.clone(),
+            source_snapshot_hash: kb_runtime.snapshot.snapshot_hash.clone(),
+            source_snapshot_path: summary.snapshot_path.clone(),
+            has_failure_patterns: summary.has_failure_patterns,
+            has_repair_template_mapping: summary.has_repair_template_mapping,
+            failure_pattern_count,
+            prompt_template_count,
+            repair_mapping_ready: summary.has_repair_template_mapping
+                && failure_pattern_count > 0
+                && prompt_template_count > 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub store: StoreSkeleton,
@@ -117,6 +153,7 @@ pub struct AppState {
     pub kb_knowledge: KbKnowledgeBundle,
     pub desktop_sources: DesktopSourceConfig,
     pub snapshot_bootstrap_readonly: SnapshotBootstrapReadonlyState,
+    pub validation_feedback_readonly: ValidationFeedbackReadonlyState,
 }
 
 impl AppState {
@@ -144,6 +181,8 @@ impl AppState {
     ) -> Self {
         let snapshot_bootstrap_readonly =
             SnapshotBootstrapReadonlyState::from_verified_sources(&kb_runtime, &kb_knowledge);
+        let validation_feedback_readonly =
+            ValidationFeedbackReadonlyState::from_verified_sources(&kb_runtime, &kb_knowledge);
 
         Self {
             store,
@@ -151,6 +190,7 @@ impl AppState {
             kb_knowledge,
             desktop_sources,
             snapshot_bootstrap_readonly,
+            validation_feedback_readonly,
         }
     }
 
@@ -198,6 +238,10 @@ impl AppState {
 
     pub fn snapshot_bootstrap_readonly_state(&self) -> &SnapshotBootstrapReadonlyState {
         &self.snapshot_bootstrap_readonly
+    }
+
+    pub fn validation_feedback_readonly_state(&self) -> &ValidationFeedbackReadonlyState {
+        &self.validation_feedback_readonly
     }
 }
 
@@ -326,6 +370,21 @@ mod tests {
         assert!(readonly_state.knowledge_bundle.failure_patterns_ready);
         assert!(readonly_state.knowledge_bundle.prompt_templates_ready);
         assert!(readonly_state.knowledge_bundle.repair_mappings_ready);
+        let validation_feedback = state.validation_feedback_readonly_state();
+        assert_eq!(validation_feedback.source_snapshot_id, "hope-kb-v0.1");
+        assert_eq!(
+            validation_feedback.source_snapshot_hash,
+            "runtime-unverified"
+        );
+        assert_eq!(
+            validation_feedback.source_snapshot_path,
+            snapshot_path.display().to_string()
+        );
+        assert!(validation_feedback.has_failure_patterns);
+        assert!(validation_feedback.has_repair_template_mapping);
+        assert_eq!(validation_feedback.failure_pattern_count, 1);
+        assert_eq!(validation_feedback.prompt_template_count, 1);
+        assert!(validation_feedback.repair_mapping_ready);
 
         fs::remove_dir_all(repo_root).expect("temp repo root should be removable");
     }
