@@ -6,8 +6,13 @@ edition = "2024"
 [dependencies]
 core-domain = { path = "../crates/core-domain" }
 project-store = { path = "../crates/project-store" }
+serde = { version = "1", features = ["derive"] }
 storyboard-pipeline = { path = "../crates/storyboard-pipeline" }
+tauri = { version = "2" }
 validators = { path = "../crates/validators" }
+
+[build-dependencies]
+tauri-build = { version = "2" }
 
 [lib]
 path = "src/lib.rs"

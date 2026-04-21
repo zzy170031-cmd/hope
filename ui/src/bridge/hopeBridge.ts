@@ -57,6 +57,7 @@ export interface HopeBridgeStatus {
 }
 
 const DEFAULT_PROJECT_ID = "project-week3-001";
+const DEFAULT_PROJECT_REQUEST: ProjectCreateOrSwitchRequest = {};
 const PHASE1_REAL_COMMANDS = new Set<HopeCommandName>([
   HOPE_TAURI_COMMANDS.projectCreateOrSwitch,
   HOPE_TAURI_COMMANDS.writerEntrySnapshot,
@@ -484,6 +485,7 @@ export async function invokeHopeCommand<T>(
 export async function loadProjectList() {
   const raw = await invokeHopeCommand<unknown>(
     HOPE_TAURI_COMMANDS.projectCreateOrSwitch,
+    DEFAULT_PROJECT_REQUEST,
   );
   return normalizeProjectList(raw);
 }
@@ -491,6 +493,7 @@ export async function loadProjectList() {
 export async function loadAppShellReadonlyStatus() {
   const raw = await invokeHopeCommand<unknown>(
     HOPE_TAURI_COMMANDS.projectCreateOrSwitch,
+    DEFAULT_PROJECT_REQUEST,
   );
   return normalizeAppShellReadonlyStatus(raw);
 }

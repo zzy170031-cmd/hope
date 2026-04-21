@@ -1,15 +1,17 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ProjectCreateOrSwitchRequest {
     pub project_id: Option<String>,
     pub project_name: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct WriterEntrySnapshotRequest {
     pub project_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct StoryboardRenderSegmentCutPreviewSnapshotRequest {
     pub project_id: String,
     pub episode_id: Option<String>,
@@ -18,12 +20,12 @@ pub struct StoryboardRenderSegmentCutPreviewSnapshotRequest {
     pub scene_type: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ValidationExportPanelSnapshotRequest {
     pub project_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct EmptyResponse;
 
 pub const PROJECT_CREATE_OR_SWITCH_COMMAND: &str = "project_create_or_switch";

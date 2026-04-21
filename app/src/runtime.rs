@@ -8,20 +8,21 @@ use crate::{
     state::{AppState, SnapshotBootstrapReadonlyState, ValidationFeedbackReadonlyState},
 };
 
+use serde::Serialize;
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
 use validators::{
     RepairRecommendation, Week3SharedFixture, generate_week3_repair_recommendations,
     generate_week3_validation_report,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProjectCreateOrSwitchSnapshot {
     pub current_project_id: Option<String>,
     pub projects: Vec<ProjectSummaryItem>,
     pub readonly_status: AppShellReadonlyStatusSnapshot,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProjectSummaryItem {
     pub project_id: String,
     pub name: String,
@@ -30,13 +31,13 @@ pub struct ProjectSummaryItem {
     pub episode_count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AppShellReadonlyStatusSnapshot {
     pub snapshot_bootstrap: SnapshotBootstrapReadonlyState,
     pub validation_feedback: ValidationFeedbackReadonlyState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WriterEntrySnapshot {
     pub project_id: String,
     pub synopsis: String,
@@ -45,7 +46,7 @@ pub struct WriterEntrySnapshot {
     pub storyboard: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StoryboardRenderSegmentCutPreviewSnapshot {
     pub project_id: String,
     pub storyboard: Vec<PreviewItem>,
@@ -53,7 +54,7 @@ pub struct StoryboardRenderSegmentCutPreviewSnapshot {
     pub cuts: Vec<PreviewItem>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PreviewItem {
     pub id: String,
     pub label: String,
@@ -61,7 +62,7 @@ pub struct PreviewItem {
     pub note: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StoryboardPreviewPlanRequest {
     pub render_segment_id: String,
     pub narrative_scene_id: String,
@@ -80,28 +81,28 @@ pub struct StoryboardPreviewPlanRequest {
     pub render_prompt: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ValidationExportPanelSnapshot {
     pub project_id: String,
     pub summary_items: Vec<ValidationExportPanelItem>,
     pub repair_recommendations: Vec<ValidationRepairRecommendationItem>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ValidationExportPanelItem {
     pub label: String,
     pub value: String,
     pub state: ValidationExportPanelState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ValidationExportPanelState {
     Ready,
     Pending,
     Blocked,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ValidationRepairRecommendationItem {
     pub failure_code: String,
     pub failure_name: String,

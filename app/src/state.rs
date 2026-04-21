@@ -4,6 +4,7 @@ use project_store::{
     DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeError, KbRuntimeHandle, StoreSkeleton,
     load_kb_knowledge_bundle, load_kb_runtime,
 };
+use serde::Serialize;
 use validators::{Week3SharedFixture, load_week3_shared_fixture};
 
 pub const DEFAULT_HOPE_KB_SNAPSHOT_PATH: &str = "E:/codex/hope-kb/snapshots/hope-kb-v0.1.sqlite3";
@@ -35,14 +36,14 @@ impl DesktopSourceConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SnapshotBootstrapReadonlyState {
     pub snapshot_identity: SnapshotBootstrapSnapshotIdentity,
     pub summary_capabilities: SnapshotBootstrapSummaryCapabilities,
     pub knowledge_bundle: SnapshotBootstrapKnowledgeBundleStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SnapshotBootstrapSnapshotIdentity {
     pub snapshot_id: String,
     pub snapshot_hash: String,
@@ -52,14 +53,14 @@ pub struct SnapshotBootstrapSnapshotIdentity {
     pub snapshot_path: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SnapshotBootstrapSummaryCapabilities {
     pub has_scene_taxonomy: bool,
     pub has_failure_patterns: bool,
     pub has_repair_template_mapping: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SnapshotBootstrapKnowledgeBundleStatus {
     pub scene_taxonomy_count: usize,
     pub failure_pattern_count: usize,
@@ -110,7 +111,7 @@ impl SnapshotBootstrapReadonlyState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ValidationFeedbackReadonlyState {
     pub source_snapshot_id: String,
     pub source_snapshot_hash: String,

@@ -1,0 +1,32 @@
+{
+  "$schema": "../ui/node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Hope Desktop Shell",
+  "version": "0.1.0",
+  "identifier": "com.hope.desktop.shell",
+  "build": {
+    "beforeDevCommand": "cd ../ui && npm run dev -- --host 127.0.0.1",
+    "beforeBuildCommand": "cd ../ui && npm run build",
+    "devUrl": "http://127.0.0.1:5173",
+    "frontendDist": "../ui/dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Hope Desktop Shell",
+        "label": "main",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 960,
+        "minHeight": 680
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all"
+  }
+}
