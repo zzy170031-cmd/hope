@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { EmptyState } from "./components/EmptyState";
 import { LoadingCard } from "./components/LoadingCard";
 import { Shell } from "./components/Shell";
@@ -18,6 +18,7 @@ import type {
   ExportValidationItem,
   PreviewItem,
   ProjectSummary,
+  QwenRuntimeStatus,
   ValidationExportPanelSnapshot,
   ValidationRepairRecommendation,
   ViewId,
@@ -28,6 +29,8 @@ interface AsyncState<T> {
   data: T | null;
   error: string | null;
 }
+
+const QWEN_MOCK_CHECK_DELAY_MS = 220;
 
 function useHashView() {
   const [activeView, setActiveView] = useState<ViewId>(() => resolveRoute(window.location.hash));
@@ -109,6 +112,7 @@ export function App() {
         <div className="workspace__status">
           <span className="workspace__chip">{bridgeStatus.label}</span>
           <span className="workspace__chip workspace__chip--soft">{bridgeStatus.detail}</span>
+          <QwenRuntimeSecretControl />
         </div>
       </div>
 
@@ -123,6 +127,85 @@ export function App() {
   );
 }
 
+function QwenRuntimeSecretControl() {
+  const [secretInput, setSecretInput] = useState("");
+  const [runtimeStatus, setRuntimeStatus] =
+    useState<QwenRuntimeStatus>("未配置千问 API");
+  const [lastFive, setLastFive] = useState<string | null>(null);
+
+  const isChecking = runtimeStatus === "正在检查连接";
+  const isLinked = runtimeStatus === "已连接";
+  const isError = runtimeStatus === "连接失败";
+  const canSubmit = secretInput.trim().length > 0 && !isChecking;
+  const statusTone =
+    isError
+      ? "error"
+      : isChecking
+        ? "checking"
+        : isLinked
+          ? "connected"
+          : "missing";
+  const statusDetail =
+    isLinked && lastFive
+      ? `已连接 · *****${lastFive}`
+      : isError
+        ? "密钥长度不足或格式不可用"
+        : isChecking
+          ? "正在进行本地连接检查"
+          : "等待输入千问 API Key";
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    const candidate = secretInput.trim();
+    const safeLastFive = candidate.length > 5 ? candidate.slice(-5) : null;
+    setSecretInput("");
+    setLastFive(null);
+
+    if (!candidate) {
+      setRuntimeStatus("未配置千问 API");
+      return;
+    }
+
+    setRuntimeStatus("正在检查连接");
+    window.setTimeout(() => {
+      if (!safeLastFive) {
+        setRuntimeStatus("连接失败");
+        return;
+      }
+
+      setLastFive(safeLastFive);
+      setRuntimeStatus("已连接");
+    }, QWEN_MOCK_CHECK_DELAY_MS);
+  };
+
+  return (
+    <form className="qwen-secret" onSubmit={handleSubmit} aria-label="千问本地连接密钥">
+      <div className="qwen-secret__status" aria-live="polite">
+        <span className={`qwen-secret__dot qwen-secret__dot--${statusTone}`} />
+        <span className="qwen-secret__state">{runtimeStatus}</span>
+        <span className="qwen-secret__detail">{statusDetail}</span>
+      </div>
+      <div className="qwen-secret__controls">
+        <input
+          aria-label="输入千问 API Key"
+          autoComplete="new-password"
+          className="qwen-secret__input"
+          disabled={isChecking}
+          onChange={(event) => setSecretInput(event.target.value)}
+          placeholder="输入千问 API Key"
+          spellCheck={false}
+          type="password"
+          value={secretInput}
+        />
+        <button className="qwen-secret__button" disabled={!canSubmit} type="submit">
+          确认连接
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function AppShellReadonlyLanding({
   status,
 }: {
@@ -130,11 +213,11 @@ function AppShellReadonlyLanding({
 }) {
   if (status.status === "loading") {
     return (
-      <section className="readonly-landing" aria-label="App Shell readonly status">
+      <section className="readonly-landing" aria-label="桌面后台状态">
         <div className="readonly-landing__intro">
-          <p className="workspace__eyebrow">App Shell Landing</p>
-          <h3>Readonly status source</h3>
-          <p>Loading snapshot and validation-feedback source metadata.</p>
+          <p className="workspace__eyebrow">后台约束</p>
+          <h3>产品支撑状态</h3>
+          <p>正在读取后台约束状态，不展示内部知识库摘要。</p>
         </div>
         <LoadingCard lines={3} />
       </section>
@@ -143,71 +226,45 @@ function AppShellReadonlyLanding({
 
   if (status.status === "error" || !status.data) {
     return (
-      <section className="readonly-landing" aria-label="App Shell readonly status">
+      <section className="readonly-landing" aria-label="桌面后台状态">
         <div className="readonly-landing__intro">
-          <p className="workspace__eyebrow">App Shell Landing</p>
-          <h3>Readonly status source</h3>
+          <p className="workspace__eyebrow">后台约束</p>
+          <h3>产品支撑状态</h3>
           <p>
-            Readonly state is not available in this runtime. Browser preview can open the shell
-            without inventing snapshot values.
+            后台状态暂不可用。桌面端不会展示内部路径、hash 或知识库摘要。
           </p>
         </div>
-        <div className="readonly-landing__error">
-          {status.error ?? "Desktop IPC did not return readonly status."}
-        </div>
+        <div className="readonly-landing__error">后台状态暂不可用。</div>
       </section>
     );
   }
 
   const snapshot = status.data.snapshotBootstrap;
   const validationFeedback = status.data.validationFeedback;
+  const knowledgeReady =
+    snapshot.summaryCapabilities.hasSceneTaxonomy &&
+    snapshot.summaryCapabilities.hasFailurePatterns &&
+    snapshot.summaryCapabilities.hasRepairTemplateMapping &&
+    snapshot.knowledgeBundle.sceneTaxonomiesReady &&
+    snapshot.knowledgeBundle.failurePatternsReady &&
+    snapshot.knowledgeBundle.promptTemplatesReady;
+  const validationReady =
+    validationFeedback.hasFailurePatterns && validationFeedback.repairMappingReady;
+  const repairReady =
+    validationFeedback.hasRepairTemplateMapping && validationFeedback.repairMappingReady;
 
   return (
-    <section className="readonly-landing" aria-label="App Shell readonly status">
+    <section className="readonly-landing" aria-label="桌面后台状态">
       <div className="readonly-landing__intro">
-        <p className="workspace__eyebrow">App Shell Landing</p>
-        <h3>Readonly status source</h3>
-        <p>Snapshot bootstrap and validation-feedback metadata from AppState.</p>
+        <p className="workspace__eyebrow">后台约束</p>
+        <h3>产品支撑状态</h3>
+        <p>知识支撑与校验规则仅作为后台防偏移约束，不展示内部摘要、路径、hash 或计数。</p>
       </div>
 
       <div className="readonly-landing__grid">
-        <StatusTile label="snapshot_id" value={snapshot.snapshotIdentity.snapshotId} />
-        <StatusTile label="snapshot_hash" value={snapshot.snapshotIdentity.snapshotHash} />
-        <StatusTile label="source_name" value={snapshot.snapshotIdentity.sourceName} />
-        <StatusTile label="seed_format" value={snapshot.snapshotIdentity.seedFormat} />
-        <StatusTile
-          label="created_at_timestamp"
-          value={String(snapshot.snapshotIdentity.createdAtTimestamp)}
-        />
-        <StatusTile label="snapshot_path" value={snapshot.snapshotIdentity.snapshotPath} wide />
-        <StatusTile
-          label="scene_taxonomy_count"
-          value={String(snapshot.knowledgeBundle.sceneTaxonomyCount)}
-        />
-        <StatusTile
-          label="failure_pattern_count"
-          value={String(validationFeedback.failurePatternCount)}
-        />
-        <StatusTile
-          label="prompt_template_count"
-          value={String(validationFeedback.promptTemplateCount)}
-        />
-        <StatusTile
-          label="has_scene_taxonomy"
-          value={String(snapshot.summaryCapabilities.hasSceneTaxonomy)}
-        />
-        <StatusTile
-          label="has_failure_patterns"
-          value={String(validationFeedback.hasFailurePatterns)}
-        />
-        <StatusTile
-          label="has_repair_template_mapping"
-          value={String(validationFeedback.hasRepairTemplateMapping)}
-        />
-        <StatusTile
-          label="repair_mapping_ready"
-          value={String(validationFeedback.repairMappingReady)}
-        />
+        <StatusTile label="知识支撑" value={knowledgeReady ? "知识支撑已就绪" : "知识支撑待就绪"} />
+        <StatusTile label="校验规则" value={validationReady ? "校验规则已加载" : "校验规则待加载"} />
+        <StatusTile label="修复建议" value={repairReady ? "修复建议可用" : "修复建议待就绪"} />
       </div>
     </section>
   );
@@ -490,7 +547,7 @@ function ExportView({ selectedProjectId }: { selectedProjectId: string | null })
       <div className="panel">
         <div className="panel__header">
           <h3>Repair 建议</h3>
-          <span className="panel__hint">KB-backed recommendation</span>
+          <span className="panel__hint">后台修复建议</span>
         </div>
 
         {!selectedProjectId ? (
@@ -506,7 +563,7 @@ function ExportView({ selectedProjectId }: { selectedProjectId: string | null })
             ))}
           </div>
         ) : (
-          <EmptyState title="暂无修复建议" description="当前项目尚未返回 KB-backed repair 项。" />
+          <EmptyState title="暂无修复建议" description="当前项目尚未返回可展示的修复建议。" />
         )}
       </div>
     </section>

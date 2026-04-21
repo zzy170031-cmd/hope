@@ -4,6 +4,12 @@ export type LoadStatus = "loading" | "ready" | "empty" | "error";
 
 export type BridgeMode = "desktop" | "mock";
 
+export type QwenRuntimeStatus =
+  | "未配置千问 API"
+  | "正在检查连接"
+  | "已连接"
+  | "连接失败";
+
 export type ExportValidationState = "正常" | "待补充" | "阻塞";
 
 export interface ProjectSummary {
