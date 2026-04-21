@@ -7,12 +7,14 @@ import {
   HOPE_TAURI_COMMANDS,
   getHopeBridgeStatus,
   invokeHopeCommand,
+  loadAppShellReadonlyStatus,
   loadExportValidationSnapshot,
   loadPreviewSnapshot,
   loadProjectList,
   loadWriterSnapshot,
 } from "./bridge/hopeBridge";
 import type {
+  AppShellReadonlyStatus,
   ExportValidationItem,
   PreviewItem,
   ProjectSummary,
@@ -95,6 +97,7 @@ export function App() {
   const { activeView, navigate } = useHashView();
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const bridgeStatus = useMemo(() => getHopeBridgeStatus(), []);
+  const readonlyStatus = useAsyncCommand(loadAppShellReadonlyStatus, []);
 
   return (
     <Shell activeView={activeView} onNavigate={navigate}>
@@ -109,12 +112,121 @@ export function App() {
         </div>
       </div>
 
+      <AppShellReadonlyLanding status={readonlyStatus} />
+
       <ViewRouter
         activeView={activeView}
         selectedProjectId={selectedProjectId}
         setSelectedProjectId={setSelectedProjectId}
       />
     </Shell>
+  );
+}
+
+function AppShellReadonlyLanding({
+  status,
+}: {
+  status: AsyncState<AppShellReadonlyStatus>;
+}) {
+  if (status.status === "loading") {
+    return (
+      <section className="readonly-landing" aria-label="App Shell readonly status">
+        <div className="readonly-landing__intro">
+          <p className="workspace__eyebrow">App Shell Landing</p>
+          <h3>Readonly status source</h3>
+          <p>Loading snapshot and validation-feedback source metadata.</p>
+        </div>
+        <LoadingCard lines={3} />
+      </section>
+    );
+  }
+
+  if (status.status === "error" || !status.data) {
+    return (
+      <section className="readonly-landing" aria-label="App Shell readonly status">
+        <div className="readonly-landing__intro">
+          <p className="workspace__eyebrow">App Shell Landing</p>
+          <h3>Readonly status source</h3>
+          <p>
+            Readonly state is not available in this runtime. Browser preview can open the shell
+            without inventing snapshot values.
+          </p>
+        </div>
+        <div className="readonly-landing__error">
+          {status.error ?? "Desktop IPC did not return readonly status."}
+        </div>
+      </section>
+    );
+  }
+
+  const snapshot = status.data.snapshotBootstrap;
+  const validationFeedback = status.data.validationFeedback;
+
+  return (
+    <section className="readonly-landing" aria-label="App Shell readonly status">
+      <div className="readonly-landing__intro">
+        <p className="workspace__eyebrow">App Shell Landing</p>
+        <h3>Readonly status source</h3>
+        <p>Snapshot bootstrap and validation-feedback metadata from AppState.</p>
+      </div>
+
+      <div className="readonly-landing__grid">
+        <StatusTile label="snapshot_id" value={snapshot.snapshotIdentity.snapshotId} />
+        <StatusTile label="snapshot_hash" value={snapshot.snapshotIdentity.snapshotHash} />
+        <StatusTile label="source_name" value={snapshot.snapshotIdentity.sourceName} />
+        <StatusTile label="seed_format" value={snapshot.snapshotIdentity.seedFormat} />
+        <StatusTile
+          label="created_at_timestamp"
+          value={String(snapshot.snapshotIdentity.createdAtTimestamp)}
+        />
+        <StatusTile label="snapshot_path" value={snapshot.snapshotIdentity.snapshotPath} wide />
+        <StatusTile
+          label="scene_taxonomy_count"
+          value={String(snapshot.knowledgeBundle.sceneTaxonomyCount)}
+        />
+        <StatusTile
+          label="failure_pattern_count"
+          value={String(validationFeedback.failurePatternCount)}
+        />
+        <StatusTile
+          label="prompt_template_count"
+          value={String(validationFeedback.promptTemplateCount)}
+        />
+        <StatusTile
+          label="has_scene_taxonomy"
+          value={String(snapshot.summaryCapabilities.hasSceneTaxonomy)}
+        />
+        <StatusTile
+          label="has_failure_patterns"
+          value={String(validationFeedback.hasFailurePatterns)}
+        />
+        <StatusTile
+          label="has_repair_template_mapping"
+          value={String(validationFeedback.hasRepairTemplateMapping)}
+        />
+        <StatusTile
+          label="repair_mapping_ready"
+          value={String(validationFeedback.repairMappingReady)}
+        />
+      </div>
+    </section>
+  );
+}
+
+function StatusTile({
+  label,
+  value,
+  wide = false,
+}: {
+  label: string;
+  value: string;
+  wide?: boolean;
+}) {
+  return (
+    <div className={wide ? "status-tile status-tile--wide" : "status-tile"}>
+      <span>{label}</span>
+      <strong>{value || "unavailable"}</strong>
+    </div>
   );
 }
 

@@ -5,7 +5,7 @@ use crate::{
         ProjectCreateOrSwitchRequest, StoryboardRenderSegmentCutPreviewSnapshotRequest,
         ValidationExportPanelSnapshotRequest, WriterEntrySnapshotRequest,
     },
-    state::AppState,
+    state::{AppState, SnapshotBootstrapReadonlyState, ValidationFeedbackReadonlyState},
 };
 
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
@@ -18,6 +18,7 @@ use validators::{
 pub struct ProjectCreateOrSwitchSnapshot {
     pub current_project_id: Option<String>,
     pub projects: Vec<ProjectSummaryItem>,
+    pub readonly_status: AppShellReadonlyStatusSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +28,12 @@ pub struct ProjectSummaryItem {
     pub status: String,
     pub updated_at: String,
     pub episode_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppShellReadonlyStatusSnapshot {
+    pub snapshot_bootstrap: SnapshotBootstrapReadonlyState,
+    pub validation_feedback: ValidationFeedbackReadonlyState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,7 +118,7 @@ pub fn build_project_create_or_switch_snapshot(
 ) -> io::Result<ProjectCreateOrSwitchSnapshot> {
     let fixture = state.load_shared_fixture()?;
     Ok(build_project_create_or_switch_snapshot_from_fixture(
-        request, &fixture,
+        state, request, &fixture,
     ))
 }
 
@@ -223,6 +230,7 @@ pub fn resolve_scene_taxonomy(
 }
 
 fn build_project_create_or_switch_snapshot_from_fixture(
+    state: &AppState,
     request: ProjectCreateOrSwitchRequest,
     fixture: &Week3SharedFixture,
 ) -> ProjectCreateOrSwitchSnapshot {
@@ -252,6 +260,10 @@ fn build_project_create_or_switch_snapshot_from_fixture(
     ProjectCreateOrSwitchSnapshot {
         current_project_id,
         projects,
+        readonly_status: AppShellReadonlyStatusSnapshot {
+            snapshot_bootstrap: state.snapshot_bootstrap_readonly_state().clone(),
+            validation_feedback: state.validation_feedback_readonly_state().clone(),
+        },
     }
 }
 
@@ -638,7 +650,7 @@ mod tests {
     };
 
     use super::{
-        StoryboardPreviewPlanRequest, ValidationExportPanelState,
+        AppShellReadonlyStatusSnapshot, StoryboardPreviewPlanRequest, ValidationExportPanelState,
         build_project_create_or_switch_snapshot_from_fixture, build_storyboard_preview_plan,
         build_storyboard_rendersegment_cut_preview_snapshot_from_fixture,
         build_validation_export_panel_snapshot_from_fixture,
@@ -878,9 +890,11 @@ mod tests {
 
     #[test]
     fn build_project_create_or_switch_snapshot_tracks_fixture_projects() {
+        let state = test_state();
         let fixture = load_desktop_shared_fixture().expect("shared fixture should load");
 
         let snapshot = build_project_create_or_switch_snapshot_from_fixture(
+            &state,
             ProjectCreateOrSwitchRequest {
                 project_id: None,
                 project_name: None,
@@ -895,6 +909,47 @@ mod tests {
         assert_eq!(snapshot.projects.len(), 1);
         assert!(snapshot.projects[0].episode_count >= 1);
         assert!(snapshot.projects[0].name.contains("Hope"));
+        assert_eq!(
+            snapshot
+                .readonly_status
+                .snapshot_bootstrap
+                .snapshot_identity
+                .snapshot_id,
+            "hope-kb-v0.1"
+        );
+        assert_eq!(
+            snapshot
+                .readonly_status
+                .validation_feedback
+                .source_snapshot_id,
+            "hope-kb-v0.1"
+        );
+        assert!(
+            snapshot
+                .readonly_status
+                .validation_feedback
+                .repair_mapping_ready
+        );
+    }
+
+    #[test]
+    fn app_shell_readonly_status_snapshot_stays_summary_only() {
+        let state = test_state();
+        let status = AppShellReadonlyStatusSnapshot {
+            snapshot_bootstrap: state.snapshot_bootstrap_readonly_state().clone(),
+            validation_feedback: state.validation_feedback_readonly_state().clone(),
+        };
+
+        assert_eq!(
+            status
+                .snapshot_bootstrap
+                .knowledge_bundle
+                .scene_taxonomy_count,
+            1
+        );
+        assert_eq!(status.validation_feedback.failure_pattern_count, 2);
+        assert_eq!(status.validation_feedback.prompt_template_count, 2);
+        assert!(status.validation_feedback.repair_mapping_ready);
     }
 
     #[test]

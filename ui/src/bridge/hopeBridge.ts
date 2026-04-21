@@ -1,4 +1,5 @@
 import type {
+  AppShellReadonlyStatus,
   BridgeMode,
   ExportValidationItem,
   PreviewItem,
@@ -129,6 +130,168 @@ function normalizeProjectList(raw: unknown): ProjectSummary[] {
   }
 
   throw new Error("Unexpected project snapshot shape from desktop bridge.");
+}
+
+function readObject(raw: unknown, label: string): Record<string, unknown> {
+  if (raw && typeof raw === "object") {
+    return raw as Record<string, unknown>;
+  }
+
+  throw new Error(`Unexpected ${label} shape from desktop bridge.`);
+}
+
+function readNestedObject(
+  raw: Record<string, unknown>,
+  camelKey: string,
+  snakeKey: string,
+  label: string,
+): Record<string, unknown> {
+  return readObject(raw[camelKey] ?? raw[snakeKey], label);
+}
+
+function normalizeAppShellReadonlyStatus(raw: unknown): AppShellReadonlyStatus {
+  const snapshot = readObject(raw, "app shell readonly status");
+  const status = readNestedObject(
+    snapshot,
+    "readonlyStatus",
+    "readonly_status",
+    "readonly status",
+  );
+  const snapshotBootstrap = readNestedObject(
+    status,
+    "snapshotBootstrap",
+    "snapshot_bootstrap",
+    "snapshot bootstrap readonly status",
+  );
+  const snapshotIdentity = readNestedObject(
+    snapshotBootstrap,
+    "snapshotIdentity",
+    "snapshot_identity",
+    "snapshot identity",
+  );
+  const summaryCapabilities = readNestedObject(
+    snapshotBootstrap,
+    "summaryCapabilities",
+    "summary_capabilities",
+    "summary capabilities",
+  );
+  const knowledgeBundle = readNestedObject(
+    snapshotBootstrap,
+    "knowledgeBundle",
+    "knowledge_bundle",
+    "knowledge bundle",
+  );
+  const validationFeedback = readNestedObject(
+    status,
+    "validationFeedback",
+    "validation_feedback",
+    "validation feedback readonly status",
+  );
+
+  return {
+    snapshotBootstrap: {
+      snapshotIdentity: {
+        snapshotId: String(snapshotIdentity.snapshotId ?? snapshotIdentity.snapshot_id ?? ""),
+        snapshotHash: String(
+          snapshotIdentity.snapshotHash ?? snapshotIdentity.snapshot_hash ?? "",
+        ),
+        seedFormat: String(snapshotIdentity.seedFormat ?? snapshotIdentity.seed_format ?? ""),
+        sourceName: String(snapshotIdentity.sourceName ?? snapshotIdentity.source_name ?? ""),
+        createdAtTimestamp: Number(
+          snapshotIdentity.createdAtTimestamp ??
+            snapshotIdentity.created_at_timestamp ??
+            0,
+        ),
+        snapshotPath: String(snapshotIdentity.snapshotPath ?? snapshotIdentity.snapshot_path ?? ""),
+      },
+      summaryCapabilities: {
+        hasSceneTaxonomy: Boolean(
+          summaryCapabilities.hasSceneTaxonomy ??
+            summaryCapabilities.has_scene_taxonomy,
+        ),
+        hasFailurePatterns: Boolean(
+          summaryCapabilities.hasFailurePatterns ??
+            summaryCapabilities.has_failure_patterns,
+        ),
+        hasRepairTemplateMapping: Boolean(
+          summaryCapabilities.hasRepairTemplateMapping ??
+            summaryCapabilities.has_repair_template_mapping,
+        ),
+      },
+      knowledgeBundle: {
+        sceneTaxonomyCount: Number(
+          knowledgeBundle.sceneTaxonomyCount ??
+            knowledgeBundle.scene_taxonomy_count ??
+            0,
+        ),
+        failurePatternCount: Number(
+          knowledgeBundle.failurePatternCount ??
+            knowledgeBundle.failure_pattern_count ??
+            0,
+        ),
+        promptTemplateCount: Number(
+          knowledgeBundle.promptTemplateCount ??
+            knowledgeBundle.prompt_template_count ??
+            0,
+        ),
+        sceneTaxonomiesReady: Boolean(
+          knowledgeBundle.sceneTaxonomiesReady ??
+            knowledgeBundle.scene_taxonomies_ready,
+        ),
+        failurePatternsReady: Boolean(
+          knowledgeBundle.failurePatternsReady ??
+            knowledgeBundle.failure_patterns_ready,
+        ),
+        promptTemplatesReady: Boolean(
+          knowledgeBundle.promptTemplatesReady ??
+            knowledgeBundle.prompt_templates_ready,
+        ),
+        repairMappingsReady: Boolean(
+          knowledgeBundle.repairMappingsReady ??
+            knowledgeBundle.repair_mappings_ready,
+        ),
+      },
+    },
+    validationFeedback: {
+      sourceSnapshotId: String(
+        validationFeedback.sourceSnapshotId ??
+          validationFeedback.source_snapshot_id ??
+          "",
+      ),
+      sourceSnapshotHash: String(
+        validationFeedback.sourceSnapshotHash ??
+          validationFeedback.source_snapshot_hash ??
+          "",
+      ),
+      sourceSnapshotPath: String(
+        validationFeedback.sourceSnapshotPath ??
+          validationFeedback.source_snapshot_path ??
+          "",
+      ),
+      hasFailurePatterns: Boolean(
+        validationFeedback.hasFailurePatterns ??
+          validationFeedback.has_failure_patterns,
+      ),
+      hasRepairTemplateMapping: Boolean(
+        validationFeedback.hasRepairTemplateMapping ??
+          validationFeedback.has_repair_template_mapping,
+      ),
+      failurePatternCount: Number(
+        validationFeedback.failurePatternCount ??
+          validationFeedback.failure_pattern_count ??
+          0,
+      ),
+      promptTemplateCount: Number(
+        validationFeedback.promptTemplateCount ??
+          validationFeedback.prompt_template_count ??
+          0,
+      ),
+      repairMappingReady: Boolean(
+        validationFeedback.repairMappingReady ??
+          validationFeedback.repair_mapping_ready,
+      ),
+    },
+  };
 }
 
 function normalizeWriterSnapshot(raw: unknown): WriterLayerSnapshot {
@@ -323,6 +486,13 @@ export async function loadProjectList() {
     HOPE_TAURI_COMMANDS.projectCreateOrSwitch,
   );
   return normalizeProjectList(raw);
+}
+
+export async function loadAppShellReadonlyStatus() {
+  const raw = await invokeHopeCommand<unknown>(
+    HOPE_TAURI_COMMANDS.projectCreateOrSwitch,
+  );
+  return normalizeAppShellReadonlyStatus(raw);
 }
 
 export async function loadWriterSnapshot(project_id = DEFAULT_PROJECT_ID) {

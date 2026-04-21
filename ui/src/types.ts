@@ -14,6 +14,47 @@ export interface ProjectSummary {
   episodeCount: number;
 }
 
+export interface SnapshotBootstrapReadonlyStatus {
+  snapshotIdentity: {
+    snapshotId: string;
+    snapshotHash: string;
+    seedFormat: string;
+    sourceName: string;
+    createdAtTimestamp: number;
+    snapshotPath: string;
+  };
+  summaryCapabilities: {
+    hasSceneTaxonomy: boolean;
+    hasFailurePatterns: boolean;
+    hasRepairTemplateMapping: boolean;
+  };
+  knowledgeBundle: {
+    sceneTaxonomyCount: number;
+    failurePatternCount: number;
+    promptTemplateCount: number;
+    sceneTaxonomiesReady: boolean;
+    failurePatternsReady: boolean;
+    promptTemplatesReady: boolean;
+    repairMappingsReady: boolean;
+  };
+}
+
+export interface ValidationFeedbackReadonlyStatus {
+  sourceSnapshotId: string;
+  sourceSnapshotHash: string;
+  sourceSnapshotPath: string;
+  hasFailurePatterns: boolean;
+  hasRepairTemplateMapping: boolean;
+  failurePatternCount: number;
+  promptTemplateCount: number;
+  repairMappingReady: boolean;
+}
+
+export interface AppShellReadonlyStatus {
+  snapshotBootstrap: SnapshotBootstrapReadonlyStatus;
+  validationFeedback: ValidationFeedbackReadonlyStatus;
+}
+
 export interface WriterLayerSnapshot {
   synopsis: string;
   story: string;
