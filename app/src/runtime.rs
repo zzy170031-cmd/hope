@@ -2,16 +2,17 @@ use std::io;
 
 use crate::state::AppState;
 use project_store::{
-    KbRuntimeError, SnapshotBootstrapCheckpointArtifacts, StoreSkeleton,
-    bootstrap_verified_kb_context_from_checkpoint,
+    bootstrap_verified_kb_context_from_checkpoint, KbRuntimeError,
+    SnapshotBootstrapCheckpointArtifacts, StoreSkeleton,
 };
 
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
 use validators::{
-    RepairRecommendation, WEEK3_SHARED_FIXTURE_PATH, Week3SharedFixture,
     generate_week3_repair_recommendations, generate_week3_validation_report,
-    load_week3_shared_fixture,
+    load_week3_shared_fixture, RepairRecommendation, Week3SharedFixture, WEEK3_SHARED_FIXTURE_PATH,
 };
+
+pub const QWEN_COMPATIBLE_MODEL_FAMILY: &str = "qwen-compatible";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoryboardPreviewPlanRequest {
@@ -117,6 +118,137 @@ pub struct ValidationFeedbackReadonlyState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelStoryboardDraftRequest {
+    pub user_requirement: String,
+    pub kb_context: ModelKbContextBoundary,
+    pub target_model_family: String,
+    pub storyboard_output_intent: StoryboardOutputIntent,
+    pub validation_expectations: Vec<ModelValidationExpectation>,
+    pub secret_source: ModelSecretSource,
+    pub runtime_secret_present: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelKbContextBoundary {
+    pub snapshot_id: String,
+    pub snapshot_hash: String,
+    pub context_reference: String,
+    pub context_summary: String,
+    pub scene_taxonomy_ids: Vec<String>,
+    pub failure_pattern_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoryboardOutputIntent {
+    pub intent_name: String,
+    pub draft_scope: String,
+    pub expected_sections: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelValidationExpectation {
+    pub validator_name: String,
+    pub expectation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelStoryboardDraftResponse {
+    pub model_output_draft: ModelOutputDraft,
+    pub structured_storyboard_draft_boundary: StructuredStoryboardDraftBoundary,
+    pub model_metadata: ModelInvocationMetadata,
+    pub terminal_state: ModelInvocationTerminalState,
+    pub connection_state: ModelConnectionState,
+    pub secret_display_hint: ModelSecretDisplayHint,
+    pub no_hardcoded_content: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelOutputDraft {
+    pub draft_text: Option<String>,
+    pub draft_generated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructuredStoryboardDraftBoundary {
+    pub output_intent_name: String,
+    pub draft_scope: String,
+    pub expected_sections: Vec<String>,
+    pub draft_payload_present: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelInvocationMetadata {
+    pub request_model_family: String,
+    pub boundary_model_family: String,
+    pub invocation_mode: ModelInvocationMode,
+    pub secret_source: ModelSecretSource,
+    pub attempted_live_call: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelInvocationBoundary {
+    pub mode: ModelInvocationMode,
+    pub target_model_family: String,
+    pub configuration_present: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelSecretSource {
+    DesktopRuntimeInput,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelInvocationMode {
+    Mock,
+    Env,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelInvocationTerminalState {
+    Completed,
+    Mocked,
+    MissingRuntimeSecret,
+    Connecting,
+    Connected,
+    Failed { message: String },
+    Refused { reason: String },
+    TimedOut { timeout_ms: u64 },
+    Misconfigured { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelConnectionState {
+    Completed,
+    Mocked,
+    MissingRuntimeSecret,
+    Connecting,
+    Connected,
+    Failed { message: String },
+    Refused { reason: String },
+    TimedOut { timeout_ms: u64 },
+    Misconfigured { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelSecretDisplayHint {
+    LastFive { value: String },
+    Redacted { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelStoryboardDraftRequestError {
+    MissingUserRequirement,
+    MissingKbContextReference,
+    MissingKbContextSummary,
+    MissingTargetModelFamily,
+    UnsupportedTargetModelFamily { target_model_family: String },
+    MissingStoryboardOutputIntent,
+    MissingValidationExpectations,
+    MissingValidationExpectationDetail,
+    MissingRuntimeSecret,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoryboardPreviewPlanFromCheckpointError {
     Bootstrap(KbRuntimeError),
     Planning(StoryboardPlanningError),
@@ -209,6 +341,213 @@ pub fn validation_feedback_readonly_state_from_verified_app_state(
             && failure_pattern_count > 0
             && prompt_template_count > 0,
     }
+}
+
+pub fn validate_model_storyboard_draft_request(
+    request: &ModelStoryboardDraftRequest,
+) -> Result<(), ModelStoryboardDraftRequestError> {
+    if request.user_requirement.trim().is_empty() {
+        return Err(ModelStoryboardDraftRequestError::MissingUserRequirement);
+    }
+    if request.kb_context.context_reference.trim().is_empty() {
+        return Err(ModelStoryboardDraftRequestError::MissingKbContextReference);
+    }
+    if request.kb_context.context_summary.trim().is_empty() {
+        return Err(ModelStoryboardDraftRequestError::MissingKbContextSummary);
+    }
+    if request.target_model_family.trim().is_empty() {
+        return Err(ModelStoryboardDraftRequestError::MissingTargetModelFamily);
+    }
+    if request.target_model_family != QWEN_COMPATIBLE_MODEL_FAMILY {
+        return Err(
+            ModelStoryboardDraftRequestError::UnsupportedTargetModelFamily {
+                target_model_family: request.target_model_family.clone(),
+            },
+        );
+    }
+    if request
+        .storyboard_output_intent
+        .intent_name
+        .trim()
+        .is_empty()
+        || request
+            .storyboard_output_intent
+            .draft_scope
+            .trim()
+            .is_empty()
+        || request
+            .storyboard_output_intent
+            .expected_sections
+            .is_empty()
+    {
+        return Err(ModelStoryboardDraftRequestError::MissingStoryboardOutputIntent);
+    }
+    if request.validation_expectations.is_empty() {
+        return Err(ModelStoryboardDraftRequestError::MissingValidationExpectations);
+    }
+    if request.validation_expectations.iter().any(|expectation| {
+        expectation.validator_name.trim().is_empty() || expectation.expectation.trim().is_empty()
+    }) {
+        return Err(ModelStoryboardDraftRequestError::MissingValidationExpectationDetail);
+    }
+    if !request.runtime_secret_present {
+        return Err(ModelStoryboardDraftRequestError::MissingRuntimeSecret);
+    }
+
+    Ok(())
+}
+
+pub fn invoke_model_storyboard_draft(
+    request: ModelStoryboardDraftRequest,
+    boundary: ModelInvocationBoundary,
+    runtime_secret: Option<&str>,
+) -> ModelStoryboardDraftResponse {
+    if let Err(error) = validate_model_storyboard_draft_request(&request) {
+        return empty_model_storyboard_draft_response(
+            &request,
+            &boundary,
+            runtime_secret,
+            terminal_and_connection_state_for_request_error(error),
+        );
+    }
+    if runtime_secret.is_none() {
+        return empty_model_storyboard_draft_response(
+            &request,
+            &boundary,
+            runtime_secret,
+            ModelResponseState {
+                terminal_state: ModelInvocationTerminalState::MissingRuntimeSecret,
+                connection_state: ModelConnectionState::MissingRuntimeSecret,
+            },
+        );
+    }
+    if boundary.target_model_family != request.target_model_family {
+        return empty_model_storyboard_draft_response(
+            &request,
+            &boundary,
+            runtime_secret,
+            ModelResponseState {
+                terminal_state: ModelInvocationTerminalState::Misconfigured {
+                    message: "model boundary family does not match request family".to_string(),
+                },
+                connection_state: ModelConnectionState::Misconfigured {
+                    message: "model boundary family does not match request family".to_string(),
+                },
+            },
+        );
+    }
+
+    match boundary.mode {
+        ModelInvocationMode::Mock => empty_model_storyboard_draft_response(
+            &request,
+            &boundary,
+            runtime_secret,
+            ModelResponseState {
+                terminal_state: ModelInvocationTerminalState::Mocked,
+                connection_state: ModelConnectionState::Mocked,
+            },
+        ),
+        ModelInvocationMode::Env if !boundary.configuration_present => {
+            empty_model_storyboard_draft_response(
+                &request,
+                &boundary,
+                runtime_secret,
+                ModelResponseState {
+                    terminal_state: ModelInvocationTerminalState::Misconfigured {
+                        message: "model environment is not configured".to_string(),
+                    },
+                    connection_state: ModelConnectionState::Misconfigured {
+                        message: "model environment is not configured".to_string(),
+                    },
+                },
+            )
+        }
+        ModelInvocationMode::Env => empty_model_storyboard_draft_response(
+            &request,
+            &boundary,
+            runtime_secret,
+            ModelResponseState {
+                terminal_state: ModelInvocationTerminalState::Refused {
+                    reason: "live model invocation is disabled in this package".to_string(),
+                },
+                connection_state: ModelConnectionState::Refused {
+                    reason: "live model invocation is disabled in this package".to_string(),
+                },
+            },
+        ),
+    }
+}
+
+fn terminal_and_connection_state_for_request_error(
+    error: ModelStoryboardDraftRequestError,
+) -> ModelResponseState {
+    match error {
+        ModelStoryboardDraftRequestError::MissingRuntimeSecret => ModelResponseState {
+            terminal_state: ModelInvocationTerminalState::MissingRuntimeSecret,
+            connection_state: ModelConnectionState::MissingRuntimeSecret,
+        },
+        other_error => ModelResponseState {
+            terminal_state: ModelInvocationTerminalState::Misconfigured {
+                message: format!("invalid model request boundary: {:?}", other_error),
+            },
+            connection_state: ModelConnectionState::Misconfigured {
+                message: format!("invalid model request boundary: {:?}", other_error),
+            },
+        },
+    }
+}
+
+fn empty_model_storyboard_draft_response(
+    request: &ModelStoryboardDraftRequest,
+    boundary: &ModelInvocationBoundary,
+    runtime_secret: Option<&str>,
+    response_state: ModelResponseState,
+) -> ModelStoryboardDraftResponse {
+    ModelStoryboardDraftResponse {
+        model_output_draft: ModelOutputDraft {
+            draft_text: None,
+            draft_generated: false,
+        },
+        structured_storyboard_draft_boundary: StructuredStoryboardDraftBoundary {
+            output_intent_name: request.storyboard_output_intent.intent_name.clone(),
+            draft_scope: request.storyboard_output_intent.draft_scope.clone(),
+            expected_sections: request.storyboard_output_intent.expected_sections.clone(),
+            draft_payload_present: false,
+        },
+        model_metadata: ModelInvocationMetadata {
+            request_model_family: request.target_model_family.clone(),
+            boundary_model_family: boundary.target_model_family.clone(),
+            invocation_mode: boundary.mode,
+            secret_source: request.secret_source,
+            attempted_live_call: false,
+        },
+        terminal_state: response_state.terminal_state,
+        connection_state: response_state.connection_state,
+        secret_display_hint: runtime_secret
+            .map(secret_display_hint_from_runtime_input)
+            .unwrap_or_else(|| ModelSecretDisplayHint::Redacted {
+                reason: "runtime secret is not available".to_string(),
+            }),
+        no_hardcoded_content: true,
+    }
+}
+
+fn secret_display_hint_from_runtime_input(runtime_secret: &str) -> ModelSecretDisplayHint {
+    let secret_chars = runtime_secret.chars().collect::<Vec<_>>();
+    if secret_chars.len() <= 5 {
+        return ModelSecretDisplayHint::Redacted {
+            reason: "runtime secret is too short for a safe display hint".to_string(),
+        };
+    }
+
+    ModelSecretDisplayHint::LastFive {
+        value: secret_chars[secret_chars.len() - 5..].iter().collect(),
+    }
+}
+
+struct ModelResponseState {
+    terminal_state: ModelInvocationTerminalState,
+    connection_state: ModelConnectionState,
 }
 
 pub fn build_storyboard_preview_plan_from_checkpoint(
@@ -407,23 +746,28 @@ mod tests {
     };
     use project_store::{
         DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeError, KbRuntimeHandle,
-        SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH, SnapshotBootstrapCheckpointArtifacts,
-        StoreSkeleton,
+        SnapshotBootstrapCheckpointArtifacts, StoreSkeleton,
+        SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH,
     };
 
     use super::{
-        StoryboardPreviewPlanFromCheckpointError, StoryboardPreviewPlanRequest,
-        ValidationExportPanelSnapshotRequest, ValidationExportPanelState,
         bootstrap_app_state_from_checkpoint,
         bootstrap_snapshot_bootstrap_readonly_state_from_checkpoint,
         bootstrap_validation_feedback_readonly_state_from_checkpoint,
         build_storyboard_preview_plan, build_storyboard_preview_plan_from_checkpoint,
-        build_validation_export_panel_snapshot_from_fixture, resolve_scene_taxonomy,
-        snapshot_bootstrap_readonly_state_from_verified_app_state,
-        validation_feedback_readonly_state_from_verified_app_state,
+        build_validation_export_panel_snapshot_from_fixture, invoke_model_storyboard_draft,
+        resolve_scene_taxonomy, snapshot_bootstrap_readonly_state_from_verified_app_state,
+        validate_model_storyboard_draft_request,
+        validation_feedback_readonly_state_from_verified_app_state, ModelConnectionState,
+        ModelInvocationBoundary, ModelInvocationMode, ModelInvocationTerminalState,
+        ModelKbContextBoundary, ModelSecretDisplayHint, ModelSecretSource,
+        ModelStoryboardDraftRequest, ModelStoryboardDraftRequestError, ModelValidationExpectation,
+        StoryboardOutputIntent, StoryboardPreviewPlanFromCheckpointError,
+        StoryboardPreviewPlanRequest, ValidationExportPanelSnapshotRequest,
+        ValidationExportPanelState, QWEN_COMPATIBLE_MODEL_FAMILY,
     };
     use crate::state::AppState;
-    use validators::{WEEK3_SHARED_FIXTURE_PATH, load_week3_shared_fixture};
+    use validators::{load_week3_shared_fixture, WEEK3_SHARED_FIXTURE_PATH};
 
     fn test_state() -> AppState {
         let store = StoreSkeleton::new(DualSqliteConnectionPolicy::new(
@@ -539,6 +883,245 @@ mod tests {
         state.kb_knowledge.failure_patterns.clear();
         state.kb_knowledge.prompt_templates.clear();
         state
+    }
+
+    fn valid_model_storyboard_draft_request() -> ModelStoryboardDraftRequest {
+        ModelStoryboardDraftRequest {
+            user_requirement: "Need a bounded storyboard draft from user requirements.".to_string(),
+            kb_context: ModelKbContextBoundary {
+                snapshot_id: "hope-kb-v0.1".to_string(),
+                snapshot_hash: SNAPSHOT_BOOTSTRAP_REVIEWED_BUNDLE_HASH.to_string(),
+                context_reference: "snapshot_bootstrap:hope-kb-v0.1".to_string(),
+                context_summary: "Verified KB context is available for model planning.".to_string(),
+                scene_taxonomy_ids: vec!["scene_tax_01".to_string()],
+                failure_pattern_codes: vec!["style_drift".to_string()],
+            },
+            target_model_family: QWEN_COMPATIBLE_MODEL_FAMILY.to_string(),
+            storyboard_output_intent: StoryboardOutputIntent {
+                intent_name: "storyboard_draft".to_string(),
+                draft_scope: "bounded_model_contract".to_string(),
+                expected_sections: vec![
+                    "requirement_summary".to_string(),
+                    "storyboard_outline_boundary".to_string(),
+                ],
+            },
+            validation_expectations: vec![ModelValidationExpectation {
+                validator_name: "readonly_contract_check".to_string(),
+                expectation: "Response must stay bounded and avoid final script content."
+                    .to_string(),
+            }],
+            secret_source: ModelSecretSource::DesktopRuntimeInput,
+            runtime_secret_present: true,
+        }
+    }
+
+    fn mock_model_boundary() -> ModelInvocationBoundary {
+        ModelInvocationBoundary {
+            mode: ModelInvocationMode::Mock,
+            target_model_family: QWEN_COMPATIBLE_MODEL_FAMILY.to_string(),
+            configuration_present: false,
+        }
+    }
+
+    fn desktop_runtime_secret_for_test() -> String {
+        ["desktop", "runtime", "value", "12345"].join("_")
+    }
+
+    #[test]
+    fn model_storyboard_draft_request_requires_bounded_fields() {
+        let request = valid_model_storyboard_draft_request();
+        assert_eq!(validate_model_storyboard_draft_request(&request), Ok(()));
+        assert_eq!(
+            request.secret_source,
+            ModelSecretSource::DesktopRuntimeInput
+        );
+        assert!(request.runtime_secret_present);
+
+        let mut missing_user_requirement = request.clone();
+        missing_user_requirement.user_requirement = " ".to_string();
+        assert_eq!(
+            validate_model_storyboard_draft_request(&missing_user_requirement),
+            Err(ModelStoryboardDraftRequestError::MissingUserRequirement)
+        );
+
+        let mut missing_context_reference = request.clone();
+        missing_context_reference
+            .kb_context
+            .context_reference
+            .clear();
+        assert_eq!(
+            validate_model_storyboard_draft_request(&missing_context_reference),
+            Err(ModelStoryboardDraftRequestError::MissingKbContextReference)
+        );
+
+        let mut unsupported_family = request.clone();
+        unsupported_family.target_model_family = "other-model-family".to_string();
+        assert_eq!(
+            validate_model_storyboard_draft_request(&unsupported_family),
+            Err(
+                ModelStoryboardDraftRequestError::UnsupportedTargetModelFamily {
+                    target_model_family: "other-model-family".to_string(),
+                }
+            )
+        );
+
+        let mut missing_output_intent = request.clone();
+        missing_output_intent
+            .storyboard_output_intent
+            .expected_sections
+            .clear();
+        assert_eq!(
+            validate_model_storyboard_draft_request(&missing_output_intent),
+            Err(ModelStoryboardDraftRequestError::MissingStoryboardOutputIntent)
+        );
+
+        let mut missing_validation = request;
+        missing_validation.validation_expectations.clear();
+        assert_eq!(
+            validate_model_storyboard_draft_request(&missing_validation),
+            Err(ModelStoryboardDraftRequestError::MissingValidationExpectations)
+        );
+
+        let mut missing_runtime_secret = valid_model_storyboard_draft_request();
+        missing_runtime_secret.runtime_secret_present = false;
+        assert_eq!(
+            validate_model_storyboard_draft_request(&missing_runtime_secret),
+            Err(ModelStoryboardDraftRequestError::MissingRuntimeSecret)
+        );
+    }
+
+    #[test]
+    fn mock_model_storyboard_draft_response_contains_no_hardcoded_content() {
+        let request = valid_model_storyboard_draft_request();
+        let runtime_secret = desktop_runtime_secret_for_test();
+
+        let response =
+            invoke_model_storyboard_draft(request, mock_model_boundary(), Some(&runtime_secret));
+
+        assert_eq!(
+            response.terminal_state,
+            ModelInvocationTerminalState::Mocked
+        );
+        assert_eq!(response.connection_state, ModelConnectionState::Mocked);
+        assert!(response.no_hardcoded_content);
+        assert_eq!(response.model_output_draft.draft_text, None);
+        assert!(!response.model_output_draft.draft_generated);
+        assert!(
+            !response
+                .structured_storyboard_draft_boundary
+                .draft_payload_present
+        );
+        assert!(!response.model_metadata.attempted_live_call);
+        assert_eq!(
+            response.model_metadata.request_model_family,
+            QWEN_COMPATIBLE_MODEL_FAMILY
+        );
+        assert_eq!(
+            response.model_metadata.secret_source,
+            ModelSecretSource::DesktopRuntimeInput
+        );
+        assert_eq!(
+            response.secret_display_hint,
+            ModelSecretDisplayHint::LastFive {
+                value: "12345".to_string(),
+            }
+        );
+        assert_ne!(
+            response.secret_display_hint,
+            ModelSecretDisplayHint::LastFive {
+                value: runtime_secret,
+            }
+        );
+    }
+
+    #[test]
+    fn model_storyboard_draft_boundary_requires_desktop_runtime_secret() {
+        let request = valid_model_storyboard_draft_request();
+        let boundary = ModelInvocationBoundary {
+            mode: ModelInvocationMode::Env,
+            target_model_family: QWEN_COMPATIBLE_MODEL_FAMILY.to_string(),
+            configuration_present: false,
+        };
+
+        let response = invoke_model_storyboard_draft(request, boundary, None);
+
+        assert_eq!(
+            response.terminal_state,
+            ModelInvocationTerminalState::MissingRuntimeSecret
+        );
+        assert_eq!(
+            response.connection_state,
+            ModelConnectionState::MissingRuntimeSecret
+        );
+        assert!(response.no_hardcoded_content);
+        assert_eq!(response.model_output_draft.draft_text, None);
+        assert!(!response.model_output_draft.draft_generated);
+        assert!(!response.model_metadata.attempted_live_call);
+        assert!(matches!(
+            response.secret_display_hint,
+            ModelSecretDisplayHint::Redacted { .. }
+        ));
+    }
+
+    #[test]
+    fn env_model_storyboard_draft_boundary_returns_misconfigured_when_not_configured() {
+        let request = valid_model_storyboard_draft_request();
+        let runtime_secret = desktop_runtime_secret_for_test();
+        let boundary = ModelInvocationBoundary {
+            mode: ModelInvocationMode::Env,
+            target_model_family: QWEN_COMPATIBLE_MODEL_FAMILY.to_string(),
+            configuration_present: false,
+        };
+
+        let response = invoke_model_storyboard_draft(request, boundary, Some(&runtime_secret));
+
+        assert_eq!(
+            response.terminal_state,
+            ModelInvocationTerminalState::Misconfigured {
+                message: "model environment is not configured".to_string(),
+            }
+        );
+        assert_eq!(
+            response.connection_state,
+            ModelConnectionState::Misconfigured {
+                message: "model environment is not configured".to_string(),
+            }
+        );
+        assert!(response.no_hardcoded_content);
+        assert_eq!(response.model_output_draft.draft_text, None);
+        assert!(!response.model_output_draft.draft_generated);
+        assert!(!response.model_metadata.attempted_live_call);
+        assert_eq!(
+            response.secret_display_hint,
+            ModelSecretDisplayHint::LastFive {
+                value: "12345".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn short_desktop_runtime_secret_never_exposes_full_value() {
+        let request = valid_model_storyboard_draft_request();
+        let short_runtime_secret = "tiny";
+
+        let response = invoke_model_storyboard_draft(
+            request,
+            mock_model_boundary(),
+            Some(short_runtime_secret),
+        );
+
+        assert_eq!(
+            response.secret_display_hint,
+            ModelSecretDisplayHint::Redacted {
+                reason: "runtime secret is too short for a safe display hint".to_string(),
+            }
+        );
+        assert_ne!(
+            response.secret_display_hint,
+            ModelSecretDisplayHint::LastFive {
+                value: short_runtime_secret.to_string(),
+            }
+        );
     }
 
     #[test]
@@ -843,18 +1426,16 @@ mod tests {
                 .primary_action_director_id,
             "taxonomy:scene_tax_01:action"
         );
-        assert!(
-            plan.committee_runtime
-                .prompt_layers
-                .layout_prompt
-                .contains("场景分类：daily_dialogue")
-        );
-        assert!(
-            plan.committee_runtime
-                .prompt_layers
-                .render_prompt
-                .contains("连续性优先级：high")
-        );
+        assert!(plan
+            .committee_runtime
+            .prompt_layers
+            .layout_prompt
+            .contains("场景分类：daily_dialogue"));
+        assert!(plan
+            .committee_runtime
+            .prompt_layers
+            .render_prompt
+            .contains("连续性优先级：high"));
 
         fs::remove_dir_all(fixture.root).expect("fixture root should be removable");
     }
@@ -965,12 +1546,11 @@ mod tests {
                 .primary_scene_director_id,
             "taxonomy:scene-taxonomy-daily-dialogue:scene"
         );
-        assert!(
-            plan.committee_runtime
-                .prompt_layers
-                .layout_prompt
-                .contains("场景分类：daily_dialogue")
-        );
+        assert!(plan
+            .committee_runtime
+            .prompt_layers
+            .layout_prompt
+            .contains("场景分类：daily_dialogue"));
     }
 
     #[test]
@@ -1034,19 +1614,15 @@ mod tests {
             snapshot.summary_items[2].state,
             ValidationExportPanelState::Ready
         );
-        assert!(
-            snapshot
-                .repair_recommendations
-                .iter()
-                .any(|item| item.failure_code == "chinese_prompt_noise")
-        );
-        assert!(
-            snapshot
-                .repair_recommendations
-                .iter()
-                .flat_map(|item| item.prompt_template_names.iter())
-                .any(|name| name == "Repair Prompt Language")
-        );
+        assert!(snapshot
+            .repair_recommendations
+            .iter()
+            .any(|item| item.failure_code == "chinese_prompt_noise"));
+        assert!(snapshot
+            .repair_recommendations
+            .iter()
+            .flat_map(|item| item.prompt_template_names.iter())
+            .any(|name| name == "Repair Prompt Language"));
     }
 
     #[test]
