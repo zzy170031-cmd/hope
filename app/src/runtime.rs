@@ -353,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn build_storyboard_preview_plan_consumes_runtime_scene_taxonomy() {
+    fn build_storyboard_preview_plan_keeps_runtime_directors_with_scene_taxonomy_metadata() {
         let state = test_state();
         let plan = build_storyboard_preview_plan(
             &state,
@@ -368,14 +368,14 @@ mod tests {
                 cut_sequence_no: 1,
                 shot_description: "medium shot dialogue".to_string(),
                 dialogue: "Let's close this scene before dawn.".to_string(),
-                scene_director_id: None,
-                action_director_id: None,
+                scene_director_id: Some("scene-director-preview".to_string()),
+                action_director_id: Some("action-director-preview".to_string()),
                 scene_type: Some("daily_dialogue".to_string()),
                 layout_prompt: "cool palette, medium shot".to_string(),
                 render_prompt: "restrained realism".to_string(),
             },
         )
-        .expect("runtime taxonomy should build preview plan");
+        .expect("runtime directors with taxonomy metadata should build preview plan");
 
         assert_eq!(
             plan.render_segment.scene_taxonomy_id.as_deref(),
@@ -389,13 +389,21 @@ mod tests {
             plan.committee_runtime
                 .director_assignment
                 .primary_scene_director_id,
-            "taxonomy:scene-taxonomy-daily-dialogue:scene"
+            "scene-director-preview"
         );
-        assert!(
+        assert_eq!(
             plan.committee_runtime
-                .prompt_layers
-                .layout_prompt
-                .contains("场景分类：daily_dialogue")
+                .director_assignment
+                .primary_action_director_id,
+            "action-director-preview"
+        );
+        assert_eq!(
+            plan.committee_runtime.prompt_layers.layout_prompt,
+            "cool palette, medium shot"
+        );
+        assert_eq!(
+            plan.committee_runtime.prompt_layers.render_prompt,
+            "restrained realism"
         );
     }
 

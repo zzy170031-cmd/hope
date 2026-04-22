@@ -209,7 +209,9 @@ fn extract_row(
     columns
         .iter()
         .map(|column| {
-            if sheet_machine_name == "prompt_package" && *column == "正文" {
+            if sheet_machine_name == "prompt_package"
+                && *column == canonical_column("prompt_package", 2)
+            {
                 return build_external_prompt_body(source, object);
             }
 
@@ -245,10 +247,11 @@ fn build_external_prompt_body(
     source: &Value,
     prompt_row: &Map<String, Value>,
 ) -> Result<String, ExportError> {
+    let prompt_package_columns = canonical_columns("prompt_package");
     let prompt_package_id =
-        required_string(prompt_row, "PromptPackage标识", "prompt_package")?;
-    let source_level = required_string(prompt_row, "来源层级", "prompt_package")?;
-    let original_body = required_string(prompt_row, "正文", "prompt_package")?;
+        required_string(prompt_row, prompt_package_columns[0], "prompt_package")?;
+    let source_level = required_string(prompt_row, prompt_package_columns[1], "prompt_package")?;
+    let original_body = required_string(prompt_row, prompt_package_columns[2], "prompt_package")?;
 
     let render_segment_id = extract_render_segment_id(prompt_package_id);
     let scene_summary = sanitize_natural_text(
@@ -385,14 +388,17 @@ fn build_continuity_clause(scene_summary: &str, action_anchor: &str) -> String {
 }
 
 fn find_negative_prompt_guard<'a>(source: &'a Value) -> Option<&'a str> {
+    let hard_lock_columns = canonical_columns("hard_lock");
     source
         .get("hard_lock")?
         .as_array()?
         .iter()
         .find(|row| {
-            row.get("??").and_then(serde_json::Value::as_str) == Some("negative_prompt_guard")
+            row.get(hard_lock_columns[2])
+                .and_then(serde_json::Value::as_str)
+                == Some("negative_prompt_guard")
         })?
-        .get("??")?
+        .get(hard_lock_columns[3])?
         .as_str()
 }
 
@@ -410,6 +416,22 @@ fn required_string<'a>(
         })
 }
 
+fn canonical_columns(sheet_machine_name: &'static str) -> &'static [&'static str] {
+    CANONICAL_WORKBOOK_CONTRACT
+        .sheets
+        .iter()
+        .find(|sheet| sheet.machine_name == sheet_machine_name)
+        .map(|sheet| sheet.columns)
+        .expect("canonical workbook sheet must exist")
+}
+
+fn canonical_column(sheet_machine_name: &'static str, index: usize) -> &'static str {
+    canonical_columns(sheet_machine_name)
+        .get(index)
+        .copied()
+        .expect("canonical workbook column must exist")
+}
+
 fn extract_render_segment_id(prompt_package_id: &str) -> String {
     prompt_package_id
         .split("render-segment-")
@@ -419,32 +441,37 @@ fn extract_render_segment_id(prompt_package_id: &str) -> String {
 }
 
 fn find_linked_scene_summary<'a>(source: &'a Value, render_segment_id: &str) -> Option<&'a str> {
+    let render_segment_columns = canonical_columns("render_segment");
+    let narrative_scene_columns = canonical_columns("narrative_scene");
     let narrative_scene_id = source
         .get("render_segment")?
         .as_array()?
         .iter()
         .find(|row| {
-            row.get("RenderSegment标识").and_then(Value::as_str) == Some(render_segment_id)
+            row.get(render_segment_columns[0]).and_then(Value::as_str) == Some(render_segment_id)
         })?
-        .get("叙事场景标识")?
+        .get(render_segment_columns[1])?
         .as_str()?;
 
     source
         .get("narrative_scene")?
         .as_array()?
         .iter()
-        .find(|row| row.get("叙事场景标识").and_then(Value::as_str) == Some(narrative_scene_id))?
-        .get("内容摘要")?
+        .find(|row| {
+            row.get(narrative_scene_columns[0]).and_then(Value::as_str) == Some(narrative_scene_id)
+        })?
+        .get(narrative_scene_columns[4])?
         .as_str()
 }
 
 fn find_action_anchor<'a>(source: &'a Value, render_segment_id: &str) -> Option<&'a str> {
+    let cut_columns = canonical_columns("cut");
     source
         .get("cut")?
         .as_array()?
         .iter()
-        .find(|row| row.get("RenderSegment标识").and_then(Value::as_str) == Some(render_segment_id))
-        .and_then(|row| row.get("镜头描述"))
+        .find(|row| row.get(cut_columns[1]).and_then(Value::as_str) == Some(render_segment_id))
+        .and_then(|row| row.get(cut_columns[3]))
         .and_then(Value::as_str)
 }
 
@@ -474,50 +501,67 @@ mod tests {
 
     #[test]
     fn external_prompt_body_removes_machine_identifier_and_preserves_traceability_outside_body() {
+        let narrative_scene_columns = canonical_columns("narrative_scene");
+        let render_segment_columns = canonical_columns("render_segment");
+        let cut_columns = canonical_columns("cut");
+        let hard_lock_columns = canonical_columns("hard_lock");
+        let prompt_package_columns = canonical_columns("prompt_package");
+
         let source = json!({
             "narrative_scene": [
-                {
-                    "??????": "narrative-scene-week3-001",
-                    "????": "??????????????"
-                }
+                json_object(&[
+                    (narrative_scene_columns[0], json!("narrative-scene-week3-001")),
+                    (narrative_scene_columns[4], json!("clean scene summary")),
+                ])
             ],
             "render_segment": [
-                {
-                    "RenderSegment??": "render-segment-week3-001",
-                    "??????": "narrative-scene-week3-001"
-                }
+                json_object(&[
+                    (render_segment_columns[0], json!("render-segment-week3-001")),
+                    (render_segment_columns[1], json!("narrative-scene-week3-001")),
+                ])
             ],
             "cut": [
-                {
-                    "RenderSegment??": "render-segment-week3-001",
-                    "????": "?????????????????????"
-                }
+                json_object(&[
+                    (cut_columns[1], json!("render-segment-week3-001")),
+                    (cut_columns[3], json!("actor crosses the doorway")),
+                ])
             ],
             "hard_lock": [
-                {
-                    "??": "negative_prompt_guard",
-                    "??": "???????????????"
-                }
+                json_object(&[
+                    (hard_lock_columns[2], json!("negative_prompt_guard")),
+                    (hard_lock_columns[3], json!("avoid visual drift")),
+                ])
             ]
         });
-        let prompt_row = json!({
-            "PromptPackage??": "prompt-package-render-episode-week3-001-render-segment-week3-001",
-            "????": "render_prompt",
-            "??": "???????????????????? render-segment-week3-001 ?????"
-        });
+        let prompt_row = json_object(&[
+            (
+                prompt_package_columns[0],
+                json!("prompt-package-render-episode-week3-001-render-segment-week3-001"),
+            ),
+            (prompt_package_columns[1], json!("render_prompt")),
+            (
+                prompt_package_columns[2],
+                json!("render prompt body with render-segment-week3-001 machine id"),
+            ),
+        ]);
 
         let body = build_external_prompt_body(&source, prompt_row.as_object().unwrap())
             .expect("external prompt should build");
 
         assert!(!body.contains("render-segment-week3-001"));
-        assert!(body.contains("?????"));
-        assert!(body.contains("???????"));
-        assert!(body.contains("???????"));
-        assert!(body.contains("??????"));
-        assert!(body.contains("??????"));
-        assert!(body.contains("????"));
-        assert!(body.contains("???"));
+        assert!(body.contains("clean scene summary"));
+        assert!(body.contains("actor crosses the doorway"));
+        assert!(body.contains("render prompt body with"));
+        assert!(body.contains("avoid visual drift"));
         assert!(source.to_string().contains("render-segment-week3-001"));
+    }
+
+    fn json_object(entries: &[(&str, Value)]) -> Value {
+        let mut object = Map::new();
+        for (key, value) in entries {
+            object.insert((*key).to_string(), value.clone());
+        }
+        Value::Object(object)
     }
 
     #[test]
@@ -544,11 +588,9 @@ mod tests {
         assert!(constraint.identity_baseline_clause.contains("面部细节"));
         assert!(constraint.negative_guard_clause.contains("脏脸"));
         assert!(constraint.negative_guard_clause.contains("五官错位"));
-        assert!(
-            constraint
-                .negative_guard_clause
-                .contains("低清晰度面部纹理")
-        );
+        assert!(constraint
+            .negative_guard_clause
+            .contains("低清晰度面部纹理"));
     }
 }
 
