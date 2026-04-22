@@ -17,6 +17,36 @@
 
 The KB golden sample package is ready to be treated as a v0.2 `golden_sample_library` contract-freeze candidate for planning, validation design, repair design, and future Qwen retrieval, but it is still not authorized for Hope runtime implementation or v0.1 contract changes.
 
+## 2026-04-23 Seedance2 V108 Alignment Refresh
+
+Main control later accepted `E:\codex\hope-kb @ 6f210f0` as the KB-only
+Seedance2 V108 sample update readiness package, with Hope control anchor
+`142225e3e6d029c2ed83e382c292d3a43cc9ddb0`.
+
+This freeze candidate remains the accepted docs-only record for the earlier
+40-row / 17-source-field KB v0.2 package. It is now historical reference for
+field-format purposes where V108 differs. The current V108 alignment addendum is:
+
+```text
+docs/contracts/export-overlays/seedance2-v108-v3-docs-alignment-refresh-2026-04-23.md
+```
+
+Current V108 alignment rules:
+
+- V108 XLSX / DOCX is the canonical source format for this gate.
+- The old 40-row package remains unchanged and is not rewritten from V108.
+- V108 rows are not imported into current v0.2 sample records.
+- V108 rows are not promoted to runtime positive few-shot.
+- Conflicts are marked `v3_alignment_gap`, not hard-merged.
+- Blank or placeholder surfaces are marked `future_model_fill_surface`.
+- `reference_bundle` means only `external_reference_handles`; do not invent
+  `reference_control_core`, image paths, URLs, asset IDs, character appearance,
+  or scene detail.
+
+No Hope runtime implementation, validator, repair engine, exporter, workbook,
+desktop, intake, Qwen, Seedance, or `hope-kb` mutation is authorized by this
+refresh.
+
 ## Source Snapshots Included
 
 This candidate carries the actual KB v0.2 package evidence in the proposal branch, not only a summary.

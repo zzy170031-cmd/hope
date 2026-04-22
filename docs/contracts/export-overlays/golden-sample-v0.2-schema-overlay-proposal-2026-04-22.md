@@ -17,6 +17,41 @@
 
 The golden sample intake result should become an independent v0.2 `golden_sample_library` schema proposal. It must not be flattened into the frozen v0.1 `classic_case_examples` seed table, because the source rows carry few-shot eligibility, negative-sample signals, validator coverage, V3 core coverage, teaching notes, source timestamps, and per-row provenance that v0.1 cannot preserve without loss.
 
+## 2026-04-23 Seedance2 V108 Source Format Addendum
+
+This 2026-04-22 proposal describes the earlier 40-row / 17-source-field golden
+sample intake shape. After main-control acceptance of
+`E:\codex\hope-kb @ 6f210f0`, the V108 XLSX / DOCX table format is the latest
+canonical source format for new sample alignment work.
+
+The V108 source shape is not silently merged into this old proposal. It is
+recorded as a docs-only alignment addendum at:
+
+```text
+docs/contracts/export-overlays/seedance2-v108-v3-docs-alignment-refresh-2026-04-23.md
+```
+
+V108 source format changes that supersede or constrain this proposal:
+
+- `shot_id` is the V108 source row identifier; old `sample_id` mappings are
+  historical until a future import gate defines the bridge.
+- `quality_grade` is the V108 source grade; old `tier` remains historical for
+  the 40-row v0.2 package.
+- V108 `sample_type` means `single_shot` or `sequence_shot`; it must not reuse
+  old sample role meanings such as positive, negative, or repair.
+- V108 `scene_performance_core` merges the old `visual_scene_core` and
+  `motion_performance_core` axes.
+- V108 `continuity_negative_core` combines continuity and negative constraints.
+- V108 `reference_bundle` only maps toward `external_reference_handles`.
+- V108 `prompt_body` is source prompt body / candidate text, not compiled
+  Seedance output.
+
+Rows or fields with blank, placeholder, or pending-fill content are marked
+`future_model_fill_surface`. They must not be guessed, imported as completed
+content, or used as positive few-shot. This addendum keeps the original v0.1
+prohibition intact: do not flatten either the 40-row package or V108 into
+`classic_case_examples`.
+
 ## Source Snapshot Summary
 
 The normalized staging artifact reviewed by control contains:
