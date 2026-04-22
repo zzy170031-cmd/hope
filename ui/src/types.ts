@@ -5,10 +5,10 @@ export type LoadStatus = "loading" | "ready" | "empty" | "error";
 export type BridgeMode = "desktop" | "mock";
 
 export type QwenRuntimeStatus =
-  | "未配置千问 API"
-  | "正在检查连接"
-  | "已连接"
-  | "连接失败";
+  | "local_missing"
+  | "local_checking"
+  | "local_present"
+  | "local_invalid";
 
 export type StoryboardReadinessStatus =
   | "草案"
@@ -25,6 +25,18 @@ export type StoryboardSemanticGroup =
   | "连续性与交接"
   | "参考与锁定"
   | "导出就绪";
+
+export type WriterInputKind = "synopsis" | "script" | "brief";
+
+export interface WriterInputBoundaryDraft {
+  source_input_text: string;
+  input_kind: WriterInputKind;
+  story_constraints: string;
+  character_constraints: string;
+  style_constraints: string;
+  duration_target: string;
+  scene_count_hint: string;
+}
 
 export type ExportValidationState = "正常" | "待补充" | "阻塞";
 

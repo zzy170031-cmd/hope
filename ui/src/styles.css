@@ -379,6 +379,8 @@ button {
 .storyboard-workbench__rail,
 .storyboard-workbench__main,
 .storyboard-input-card,
+.writer-boundary-panel,
+.qwen-readiness-card,
 .storyboard-revision-card,
 .prompt-preview {
   min-width: 0;
@@ -386,6 +388,8 @@ button {
 
 .storyboard-workbench__rail,
 .storyboard-input-card,
+.writer-boundary-panel,
+.qwen-readiness-card,
 .storyboard-revision-card,
 .prompt-preview,
 .storyboard-table-wrap {
@@ -403,6 +407,8 @@ button {
 
 .storyboard-workbench__rail h4,
 .storyboard-input-card h4,
+.writer-boundary-panel h4,
+.qwen-readiness-card h4,
 .storyboard-revision-card h4,
 .prompt-preview h4,
 .storyboard-table-wrap h4 {
@@ -412,6 +418,7 @@ button {
 .storyboard-workbench__rail p,
 .storyboard-input-card span,
 .storyboard-lock-card p,
+.qwen-readiness-card p,
 .storyboard-semantic-card p,
 .prompt-preview p,
 .storyboard-table-wrap__header span {
@@ -434,11 +441,74 @@ button {
 }
 
 .storyboard-input-card,
+.writer-boundary-panel,
+.qwen-readiness-card,
 .storyboard-revision-card,
 .prompt-preview {
   display: grid;
   gap: 12px;
   padding: 16px;
+}
+
+.writer-boundary-panel__header,
+.qwen-readiness-card__status {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 12px;
+}
+
+.writer-boundary-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.writer-boundary-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.writer-boundary-field--wide {
+  grid-column: 1 / -1;
+}
+
+.writer-boundary-field span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.writer-boundary-field input,
+.writer-boundary-field select,
+.writer-boundary-field textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: white;
+  color: var(--text);
+}
+
+.writer-boundary-field textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.qwen-readiness-card__status {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.qwen-readiness-card__list,
+.qwen-readiness-card__fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .storyboard-input-card__field {
@@ -704,6 +774,8 @@ button {
   .view-grid--export,
   .storyboard-workbench,
   .storyboard-semantic-grid,
+  .writer-boundary-panel__grid,
+  .qwen-readiness-card__status,
   .readonly-landing,
   .readonly-landing__grid {
     grid-template-columns: 1fr;
@@ -721,6 +793,7 @@ button {
   .project-card__title,
   .validation-row,
   .storyboard-input-card__actions,
+  .writer-boundary-panel__header,
   .storyboard-table-wrap__header {
     flex-direction: column;
     align-items: start;

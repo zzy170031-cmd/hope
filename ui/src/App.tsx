@@ -24,6 +24,8 @@ import type {
   ValidationExportPanelSnapshot,
   ValidationRepairRecommendation,
   ViewId,
+  WriterInputBoundaryDraft,
+  WriterInputKind,
 } from "./types";
 
 interface AsyncState<T> {
@@ -32,7 +34,46 @@ interface AsyncState<T> {
   error: string | null;
 }
 
-const QWEN_MOCK_CHECK_DELAY_MS = 220;
+const QWEN_LOCAL_CHECK_DELAY_MS = 220;
+
+const EMPTY_WRITER_INPUT_BOUNDARY: WriterInputBoundaryDraft = {
+  source_input_text: "",
+  input_kind: "brief",
+  story_constraints: "",
+  character_constraints: "",
+  style_constraints: "",
+  duration_target: "",
+  scene_count_hint: "",
+};
+
+const WRITER_INPUT_KIND_OPTIONS: Array<{
+  value: WriterInputKind;
+  label: string;
+  detail: string;
+}> = [
+  {
+    value: "brief",
+    label: "Brief",
+    detail: "用户短需求或创意概要",
+  },
+  {
+    value: "synopsis",
+    label: "Synopsis",
+    detail: "已有故事梗概",
+  },
+  {
+    value: "script",
+    label: "Script",
+    detail: "已有剧本 / 场景文本",
+  },
+];
+
+const QWEN_CONTRACT_READINESS = [
+  "Qwen storyboard generation contract boundary 已通过",
+  "contract-only input 可承接",
+  "生成链路未启用，等待后续接入",
+  "API key 仅做本地输入状态，不表达真实连接",
+];
 
 const STORYBOARD_REQUIREMENT_PLACEHOLDER =
   "例：一位年轻工程师在清晨地铁里发现异常信号，节奏克制，结尾留下继续追查的悬念。";
@@ -214,30 +255,37 @@ export function App() {
 
 function QwenRuntimeSecretControl() {
   const [secretInput, setSecretInput] = useState("");
-  const [runtimeStatus, setRuntimeStatus] =
-    useState<QwenRuntimeStatus>("未配置千问 API");
+  const [runtimeStatus, setRuntimeStatus] = useState<QwenRuntimeStatus>("local_missing");
   const [lastFive, setLastFive] = useState<string | null>(null);
 
-  const isChecking = runtimeStatus === "正在检查连接";
-  const isLinked = runtimeStatus === "已连接";
-  const isError = runtimeStatus === "连接失败";
+  const isChecking = runtimeStatus === "local_checking";
+  const isLocalPresent = runtimeStatus === "local_present";
+  const isError = runtimeStatus === "local_invalid";
   const canSubmit = secretInput.trim().length > 0 && !isChecking;
   const statusTone =
     isError
       ? "error"
       : isChecking
         ? "checking"
-        : isLinked
+        : isLocalPresent
           ? "connected"
           : "missing";
+  const statusLabel =
+    runtimeStatus === "local_present"
+      ? "本地密钥已填写"
+      : runtimeStatus === "local_checking"
+        ? "本地检查中"
+        : runtimeStatus === "local_invalid"
+          ? "本地输入无效"
+          : "未配置千问 API";
   const statusDetail =
-    isLinked && lastFive
-      ? `已连接 · *****${lastFive}`
+    isLocalPresent && lastFive
+      ? `仅本地保存输入状态 · *****${lastFive}`
       : isError
-        ? "密钥长度不足或格式不可用"
+        ? "密钥长度不足；未调用 Qwen 服务"
         : isChecking
-          ? "正在进行本地连接检查"
-          : "等待输入千问 API Key";
+          ? "仅检查本地输入完整度"
+          : "等待输入千问 API Key；不会发起真实调用";
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -248,27 +296,27 @@ function QwenRuntimeSecretControl() {
     setLastFive(null);
 
     if (!candidate) {
-      setRuntimeStatus("未配置千问 API");
+      setRuntimeStatus("local_missing");
       return;
     }
 
-    setRuntimeStatus("正在检查连接");
+    setRuntimeStatus("local_checking");
     window.setTimeout(() => {
       if (!safeLastFive) {
-        setRuntimeStatus("连接失败");
+        setRuntimeStatus("local_invalid");
         return;
       }
 
       setLastFive(safeLastFive);
-      setRuntimeStatus("已连接");
-    }, QWEN_MOCK_CHECK_DELAY_MS);
+      setRuntimeStatus("local_present");
+    }, QWEN_LOCAL_CHECK_DELAY_MS);
   };
 
   return (
     <form className="qwen-secret" onSubmit={handleSubmit} aria-label="千问本地连接密钥">
       <div className="qwen-secret__status" aria-live="polite">
         <span className={`qwen-secret__dot qwen-secret__dot--${statusTone}`} />
-        <span className="qwen-secret__state">{runtimeStatus}</span>
+        <span className="qwen-secret__state">{statusLabel}</span>
         <span className="qwen-secret__detail">{statusDetail}</span>
       </div>
       <div className="qwen-secret__controls">
@@ -493,7 +541,19 @@ function WriterView({ selectedProjectId }: { selectedProjectId: string | null })
     () => loadWriterSnapshot(selectedProjectId ?? undefined),
     [selectedProjectId],
   );
-  const [storyboardNeed, setStoryboardNeed] = useState("");
+  const [inputBoundary, setInputBoundary] = useState<WriterInputBoundaryDraft>(
+    EMPTY_WRITER_INPUT_BOUNDARY,
+  );
+  const storyboardNeed = inputBoundary.source_input_text;
+  const updateInputBoundary = <K extends keyof WriterInputBoundaryDraft>(
+    field: K,
+    value: WriterInputBoundaryDraft[K],
+  ) => {
+    setInputBoundary((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
 
   return (
     <section className="panel">
@@ -534,18 +594,25 @@ function WriterView({ selectedProjectId }: { selectedProjectId: string | null })
               </div>
               <textarea
                 className="storyboard-input-card__field"
-                onChange={(event) => setStoryboardNeed(event.target.value)}
+                onChange={(event) =>
+                  updateInputBoundary("source_input_text", event.target.value)
+                }
                 placeholder={STORYBOARD_REQUIREMENT_PLACEHOLDER}
                 value={storyboardNeed}
               />
               <div className="storyboard-input-card__actions">
-                <span>本包只做 UI/local mock 占位，不触发真实生成。</span>
+                <span>本包只做 Writer 输入边界承接，不触发真实 Qwen 生成。</span>
                 <button className="panel__button" disabled type="button">
                   生成分镜草案（待接入）
                 </button>
               </div>
             </div>
 
+            <WriterInputBoundaryPanel
+              inputBoundary={inputBoundary}
+              onChange={updateInputBoundary}
+            />
+            <QwenContractReadinessCard inputBoundary={inputBoundary} />
             <ReadinessStrip />
             <StoryboardSemanticGrid />
             <StoryboardDraftTable />
@@ -571,6 +638,172 @@ function WriterView({ selectedProjectId }: { selectedProjectId: string | null })
           </div>
         </div>
       )}
+    </section>
+  );
+}
+
+interface WriterInputBoundaryPanelProps {
+  inputBoundary: WriterInputBoundaryDraft;
+  onChange: <K extends keyof WriterInputBoundaryDraft>(
+    field: K,
+    value: WriterInputBoundaryDraft[K],
+  ) => void;
+}
+
+function WriterInputBoundaryPanel({
+  inputBoundary,
+  onChange,
+}: WriterInputBoundaryPanelProps) {
+  return (
+    <section className="writer-boundary-panel" aria-label="Writer input boundary">
+      <div className="writer-boundary-panel__header">
+        <div>
+          <p className="workspace__eyebrow">Input Boundary</p>
+          <h4>Qwen contract-only 输入承接</h4>
+        </div>
+        <span className="readiness-pill readiness-pill--pending">等待后续接入</span>
+      </div>
+
+      <div className="writer-boundary-panel__grid">
+        <label className="writer-boundary-field">
+          <span>input_kind</span>
+          <select
+            value={inputBoundary.input_kind}
+            onChange={(event) =>
+              onChange("input_kind", event.target.value as WriterInputKind)
+            }
+          >
+            {WRITER_INPUT_KIND_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label} - {option.detail}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="writer-boundary-field">
+          <span>duration_target</span>
+          <input
+            value={inputBoundary.duration_target}
+            onChange={(event) => onChange("duration_target", event.target.value)}
+            placeholder="例：60 秒 / 3 分钟 / 单集开场"
+          />
+        </label>
+
+        <label className="writer-boundary-field">
+          <span>scene_count_hint</span>
+          <input
+            value={inputBoundary.scene_count_hint}
+            onChange={(event) => onChange("scene_count_hint", event.target.value)}
+            placeholder="例：3-5 个场景"
+          />
+        </label>
+
+        <label className="writer-boundary-field writer-boundary-field--wide">
+          <span>story_constraints</span>
+          <textarea
+            value={inputBoundary.story_constraints}
+            onChange={(event) => onChange("story_constraints", event.target.value)}
+            placeholder="只记录用户故事约束，不生成分镜内容。"
+          />
+        </label>
+
+        <label className="writer-boundary-field writer-boundary-field--wide">
+          <span>character_constraints</span>
+          <textarea
+            value={inputBoundary.character_constraints}
+            onChange={(event) => onChange("character_constraints", event.target.value)}
+            placeholder="只记录角色一致性要求，不建立实体库。"
+          />
+        </label>
+
+        <label className="writer-boundary-field writer-boundary-field--wide">
+          <span>style_constraints</span>
+          <textarea
+            value={inputBoundary.style_constraints}
+            onChange={(event) => onChange("style_constraints", event.target.value)}
+            placeholder="只记录风格方向，不调用 Qwen 或 Seedance。"
+          />
+        </label>
+      </div>
+    </section>
+  );
+}
+
+function QwenContractReadinessCard({
+  inputBoundary,
+}: {
+  inputBoundary: WriterInputBoundaryDraft;
+}) {
+  const readinessFields = [
+    {
+      label: "source_input_text",
+      ready: inputBoundary.source_input_text.trim().length > 0,
+    },
+    { label: "input_kind", ready: Boolean(inputBoundary.input_kind) },
+    {
+      label: "story_constraints",
+      ready: inputBoundary.story_constraints.trim().length > 0,
+    },
+    {
+      label: "character_constraints",
+      ready: inputBoundary.character_constraints.trim().length > 0,
+    },
+    {
+      label: "style_constraints",
+      ready: inputBoundary.style_constraints.trim().length > 0,
+    },
+    {
+      label: "duration_target",
+      ready: inputBoundary.duration_target.trim().length > 0,
+    },
+    {
+      label: "scene_count_hint",
+      ready: inputBoundary.scene_count_hint.trim().length > 0,
+    },
+  ];
+  const completedCount = readinessFields.filter((field) => field.ready).length;
+
+  return (
+    <section className="qwen-readiness-card" aria-label="Qwen contract readiness">
+      <div>
+        <p className="workspace__eyebrow">Qwen Contract</p>
+        <h4>contract-only readiness</h4>
+        <p>
+          当前仅承接输入边界，不调用模型、不生成分镜、不写入导出链路。
+        </p>
+      </div>
+
+      <div className="qwen-readiness-card__status">
+        <StatusTile
+          label="输入完整度"
+          value={`${completedCount} / ${readinessFields.length} fields`}
+        />
+        <StatusTile label="生成链路" value="未启用" />
+      </div>
+
+      <div className="qwen-readiness-card__list">
+        {QWEN_CONTRACT_READINESS.map((item) => (
+          <span key={item} className="readiness-pill readiness-pill--draft">
+            {item}
+          </span>
+        ))}
+      </div>
+
+      <div className="qwen-readiness-card__fields">
+        {readinessFields.map((field) => (
+          <span
+            key={field.label}
+            className={
+              field.ready
+                ? "readiness-pill readiness-pill--ok"
+                : "readiness-pill readiness-pill--pending"
+            }
+          >
+            {field.label}: {field.ready ? "已填写" : "待填写"}
+          </span>
+        ))}
+      </div>
     </section>
   );
 }
