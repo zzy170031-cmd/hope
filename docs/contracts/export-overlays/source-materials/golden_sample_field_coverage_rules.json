@@ -1,0 +1,363 @@
+﻿{
+    "schema_version":  "golden_sample_field_coverage_rules.v0.2",
+    "asset_name":  "golden_sample_field_coverage_rules",
+    "generated_at":  "2026-04-22",
+    "record_count":  5,
+    "records":  [
+                    {
+                        "rule_id":  "gs_field_rule_visual_scene_core",
+                        "core":  "visual_scene_core",
+                        "row_count":  8,
+                        "source_sample_ids":  [
+                                                  "GS-7",
+                                                  "GS-1",
+                                                  "GS-8",
+                                                  "GS-3",
+                                                  "GS-4",
+                                                  "GS-5",
+                                                  "GS-2",
+                                                  "GS-6"
+                                              ],
+                        "required_source_fields":  [
+                                                       "sample_title",
+                                                       "core",
+                                                       "covered_points",
+                                                       "created_at",
+                                                       "director_voice",
+                                                       "empty_words_detected",
+                                                       "genre",
+                                                       "missed_points",
+                                                       "sample_id",
+                                                       "scene_tag",
+                                                       "shot_type",
+                                                       "source_cut",
+                                                       "teaching_note",
+                                                       "tier",
+                                                       "updated_at",
+                                                       "usable_for_fewshot",
+                                                       "word_count"
+                                                   ],
+                        "validator_evidence_fields":  [
+                                                          "covered_points",
+                                                          "missed_points",
+                                                          "empty_words_detected",
+                                                          "word_count",
+                                                          "teaching_note"
+                                                      ],
+                        "fewshot_gate":  {
+                                             "eligible_source_field":  "usable_for_fewshot",
+                                             "positive_value":  "Yes",
+                                             "negative_value":  "No",
+                                             "must_exclude_negative_samples_from_prompt_context":  true
+                                         },
+                        "negative_sample_gate":  {
+                                                     "tier_field":  "tier",
+                                                     "negative_tier_value":  "差",
+                                                     "empty_word_signal_field":  "empty_words_detected",
+                                                     "missed_points_field":  "missed_points"
+                                                 },
+                        "coverage_summary":  {
+                                                 "tier":  {
+                                                              "优":  2,
+                                                              "差":  2,
+                                                              "中":  2,
+                                                              "好":  2
+                                                          },
+                                                 "usable_for_fewshot":  {
+                                                                            "Yes":  6,
+                                                                            "No":  2
+                                                                        }
+                                             },
+                        "future_gate_owner":  [
+                                                  "Hope validator planning",
+                                                  "Hope export planning",
+                                                  "Desktop readonly provenance planning"
+                                              ],
+                        "planning_only":  true
+                    },
+                    {
+                        "rule_id":  "gs_field_rule_motion_performance_core",
+                        "core":  "motion_performance_core",
+                        "row_count":  8,
+                        "source_sample_ids":  [
+                                                  "GS-15",
+                                                  "GS-13",
+                                                  "GS-10",
+                                                  "GS-16",
+                                                  "GS-12",
+                                                  "GS-11",
+                                                  "GS-14",
+                                                  "GS-9"
+                                              ],
+                        "required_source_fields":  [
+                                                       "sample_title",
+                                                       "core",
+                                                       "covered_points",
+                                                       "created_at",
+                                                       "director_voice",
+                                                       "empty_words_detected",
+                                                       "genre",
+                                                       "missed_points",
+                                                       "sample_id",
+                                                       "scene_tag",
+                                                       "shot_type",
+                                                       "source_cut",
+                                                       "teaching_note",
+                                                       "tier",
+                                                       "updated_at",
+                                                       "usable_for_fewshot",
+                                                       "word_count"
+                                                   ],
+                        "validator_evidence_fields":  [
+                                                          "covered_points",
+                                                          "missed_points",
+                                                          "empty_words_detected",
+                                                          "word_count",
+                                                          "teaching_note"
+                                                      ],
+                        "fewshot_gate":  {
+                                             "eligible_source_field":  "usable_for_fewshot",
+                                             "positive_value":  "Yes",
+                                             "negative_value":  "No",
+                                             "must_exclude_negative_samples_from_prompt_context":  true
+                                         },
+                        "negative_sample_gate":  {
+                                                     "tier_field":  "tier",
+                                                     "negative_tier_value":  "差",
+                                                     "empty_word_signal_field":  "empty_words_detected",
+                                                     "missed_points_field":  "missed_points"
+                                                 },
+                        "coverage_summary":  {
+                                                 "tier":  {
+                                                              "优":  2,
+                                                              "好":  2,
+                                                              "差":  2,
+                                                              "中":  2
+                                                          },
+                                                 "usable_for_fewshot":  {
+                                                                            "Yes":  6,
+                                                                            "No":  2
+                                                                        }
+                                             },
+                        "future_gate_owner":  [
+                                                  "Hope validator planning",
+                                                  "Hope export planning",
+                                                  "Desktop readonly provenance planning"
+                                              ],
+                        "planning_only":  true
+                    },
+                    {
+                        "rule_id":  "gs_field_rule_camera_directing_core",
+                        "core":  "camera_directing_core",
+                        "row_count":  8,
+                        "source_sample_ids":  [
+                                                  "GS-20",
+                                                  "GS-22",
+                                                  "GS-21",
+                                                  "GS-23",
+                                                  "GS-17",
+                                                  "GS-18",
+                                                  "GS-24",
+                                                  "GS-19"
+                                              ],
+                        "required_source_fields":  [
+                                                       "sample_title",
+                                                       "core",
+                                                       "covered_points",
+                                                       "created_at",
+                                                       "director_voice",
+                                                       "empty_words_detected",
+                                                       "genre",
+                                                       "missed_points",
+                                                       "sample_id",
+                                                       "scene_tag",
+                                                       "shot_type",
+                                                       "source_cut",
+                                                       "teaching_note",
+                                                       "tier",
+                                                       "updated_at",
+                                                       "usable_for_fewshot",
+                                                       "word_count"
+                                                   ],
+                        "validator_evidence_fields":  [
+                                                          "covered_points",
+                                                          "missed_points",
+                                                          "empty_words_detected",
+                                                          "word_count",
+                                                          "teaching_note"
+                                                      ],
+                        "fewshot_gate":  {
+                                             "eligible_source_field":  "usable_for_fewshot",
+                                             "positive_value":  "Yes",
+                                             "negative_value":  "No",
+                                             "must_exclude_negative_samples_from_prompt_context":  true
+                                         },
+                        "negative_sample_gate":  {
+                                                     "tier_field":  "tier",
+                                                     "negative_tier_value":  "差",
+                                                     "empty_word_signal_field":  "empty_words_detected",
+                                                     "missed_points_field":  "missed_points"
+                                                 },
+                        "coverage_summary":  {
+                                                 "tier":  {
+                                                              "中":  2,
+                                                              "好":  2,
+                                                              "优":  2,
+                                                              "差":  2
+                                                          },
+                                                 "usable_for_fewshot":  {
+                                                                            "Yes":  6,
+                                                                            "No":  2
+                                                                        }
+                                             },
+                        "future_gate_owner":  [
+                                                  "Hope validator planning",
+                                                  "Hope export planning",
+                                                  "Desktop readonly provenance planning"
+                                              ],
+                        "planning_only":  true
+                    },
+                    {
+                        "rule_id":  "gs_field_rule_audio_directing_core",
+                        "core":  "audio_directing_core",
+                        "row_count":  8,
+                        "source_sample_ids":  [
+                                                  "GS-25",
+                                                  "GS-29",
+                                                  "GS-26",
+                                                  "GS-27",
+                                                  "GS-30",
+                                                  "GS-28",
+                                                  "GS-32",
+                                                  "GS-31"
+                                              ],
+                        "required_source_fields":  [
+                                                       "sample_title",
+                                                       "core",
+                                                       "covered_points",
+                                                       "created_at",
+                                                       "director_voice",
+                                                       "empty_words_detected",
+                                                       "genre",
+                                                       "missed_points",
+                                                       "sample_id",
+                                                       "scene_tag",
+                                                       "shot_type",
+                                                       "source_cut",
+                                                       "teaching_note",
+                                                       "tier",
+                                                       "updated_at",
+                                                       "usable_for_fewshot",
+                                                       "word_count"
+                                                   ],
+                        "validator_evidence_fields":  [
+                                                          "covered_points",
+                                                          "missed_points",
+                                                          "empty_words_detected",
+                                                          "word_count",
+                                                          "teaching_note"
+                                                      ],
+                        "fewshot_gate":  {
+                                             "eligible_source_field":  "usable_for_fewshot",
+                                             "positive_value":  "Yes",
+                                             "negative_value":  "No",
+                                             "must_exclude_negative_samples_from_prompt_context":  true
+                                         },
+                        "negative_sample_gate":  {
+                                                     "tier_field":  "tier",
+                                                     "negative_tier_value":  "差",
+                                                     "empty_word_signal_field":  "empty_words_detected",
+                                                     "missed_points_field":  "missed_points"
+                                                 },
+                        "coverage_summary":  {
+                                                 "tier":  {
+                                                              "差":  2,
+                                                              "好":  2,
+                                                              "中":  2,
+                                                              "优":  2
+                                                          },
+                                                 "usable_for_fewshot":  {
+                                                                            "No":  2,
+                                                                            "Yes":  6
+                                                                        }
+                                             },
+                        "future_gate_owner":  [
+                                                  "Hope validator planning",
+                                                  "Hope export planning",
+                                                  "Desktop readonly provenance planning"
+                                              ],
+                        "planning_only":  true
+                    },
+                    {
+                        "rule_id":  "gs_field_rule_continuity_lock_core",
+                        "core":  "continuity_lock_core",
+                        "row_count":  8,
+                        "source_sample_ids":  [
+                                                  "GS-36",
+                                                  "GS-39",
+                                                  "GS-35",
+                                                  "GS-34",
+                                                  "GS-37",
+                                                  "GS-40",
+                                                  "GS-33",
+                                                  "GS-38"
+                                              ],
+                        "required_source_fields":  [
+                                                       "sample_title",
+                                                       "core",
+                                                       "covered_points",
+                                                       "created_at",
+                                                       "director_voice",
+                                                       "empty_words_detected",
+                                                       "genre",
+                                                       "missed_points",
+                                                       "sample_id",
+                                                       "scene_tag",
+                                                       "shot_type",
+                                                       "source_cut",
+                                                       "teaching_note",
+                                                       "tier",
+                                                       "updated_at",
+                                                       "usable_for_fewshot",
+                                                       "word_count"
+                                                   ],
+                        "validator_evidence_fields":  [
+                                                          "covered_points",
+                                                          "missed_points",
+                                                          "empty_words_detected",
+                                                          "word_count",
+                                                          "teaching_note"
+                                                      ],
+                        "fewshot_gate":  {
+                                             "eligible_source_field":  "usable_for_fewshot",
+                                             "positive_value":  "Yes",
+                                             "negative_value":  "No",
+                                             "must_exclude_negative_samples_from_prompt_context":  true
+                                         },
+                        "negative_sample_gate":  {
+                                                     "tier_field":  "tier",
+                                                     "negative_tier_value":  "差",
+                                                     "empty_word_signal_field":  "empty_words_detected",
+                                                     "missed_points_field":  "missed_points"
+                                                 },
+                        "coverage_summary":  {
+                                                 "tier":  {
+                                                              "中":  2,
+                                                              "优":  2,
+                                                              "差":  2,
+                                                              "好":  2
+                                                          },
+                                                 "usable_for_fewshot":  {
+                                                                            "Yes":  6,
+                                                                            "No":  2
+                                                                        }
+                                             },
+                        "future_gate_owner":  [
+                                                  "Hope validator planning",
+                                                  "Hope export planning",
+                                                  "Desktop readonly provenance planning"
+                                              ],
+                        "planning_only":  true
+                    }
+                ]
+}

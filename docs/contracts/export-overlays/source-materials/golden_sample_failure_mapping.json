@@ -1,0 +1,1177 @@
+﻿{
+    "schema_version":  "golden_sample_failure_mapping.v0.2",
+    "asset_name":  "golden_sample_failure_mapping",
+    "generated_at":  "2026-04-22",
+    "failure_code_definitions":  [
+                                     {
+                                         "failure_code":  "golden_coverage_gap",
+                                         "source_fields":  [
+                                                               "covered_points",
+                                                               "missed_points"
+                                                           ],
+                                         "meaning":  "The source row carries explicit missed coverage evidence for a V3 core axis."
+                                     },
+                                     {
+                                         "failure_code":  "golden_empty_word_noise",
+                                         "source_fields":  [
+                                                               "empty_words_detected"
+                                                           ],
+                                         "meaning":  "The source row records empty-word or vague-language evidence."
+                                     },
+                                     {
+                                         "failure_code":  "golden_negative_sample",
+                                         "source_fields":  [
+                                                               "tier",
+                                                               "usable_for_fewshot"
+                                                           ],
+                                         "meaning":  "The row is intentionally excluded from positive few-shot use or marked as a low-quality negative fixture."
+                                     }
+                                 ],
+    "record_count":  40,
+    "records":  [
+                    {
+                        "mapping_id":  "gs_failure_map_gs_7",
+                        "sample_id":  "GS-7",
+                        "core":  "visual_scene_core",
+                        "tier":  "优",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "13/13 + 具象度数/米数/HEX/字样全部锚点化",
+                                                   "missed_points":  "无",
+                                                   "empty_words_detected":  "无",
+                                                   "teaching_note":  "V3 标杆。每一句都可执行、可校验、可还原。",
+                                                   "word_count":  485
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_1",
+                        "sample_id":  "GS-1",
+                        "core":  "visual_scene_core",
+                        "tier":  "差",
+                        "usable_for_fewshot":  "No",
+                        "negative_sample_signal":  true,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap",
+                                                      "golden_empty_word_noise",
+                                                      "golden_negative_sample"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "主体位置；阳光这一笼统词",
+                                                   "missed_points":  "主光方向与角度；光软硬；色温观感；材质；空气感微动；色彩反射；视觉引导；前中后景；剪影可读性；屏内文字；基调词",
+                                                   "empty_words_detected":  "美丽；明亮；青春；好看；电影感",
+                                                   "teaching_note":  "典型空洞词范本，不入 few-shot。",
+                                                   "word_count":  52
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_8",
+                        "sample_id":  "GS-8",
+                        "core":  "visual_scene_core",
+                        "tier":  "优",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "13/13",
+                                                   "missed_points":  "无",
+                                                   "empty_words_detected":  "无",
+                                                   "teaching_note":  "对应用户最初的灵感台本（男女主阳光+羞涩）的 V3 实现。",
+                                                   "word_count":  460
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_3",
+                        "sample_id":  "GS-3",
+                        "core":  "visual_scene_core",
+                        "tier":  "中",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "环境时空/主光角度/空气感/前中后景/基调词/色温观感",
+                                                   "missed_points":  "光软硬明确度/材质细节/色彩反射锚点/视觉引导路径/剪影可读性/屏内文字",
+                                                   "empty_words_detected":  "无",
+                                                   "teaching_note":  "中档典范，可进 few-shot。",
+                                                   "word_count":  175
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_4",
+                        "sample_id":  "GS-4",
+                        "core":  "visual_scene_core",
+                        "tier":  "中",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "环境时空/主光角度与色温数值/材质（陶瓷）/空气感（蒸汽）/前中后景/基调词",
+                                                   "missed_points":  "色彩反射锚点/视觉引导路径/剪影/屏内文字",
+                                                   "empty_words_detected":  "无",
+                                                   "teaching_note":  "中档，色温数值与基调词到位。",
+                                                   "word_count":  170
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_5",
+                        "sample_id":  "GS-5",
+                        "core":  "visual_scene_core",
+                        "tier":  "好",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "13/13",
+                                                   "missed_points":  "无",
+                                                   "empty_words_detected":  "无",
+                                                   "teaching_note":  "好档标杆，秒级时间、具体角度、冷暖反射、屏内文字都到位。",
+                                                   "word_count":  270
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_2",
+                        "sample_id":  "GS-2",
+                        "core":  "visual_scene_core",
+                        "tier":  "差",
+                        "usable_for_fewshot":  "No",
+                        "negative_sample_signal":  true,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap",
+                                                      "golden_empty_word_noise",
+                                                      "golden_negative_sample"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "下雨事实",
+                                                   "missed_points":  "主光方向/光软硬/色温数值/材质细节/空气感/色彩反射锚点/视觉引导/前中后景层次/剪影/屏内文字/基调词",
+                                                   "empty_words_detected":  "漂亮；高质量；氛围感；非常",
+                                                   "teaching_note":  "大环境词当完整描述的典型错位。不入 few-shot。",
+                                                   "word_count":  47
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_6",
+                        "sample_id":  "GS-6",
+                        "core":  "visual_scene_core",
+                        "tier":  "好",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "13/13",
+                                                   "missed_points":  "无",
+                                                   "empty_words_detected":  "无",
+                                                   "teaching_note":  "宫崎骏系质感：神光柱/惊花粉/松针弹性。",
+                                                   "word_count":  245
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_15",
+                        "sample_id":  "GS-15",
+                        "core":  "motion_performance_core",
+                        "tier":  "优",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "14/14 + 分层/秒数/暗号全部锚点化",
+                                                   "missed_points":  "无",
+                                                   "empty_words_detected":  "无",
+                                                   "teaching_note":  "V3 动作核心标杆。每一拍都有秒数+分层+具象锚点。",
+                                                   "word_count":  540
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_13",
+                        "sample_id":  "GS-13",
+                        "core":  "motion_performance_core",
+                        "tier":  "好",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "14/14",
+                                                   "missed_points":  "无",
+                                                   "empty_words_detected":  "无",
+                                                   "teaching_note":  "好档标杆。秒级节奏全拍齐全、次级动画到位。",
+                                                   "word_count":  290
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_10",
+                        "sample_id":  "GS-10",
+                        "core":  "motion_performance_core",
+                        "tier":  "差",
+                        "usable_for_fewshot":  "No",
+                        "negative_sample_signal":  true,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap",
+                                                      "golden_empty_word_noise",
+                                                      "golden_negative_sample"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "动作名称",
+                                                   "missed_points":  "几乎全部 14 点",
+                                                   "empty_words_detected":  "帅气；非常；酷；惊呆",
+                                                   "teaching_note":  "全空洞词，完全不可执行。不入 few-shot。",
+                                                   "word_count":  28
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_16",
+                        "sample_id":  "GS-16",
+                        "core":  "motion_performance_core",
+                        "tier":  "优",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "14/14",
+                                                   "missed_points":  "无",
+                                                   "empty_words_detected":  "无",
+                                                   "teaching_note":  "V3 动作核心标杆第二条，屏息类场景的模版。",
+                                                   "word_count":  540
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_12",
+                        "sample_id":  "GS-12",
+                        "core":  "motion_performance_core",
+                        "tier":  "中",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "预备/动作/重心/停顿/眼神/对白同步/情绪转折",
+                                                   "missed_points":  "过冲/回落/接触反应/呼吸细节/微表情时机/次级动画/主次分层/身体朝向细节",
+                                                   "empty_words_detected":  "无",
+                                                   "teaching_note":  "中档，次级动画与接触反应没有（门把反光/头发无反应）。",
+                                                   "word_count":  140
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_11",
+                        "sample_id":  "GS-11",
+                        "core":  "motion_performance_core",
+                        "tier":  "中",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "节奏/预备/动作/过冲/回落/重心/眼神/停顿/对白同步",
+                                                   "missed_points":  "接触反应/呼吸细节/次级动画/微表情时机/情绪转折/主次动作分层/身体朝向细节",
+                                                   "empty_words_detected":  "无",
+                                                   "teaching_note":  "中档典范——拍子到位，但次级动画与情绪转折缺席。",
+                                                   "word_count":  160
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_14",
+                        "sample_id":  "GS-14",
+                        "core":  "motion_performance_core",
+                        "tier":  "好",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "14/14",
+                                                   "missed_points":  "无",
+                                                   "empty_words_detected":  "无",
+                                                   "teaching_note":  "好档，节拍以秒为单位明确、滑步急刹传感到位。",
+                                                   "word_count":  280
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_9",
+                        "sample_id":  "GS-9",
+                        "core":  "motion_performance_core",
+                        "tier":  "差",
+                        "usable_for_fewshot":  "No",
+                        "negative_sample_signal":  true,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap",
+                                                      "golden_empty_word_noise",
+                                                      "golden_negative_sample"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "动作名称",
+                                                   "missed_points":  "节奏/预备/过冲/回落/重心/接触反应/呼吸/眼神/微表情时机/次级动画/停顿/对白同步/情绪转折/站位",
+                                                   "empty_words_detected":  "突然；激动；感人；很久",
+                                                   "teaching_note":  "只有动作标签、没有拍子。不入 few-shot。",
+                                                   "word_count":  45
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_20",
+                        "sample_id":  "GS-20",
+                        "core":  "camera_directing_core",
+                        "tier":  "中",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap",
+                                                      "golden_empty_word_noise"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "景别/焦段/机位高度/机位运动/构图/画幅",
+                                                   "missed_points":  "进出画方向/180° 轴/具体 T 值/交班机位",
+                                                   "empty_words_detected":  "（无明显空话）",
+                                                   "teaching_note":  "给到了离地高度、焦段、稳定器方式与构图，但缺失交班机位的下一镜景别预告，使得跨镜头时剪辑需额外判断。属于典型\"差一点点就好\"的中档样本。",
+                                                   "word_count":  82
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_22",
+                        "sample_id":  "GS-22",
+                        "core":  "camera_directing_core",
+                        "tier":  "好",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "景别/焦段/机位高度/机位运动/光学特性/构图/进出画/180°/交班（9/10）",
+                                                   "missed_points":  "呼吸具体位移数值",
+                                                   "empty_words_detected":  "（无）",
+                                                   "teaching_note":  "好档：跟拍分前后段两机位，严守 180° 并用下山坡俯角镜做轴线过渡——这是动画导演级的工程解法。机位高度 110cm 模拟主观但不完全重合，这种\"贴近不替代\"的拿捏到位。",
+                                                   "word_count":  148
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_21",
+                        "sample_id":  "GS-21",
+                        "core":  "camera_directing_core",
+                        "tier":  "好",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "景别/焦段/机位高度/机位运动/光学特性/构图/进出画方向与 180°/交班机位/画幅（9/10）",
+                                                   "missed_points":  "下一镜具体编号预告",
+                                                   "empty_words_detected":  "（无）",
+                                                   "teaching_note":  "好档：起落镜双景别明确（ELS→MLS），给了轨道位移量 1.2m 与方向，标注了跨轴前用 OTS 反打过渡避免穿帮。T 值与呼吸控制都点到。仅差交班编号（下一镜应标 C-07 或类似）。",
+                                                   "word_count":  152
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_23",
+                        "sample_id":  "GS-23",
+                        "core":  "camera_directing_core",
+                        "tier":  "优",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "景别/焦段/机位高度/机位运动/光学特性/构图/进出画/180°/交班机位/画幅（10/10 全覆盖）",
+                                                   "missed_points":  "（无）",
+                                                   "empty_words_detected":  "（无）",
+                                                   "teaching_note":  "优档标杆：把切点锁在呼气节点的第 4.2 秒、下一镜由 85mm MCU 切 35mm MLS 形成\"景别渐远的告别语义\"——景别变化被赋予叙事功能。这是导演级语言，不再是操作员语言。",
+                                                   "word_count":  285
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_17",
+                        "sample_id":  "GS-17",
+                        "core":  "camera_directing_core",
+                        "tier":  "差",
+                        "usable_for_fewshot":  "No",
+                        "negative_sample_signal":  true,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap",
+                                                      "golden_empty_word_noise",
+                                                      "golden_negative_sample"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "仅提及中景（景别 1/10）",
+                                                   "missed_points":  "焦段/机位高度/运动方式具体/光学特性/构图/进出画方向/180°轴/画幅/交班机位",
+                                                   "empty_words_detected":  "自然/常规/无所谓/不用太复杂",
+                                                   "teaching_note":  "典型的口语化外行下指令：只说了景别，其余 9 个点全靠\"自然/常规/无所谓\"兜底。渲染器无法从这段文字里得到任何可执行参数——给 Seedance 只会返回随机跟拍。",
+                                                   "word_count":  58
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_18",
+                        "sample_id":  "GS-18",
+                        "core":  "camera_directing_core",
+                        "tier":  "差",
+                        "usable_for_fewshot":  "No",
+                        "negative_sample_signal":  true,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap",
+                                                      "golden_empty_word_noise",
+                                                      "golden_negative_sample"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "机位运动（仅\"手持\"）",
+                                                   "missed_points":  "景别/焦段/机位高度/构图/进出画/180°/画幅/交班/光学",
+                                                   "empty_words_detected":  "氛围感/电影感/随便/好看/赛博朋克风",
+                                                   "teaching_note":  "\"随便找个好看的角度\"是典型的甩锅表述。\"电影感\"\"赛博朋克风\"属于品味词，没有给出任何可工程化的量化参数。",
+                                                   "word_count":  55
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_24",
+                        "sample_id":  "GS-24",
+                        "core":  "camera_directing_core",
+                        "tier":  "优",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "景别/焦段/机位高度/机位运动/光学特性/构图/进出画/180°/交班/画幅（10/10）",
+                                                   "missed_points":  "（无）",
+                                                   "empty_words_detected":  "（无）",
+                                                   "teaching_note":  "优档：双层叠置（OTS+MS）、黄金分割垂直分位、稳定器 0.3 m/s 极缓推进 15cm 模拟心跳——把镜头运动也当作情绪信号来设计。呼吸控制明确要求锁定。构图引导线用书架纵深线递进，属于专业动画导演级描述。",
+                                                   "word_count":  290
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_19",
+                        "sample_id":  "GS-19",
+                        "core":  "camera_directing_core",
+                        "tier":  "中",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap",
+                                                      "golden_empty_word_noise"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "景别/焦段/机位高度/机位运动/构图/画幅/交班（OTS 反打）",
+                                                   "missed_points":  "光学特性具体 T 值/进出画方向/180° 轴判定",
+                                                   "empty_words_detected":  "（无明显空话）",
+                                                   "teaching_note":  "中档：给出了焦段、机位高度、轨道位移量，也给了交班的 OTS 反打。但光圈/T 值缺失，进出画方向与 180° 轴判定未明确——若后续拍反打时判断跨轴会直接穿帮。",
+                                                   "word_count":  88
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_25",
+                        "sample_id":  "GS-25",
+                        "core":  "audio_directing_core",
+                        "tier":  "差",
+                        "usable_for_fewshot":  "No",
+                        "negative_sample_signal":  true,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap",
+                                                      "golden_empty_word_noise",
+                                                      "golden_negative_sample"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "音乐类型（仅说\"青春校园感\"）1/11",
+                                                   "missed_points":  "对白/声场层次/声音空间/同步点/音量动态/静默点/频率 EQ/过渡/音画反差/声效具体",
+                                                   "empty_words_detected":  "点点的/自然就行/感觉就像",
+                                                   "teaching_note":  "声音维度导演级反例：11 个声音要素射中 1 个。\"日剧那种\"是品味词，黑名单命中。",
+                                                   "word_count":  50
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_29",
+                        "sample_id":  "GS-29",
+                        "core":  "audio_directing_core",
+                        "tier":  "好",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "对白/声场层次/声音空间/同步点/音量动态/静默点/频率/过渡/声效（9/11）",
+                                                   "missed_points":  "音乐类型（留白无 BGM，这是设计抗衣）/音画反差策略未明确",
+                                                   "empty_words_detected":  "（无）",
+                                                   "teaching_note":  "好档：用环境音承载情绪（无 BGM）是确定选择而非遗漏。同步点设在第 3.8 秒呼吸节点前的 0.6 秒静默——问繁量尽作用。",
+                                                   "word_count":  162
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_26",
+                        "sample_id":  "GS-26",
+                        "core":  "audio_directing_core",
+                        "tier":  "差",
+                        "usable_for_fewshot":  "No",
+                        "negative_sample_signal":  true,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap",
+                                                      "golden_empty_word_noise",
+                                                      "golden_negative_sample"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "声效（仅\"雨声\"）/频率（\"低音\"） 2/11",
+                                                   "missed_points":  "对白/声场层次/声音空间/同步点/音量动态/静默点/过渡/音画反差/音乐具体",
+                                                   "empty_words_detected":  "电影感/氛围要够/压抑的低音",
+                                                   "teaching_note":  "\"电影感\"“压抑的低音\"又是品味词。被空话词表命中。",
+                                                   "word_count":  42
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_27",
+                        "sample_id":  "GS-27",
+                        "core":  "audio_directing_core",
+                        "tier":  "中",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap",
+                                                      "golden_empty_word_noise"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "对白/音乐类型/声场/音量/声效 5/11",
+                                                   "missed_points":  "声音空间混响/同步点/静默点/EQ/过渡/音画反差",
+                                                   "empty_words_detected":  "（无明显空话）",
+                                                   "teaching_note":  "中档：给了 BGM 乐器、-18dB 铺底、前景对白、远景广播。但混响、同步点、静默留白未给——混音师可用但需补完。",
+                                                   "word_count":  92
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_30",
+                        "sample_id":  "GS-30",
+                        "core":  "audio_directing_core",
+                        "tier":  "好",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "声效/BGM/声场/动态曲线/同步点/对白/频率（9/11）",
+                                                   "missed_points":  "空间混响/静默点/过渡/音画反差",
+                                                   "empty_words_detected":  "（无）",
+                                                   "teaching_note":  "好档：BGM 120 BPM 与奔跑步频 2:1 锁定是动画级精确。第 5.2 秒从 -20dB 突入主旋律到 -8dB 是动态曲线写法的标杆。",
+                                                   "word_count":  165
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_28",
+                        "sample_id":  "GS-28",
+                        "core":  "audio_directing_core",
+                        "tier":  "中",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "声效/音乐/声场/声音空间/音量/对白（6/11）",
+                                                   "missed_points":  "同步点/静默点/EQ 具体/过渡/音画反差",
+                                                   "empty_words_detected":  "（无）",
+                                                   "teaching_note":  "中档：给了咖啡店层次丰富的环境声与内心 VO 处理方式，但同步点与静默规划缺位。",
+                                                   "word_count":  88
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_32",
+                        "sample_id":  "GS-32",
+                        "core":  "audio_directing_core",
+                        "tier":  "优",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "对白/音乐/声效/声场层次/声音空间/同步点/动态/静默/频率/过渡/音画反差（11/11）",
+                                                   "missed_points":  "（无）",
+                                                   "empty_words_detected":  "（无）",
+                                                   "teaching_note":  "优档：“画面最满时声音最稀，以缺席承载情绪密度”——与雨中告别相反的音画反差策略，证明策略本身即变量。钢琴戏然而止的 1.5 秒真空是情绪生产力的峰值。",
+                                                   "word_count":  325
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_31",
+                        "sample_id":  "GS-31",
+                        "core":  "audio_directing_core",
+                        "tier":  "优",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "对白/音乐/声效/声场层次/声音空间/同步点/音量动态/静默点/频率EQ/过渡/音画反差（11/11）",
+                                                   "missed_points":  "（无）",
+                                                   "empty_words_detected":  "（无）",
+                                                   "teaching_note":  "优档标杆：四层声场给 Hz 区间与 dB 值；三个同步点各有情绪目的；音画反差明确：画面最静时声音最满，让耳朵接管叙事。",
+                                                   "word_count":  330
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_36",
+                        "sample_id":  "GS-36",
+                        "core":  "continuity_lock_core",
+                        "tier":  "中",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "光线/色温/身份锚/道具/脏污 5/11",
+                                                   "missed_points":  "轴线/情绪桥/时长/画框/音画/违反清单",
+                                                   "empty_words_detected":  "（无）",
+                                                   "teaching_note":  "中档：给了脏污的时间推进（一小时独坐后蛋糕吃剩 1/3）这是键点，但轴线与画框连续未规则化。",
+                                                   "word_count":  100
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_39",
+                        "sample_id":  "GS-39",
+                        "core":  "continuity_lock_core",
+                        "tier":  "优",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "轴线/光线方向链/色温链/身份锚/道具/脏污链/情绪桥/时长/画框/音画桥接/违反清单 11/11",
+                                                   "missed_points":  "（无）",
+                                                   "empty_words_detected":  "（无）",
+                                                   "teaching_note":  "优档标杆：违反清单写了 4 条，每条都可被机器或人工检查（伞柄侧、车票长度、睹毛水滴数、单光源）。这就是 \"机器可验证的连续性锁\"。",
+                                                   "word_count":  430
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_35",
+                        "sample_id":  "GS-35",
+                        "core":  "continuity_lock_core",
+                        "tier":  "中",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap",
+                                                      "golden_empty_word_noise"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "轴线/光线方向/色温 K 值/身份锚/道具位置 5/11",
+                                                   "missed_points":  "脏污/情绪桥/时长/画框/音画/违反清单",
+                                                   "empty_words_detected":  "（无明显空话）",
+                                                   "teaching_note":  "中档：给了轴线、光入射角、K 值与道具位置，但情绪桥与违反清单缺位——后者是连续性锁库真正的价值所在。",
+                                                   "word_count":  98
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_34",
+                        "sample_id":  "GS-34",
+                        "core":  "continuity_lock_core",
+                        "tier":  "差",
+                        "usable_for_fewshot":  "No",
+                        "negative_sample_signal":  true,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap",
+                                                      "golden_empty_word_noise",
+                                                      "golden_negative_sample"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "脏污湿度（\"下雨别时有时无\"）/轴线（模糊提醒） 2/11",
+                                                   "missed_points":  "光线/色温/身份/道具/情绪桥/时长/画框/音画/违反清单",
+                                                   "empty_words_detected":  "连戏的时候注意/别穿帮/别跳轴/就这样",
+                                                   "teaching_note":  "反例：\"别穿帮\"\"别跳轴\"是结果性话语，不是连续性锁。真正的锁是给出轴线公式、穿帮检查项。",
+                                                   "word_count":  30
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_37",
+                        "sample_id":  "GS-37",
+                        "core":  "continuity_lock_core",
+                        "tier":  "好",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "轴线/光线方向/色温链/身份锚/道具/情绪桥/违反清单 7/11",
+                                                   "missed_points":  "脏污渐进/时长/画框/音画桥接",
+                                                   "empty_words_detected":  "（无）",
+                                                   "teaching_note":  "好档：明确写了“色温渐变允许”的除外规则，与违反清单（太阳不能穿过两人之间）——这种“提前冒白否则穿帮”的写法是连续性锁库的核心功能。",
+                                                   "word_count":  220
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_40",
+                        "sample_id":  "GS-40",
+                        "core":  "continuity_lock_core",
+                        "tier":  "优",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "轴线/光线/色温/身份锚/道具/脏污/情绪桥/时长/画框/音画/违反清单 11/11",
+                                                   "missed_points":  "（无）",
+                                                   "empty_words_detected":  "（无）",
+                                                   "teaching_note":  "优档：\"右手食指有一道淡粉色纸割伤（第三集遗留）\"是跨集身份锚的教材写法——单条锚同时提供角色连续性与叙事线索双重价值。",
+                                                   "word_count":  448
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_33",
+                        "sample_id":  "GS-33",
+                        "core":  "continuity_lock_core",
+                        "tier":  "差",
+                        "usable_for_fewshot":  "No",
+                        "negative_sample_signal":  true,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap",
+                                                      "golden_empty_word_noise",
+                                                      "golden_negative_sample"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "身份锚（仅\"服装发型\"模糊）/光线（模糊） 2/11",
+                                                   "missed_points":  "轴线/色温 K 值/道具/脏污/情绪桥/时长/画框/音画/违反清单",
+                                                   "empty_words_detected":  "尽量/别换/差不多就行/看情况",
+                                                   "teaching_note":  "反例：连续性锚自己写成模糊语。\"看情况\"=竹筝完全丢。",
+                                                   "word_count":  32
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    },
+                    {
+                        "mapping_id":  "gs_failure_map_gs_38",
+                        "sample_id":  "GS-38",
+                        "core":  "continuity_lock_core",
+                        "tier":  "好",
+                        "usable_for_fewshot":  "Yes",
+                        "negative_sample_signal":  false,
+                        "planned_failure_codes":  [
+                                                      "golden_coverage_gap"
+                                                  ],
+                        "validator_evidence":  {
+                                                   "covered_points":  "轴线/光线/色温/身份锚/道具/脏污/情绪桥/时长/违反清单 9/11",
+                                                   "missed_points":  "画框连续细节/音画桥接",
+                                                   "empty_words_detected":  "（无）",
+                                                   "teaching_note":  "好档：重点在于“时长一致性”——掉水壶动作在 MS 和 CU 两个景别中都需 0.5 秒，这是动画剪辑的黑魔法。",
+                                                   "word_count":  245
+                                               },
+                        "source_field_refs":  [
+                                                  "core",
+                                                  "covered_points",
+                                                  "missed_points",
+                                                  "tier",
+                                                  "usable_for_fewshot",
+                                                  "empty_words_detected",
+                                                  "teaching_note",
+                                                  "word_count"
+                                              ]
+                    }
+                ]
+}

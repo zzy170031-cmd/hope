@@ -1,0 +1,64 @@
+﻿{
+    "schema_version":  "hope-kb-v0.2-source-register",
+    "register_name":  "hope-kb-v0.2-source-register",
+    "updated_at":  "2026-04-22",
+    "sources":  [
+                    {
+                        "source_id":  "golden_sample_library_csv_2026_04_22",
+                        "source_type":  "internal_golden_sample_export",
+                        "label":  "Golden Sample Library CSV export 2026-04-22",
+                        "path":  "docs/source-exports/golden-sample-library-642bd7876e0d4649814f35fb133b67f3-2026-04-22.csv",
+                        "sha256":  "2d0ce22f8c85ca59de6abf35a48239aadef9a2bd01bb3f7b4685bf80e06bf843",
+                        "applies_to":  [
+                                           "golden_sample_library",
+                                           "golden_sample_field_coverage_rules",
+                                           "golden_sample_failure_mapping",
+                                           "golden_sample_repair_mapping"
+                                       ],
+                        "notes":  "Canonical committed source export. All 40 rows and 17 fields must remain lossless."
+                    },
+                    {
+                        "source_id":  "golden_sample_normalized_staging_2026_04_22",
+                        "source_type":  "normalized_staging_artifact",
+                        "label":  "Lossless normalized staging artifact for golden sample library",
+                        "path":  "docs/normalized-staging/golden-sample-library-642bd7876e0d4649814f35fb133b67f3-2026-04-22.normalized.json",
+                        "sha256":  "3cc6ed6ee30a2c55c15805919d6b692e14c12fe1b1b2a605bdb279ced48bdb85",
+                        "applies_to":  [
+                                           "golden_sample_library"
+                                       ],
+                        "notes":  "Intermediate KB-only staging artifact accepted before v0.2 schema promotion."
+                    },
+                    {
+                        "source_id":  "hope_v0_2_scope_gate_readiness_2026_04_22",
+                        "source_type":  "main_control_readiness_memo",
+                        "label":  "Hope v0.2 scope gate readiness memo",
+                        "path":  "E:/codex/hope/docs/v0.2-scope-gate-readiness-2026-04-22.md",
+                        "applies_to":  [
+                                           "golden_sample_library_v0_2_schema_package"
+                                       ],
+                        "notes":  "Read-only main-control input. This KB package does not modify the Hope repo."
+                    }
+                ],
+    "provenance_entries":  [
+                               {
+                                   "provenance_id":  "golden_sample_v0_2_seed_package_2026_04_22",
+                                   "source_ids":  [
+                                                      "golden_sample_library_csv_2026_04_22",
+                                                      "golden_sample_normalized_staging_2026_04_22",
+                                                      "hope_v0_2_scope_gate_readiness_2026_04_22"
+                                                  ],
+                                   "generated_files":  [
+                                                           "seed/v0.2/golden_sample_library.json",
+                                                           "seed/v0.2/golden_sample_field_coverage_rules.json",
+                                                           "seed/v0.2/golden_sample_failure_mapping.json",
+                                                           "seed/v0.2/golden_sample_repair_mapping.json"
+                                                       ],
+                                   "preservation_contract":  {
+                                                                 "preserves_all_source_rows":  true,
+                                                                 "preserves_all_17_source_fields":  true,
+                                                                 "imports_into_v0_1_snapshot":  false,
+                                                                 "planning_only_until_future_hope_gate":  true
+                                                             }
+                               }
+                           ]
+}
