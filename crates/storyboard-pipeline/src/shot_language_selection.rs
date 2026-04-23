@@ -180,7 +180,8 @@ pub fn select_v108_shot_language_metadata(
     } else {
         select_lane_candidates(input)
     };
-    let camera_language_planning_signals = if content_blocked {
+    let raw_evidence_only = content_blocked || lane_candidates.is_empty();
+    let camera_language_planning_signals = if raw_evidence_only {
         vec![CameraLanguagePlanningSignal::RawEvidenceOnly]
     } else {
         collect_planning_signals(&lane_candidates)
@@ -190,7 +191,7 @@ pub fn select_v108_shot_language_metadata(
         lane_candidates,
         camera_language_planning_signals,
         blockers,
-        readiness: if content_blocked {
+        readiness: if raw_evidence_only {
             V108ShotLanguageSelectionReadiness::RawEvidenceOnly
         } else {
             V108ShotLanguageSelectionReadiness::PlanningMetadataOnly
@@ -254,13 +255,7 @@ fn select_lane_candidates(
     let evidence = combined_evidence(input);
     let mut candidates = Vec::new();
 
-    if contains_any(
-        &evidence,
-        &[
-            "guofeng", "wuxia", "xianxia", "weapon", "qinggong", "bamboo", "roof", "eave", "blade",
-            "rain",
-        ],
-    ) {
+    if routes_to_director_08(&evidence) {
         candidates.push(InternalStyleLaneCandidate {
             lane_id: InternalStyleLaneId::Director08,
             priority: 10,
@@ -273,20 +268,7 @@ fn select_lane_candidates(
         });
     }
 
-    if contains_any(
-        &evidence,
-        &[
-            "war",
-            "army",
-            "formation",
-            "battlefield",
-            "oath",
-            "command",
-            "flag",
-            "drum",
-            "epic crowd",
-        ],
-    ) {
+    if routes_to_director_09(&evidence) {
         candidates.push(InternalStyleLaneCandidate {
             lane_id: InternalStyleLaneId::Director09,
             priority: 10,
@@ -299,20 +281,7 @@ fn select_lane_candidates(
         });
     }
 
-    if contains_any(
-        &evidence,
-        &[
-            "urban",
-            "apocalypse",
-            "industrial",
-            "subway",
-            "overpass",
-            "ruins",
-            "evacuation",
-            "alarm",
-            "infrastructure",
-        ],
-    ) {
+    if routes_to_director_10(&evidence) {
         candidates.push(InternalStyleLaneCandidate {
             lane_id: InternalStyleLaneId::Director10,
             priority: 10,
@@ -325,18 +294,7 @@ fn select_lane_candidates(
         });
     }
 
-    if contains_any(
-        &evidence,
-        &[
-            "stage",
-            "group dance",
-            "performance",
-            "music",
-            "spotlight",
-            "entrance",
-            "final freeze",
-        ],
-    ) {
+    if routes_to_director_11(&evidence) {
         candidates.push(InternalStyleLaneCandidate {
             lane_id: InternalStyleLaneId::Director11,
             priority: 10,
@@ -438,15 +396,88 @@ fn select_lane_candidates(
         });
     }
 
-    if candidates.is_empty() {
-        candidates.push(InternalStyleLaneCandidate {
-            lane_id: InternalStyleLaneId::Director02,
-            priority: 1,
-            planning_signals: vec![CameraLanguagePlanningSignal::CrowdPressure],
-        });
-    }
-
     candidates
+}
+
+fn routes_to_director_08(evidence: &str) -> bool {
+    contains_any(
+        evidence,
+        &[
+            "guofeng", "wuxia", "xianxia", "weapon", "qinggong", "bamboo", "roof", "eave", "blade",
+            "rain", "武侠", "仙侠", "轻功", "竹林", "屋檐", "刀鞘", "兵器", "雨夜", "刀光",
+        ],
+    ) || (contains_any(evidence, &["国漫"]) && contains_any(evidence, &["热血打斗", "场域追逐"]))
+}
+
+fn routes_to_director_09(evidence: &str) -> bool {
+    contains_any(
+        evidence,
+        &[
+            "war",
+            "army",
+            "formation",
+            "battlefield",
+            "oath",
+            "command",
+            "flag",
+            "drum",
+            "epic crowd",
+            "战争",
+            "誓师",
+            "阵列",
+            "旗鼓",
+            "军阵",
+            "旗帜",
+            "战鼓",
+            "冲阵",
+        ],
+    ) || (contains_any(evidence, &["国漫"])
+        && contains_any(evidence, &["群像表演"])
+        && contains_any(evidence, &["战争", "誓师", "阵列", "旗鼓"]))
+}
+
+fn routes_to_director_10(evidence: &str) -> bool {
+    contains_any(
+        evidence,
+        &[
+            "urban",
+            "apocalypse",
+            "industrial",
+            "subway",
+            "overpass",
+            "ruins",
+            "evacuation",
+            "alarm",
+            "infrastructure",
+            "都市末世",
+            "工业压迫",
+            "地铁",
+            "高架",
+            "废墟",
+            "撤离",
+            "警报",
+        ],
+    )
+}
+
+fn routes_to_director_11(evidence: &str) -> bool {
+    contains_any(
+        evidence,
+        &[
+            "stage",
+            "group dance",
+            "performance",
+            "music",
+            "spotlight",
+            "entrance",
+            "final freeze",
+        ],
+    ) || (contains_any(evidence, &["原创"])
+        && contains_any(evidence, &["群像表演"])
+        && contains_any(
+            evidence,
+            &["舞台", "群舞", "音乐", "聚光灯", "入场", "定格"],
+        ))
 }
 
 fn collect_planning_signals(

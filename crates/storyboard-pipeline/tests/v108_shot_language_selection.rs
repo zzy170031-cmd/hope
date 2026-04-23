@@ -140,6 +140,26 @@ fn routes_guofeng_action_to_director_08_metadata_only() {
 }
 
 #[test]
+fn routes_chinese_guoman_wuxia_to_director_08_metadata_only() {
+    let hot_blood = select_v108_shot_language_metadata(&input_with_evidence(
+        "国漫 / 热血打斗，竹林雨夜，轻功追逐，刀鞘连续性，屋檐落点",
+    ));
+    let chase = select_v108_shot_language_metadata(&input_with_evidence(
+        "国漫 / 场域追逐，屋檐横向追拍，兵器位置和雨向要保持",
+    ));
+
+    assert_lane(&hot_blood, InternalStyleLaneId::Director08);
+    assert_signal(&hot_blood, CameraLanguagePlanningSignal::WeaponContinuity);
+    assert_signal(
+        &hot_blood,
+        CameraLanguagePlanningSignal::QinggongMovementAxis,
+    );
+    assert_lane(&chase, InternalStyleLaneId::Director08);
+    assert_no_runtime_output(&hot_blood);
+    assert_no_runtime_output(&chase);
+}
+
+#[test]
 fn routes_epic_group_or_war_to_director_09_metadata_only() {
     let input = input_with_evidence(
         "guoman group performance war oath army formation battlefield command flag drum epic crowd rhythm",
@@ -154,10 +174,40 @@ fn routes_epic_group_or_war_to_director_09_metadata_only() {
 }
 
 #[test]
+fn routes_chinese_epic_group_or_war_to_director_09_metadata_only() {
+    let input =
+        input_with_evidence("国漫 / 群像表演，战争誓师，军阵阵列，旗鼓桥接，战鼓节奏和大军冲阵");
+
+    let metadata = select_v108_shot_language_metadata(&input);
+
+    assert_lane(&metadata, InternalStyleLaneId::Director09);
+    assert_signal(&metadata, CameraLanguagePlanningSignal::FormationDepth);
+    assert_signal(&metadata, CameraLanguagePlanningSignal::FlagDrumBridge);
+    assert_no_runtime_output(&metadata);
+}
+
+#[test]
 fn routes_urban_apocalypse_pressure_to_director_10_metadata_only() {
     let input = input_with_evidence(
         "urban apocalypse industrial subway overpass ruins evacuation alarm infrastructure pressure",
     );
+
+    let metadata = select_v108_shot_language_metadata(&input);
+
+    assert_lane(&metadata, InternalStyleLaneId::Director10);
+    assert_signal(&metadata, CameraLanguagePlanningSignal::EvacuationAxis);
+    assert_signal(
+        &metadata,
+        CameraLanguagePlanningSignal::IndustrialCompression,
+    );
+    assert_signal(&metadata, CameraLanguagePlanningSignal::AlarmBridge);
+    assert_no_runtime_output(&metadata);
+}
+
+#[test]
+fn routes_chinese_urban_apocalypse_to_director_10_metadata_only() {
+    let input =
+        input_with_evidence("都市末世 / 工业压迫，地铁断电，高架废墟，撤离路线被警报和障碍压缩");
 
     let metadata = select_v108_shot_language_metadata(&input);
 
@@ -187,6 +237,20 @@ fn routes_stage_group_performance_to_director_11_metadata_only() {
 }
 
 #[test]
+fn routes_chinese_stage_group_performance_to_director_11_metadata_only() {
+    let input =
+        input_with_evidence("原创 / 群像表演，舞台亮灯，群舞入场，音乐拍点，聚光灯切换，全员定格");
+
+    let metadata = select_v108_shot_language_metadata(&input);
+
+    assert_lane(&metadata, InternalStyleLaneId::Director11);
+    assert_signal(&metadata, CameraLanguagePlanningSignal::StageAxis);
+    assert_signal(&metadata, CameraLanguagePlanningSignal::MusicSyncCue);
+    assert_signal(&metadata, CameraLanguagePlanningSignal::FreezeFramePlanning);
+    assert_no_runtime_output(&metadata);
+}
+
+#[test]
 fn keeps_original_seven_lanes_for_broad_action_emotion_suspense() {
     let broad_action =
         select_v108_shot_language_metadata(&input_with_evidence("broad action impact rhythm"));
@@ -203,6 +267,21 @@ fn keeps_original_seven_lanes_for_broad_action_emotion_suspense() {
     assert_no_lane(&emotion, InternalStyleLaneId::Director11);
     assert_lane(&suspense, InternalStyleLaneId::Director07);
     assert_no_lane(&suspense, InternalStyleLaneId::Director10);
+}
+
+#[test]
+fn unknown_evidence_does_not_fabricate_default_lane() {
+    let metadata =
+        select_v108_shot_language_metadata(&input_with_evidence("unclassified neutral source"));
+
+    assert!(metadata.lane_candidates.is_empty());
+    assert_eq!(
+        metadata.readiness,
+        V108ShotLanguageSelectionReadiness::RawEvidenceOnly
+    );
+    assert_signal(&metadata, CameraLanguagePlanningSignal::RawEvidenceOnly);
+    assert_no_lane(&metadata, InternalStyleLaneId::Director02);
+    assert_no_runtime_output(&metadata);
 }
 
 #[test]
