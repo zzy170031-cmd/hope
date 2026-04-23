@@ -17,31 +17,37 @@
 
 The KB golden sample package is ready to be treated as a v0.2 `golden_sample_library` contract-freeze candidate for planning, validation design, repair design, and future Qwen retrieval, but it is still not authorized for Hope runtime implementation or v0.1 contract changes.
 
-## 2026-04-23 Seedance2 V108 Alignment Refresh
+## 2026-04-23 Seedance2 V120 Alignment Refresh
 
-Main control later accepted `E:\codex\hope-kb @ 6f210f0` as the KB-only
-Seedance2 V108 sample update readiness package, with Hope control anchor
-`142225e3e6d029c2ed83e382c292d3a43cc9ddb0`.
+Main control later accepted V120 as the next full KB ingest source while
+keeping Hope runtime closed. V120 is now the primary sample-alignment source
+and V108 remains the comparison baseline.
 
 This freeze candidate remains the accepted docs-only record for the earlier
 40-row / 17-source-field KB v0.2 package. It is now historical reference for
-field-format purposes where V108 differs. The current V108 alignment addendum is:
+field-format purposes where V120 differs. The current primary-source alignment
+addendum is:
 
 ```text
-docs/contracts/export-overlays/seedance2-v108-v3-docs-alignment-refresh-2026-04-23.md
+docs/contracts/export-overlays/seedance2-v120-v3-docs-alignment-refresh-2026-04-23.md
 ```
 
-Current V108 alignment rules:
+Current V120 alignment rules:
 
-- V108 XLSX / DOCX is the canonical source format for this gate.
-- The old 40-row package remains unchanged and is not rewritten from V108.
-- V108 rows are not imported into current v0.2 sample records.
-- V108 rows are not promoted to runtime positive few-shot.
+- V120 workbook / control memo is the canonical source format for this gate.
+- The old 40-row package remains unchanged and is not rewritten from V120.
+- V120 rows are not imported into current v0.2 sample records.
+- V120 rows are not promoted to runtime positive few-shot.
+- field count remains `23`, so the main delta from V108 is row/count emphasis
+  and source priority rather than new source columns.
+- V120 expands reviewed source rows from `115` to `120`, grows `reserve` rows
+  from `7` to `12`, and adds `CNSEQ04`, `CNSEQ05`, and `CNSEQ06`.
 - Conflicts are marked `v3_alignment_gap`, not hard-merged.
-- Blank or placeholder surfaces are marked `future_model_fill_surface`.
-- `reference_bundle` means only `external_reference_handles`; do not invent
-  `reference_control_core`, image paths, URLs, asset IDs, character appearance,
-  or scene detail.
+- Blank or placeholder surfaces are marked `future_model_fill_surface` and must
+  be recomputed from actual V120 ingest outputs, not guessed here.
+- `reference_bundle` still means only `external_reference_handles`; do not
+  invent `reference_control_core`, image paths, URLs, asset IDs, character
+  appearance, or scene detail.
 
 No Hope runtime implementation, validator, repair engine, exporter, workbook,
 desktop, intake, Qwen, Seedance, or `hope-kb` mutation is authorized by this

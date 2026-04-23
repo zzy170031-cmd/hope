@@ -16,33 +16,46 @@
 
 Hope uses Qwen/千问 to generate structured storyboard truth; V3/V4 define the Seedance-ready field overlay that constrains Qwen output and later compiles to Seedance 2.0 prompt/payload, but this proposal must not replace the frozen Hope v0.1 17-sheet workbook contract.
 
-## 2026-04-23 Seedance2 V108 Alignment Refresh
+## 2026-04-23 Seedance2 V120 Alignment Refresh
 
-Main control accepted `E:\codex\hope-kb @ 6f210f0` as the KB-only Seedance2
-V108 sample update readiness package at Hope anchor
-`142225e3e6d029c2ed83e382c292d3a43cc9ddb0`. From this point, the local V108
-XLSX / DOCX table format is the latest canonical source format for sample and
-field alignment.
+Main control later accepted V120 as the next full KB ingest source through:
+
+- `origin/codex/contracts-freeze:docs/seedance2-v120-full-kb-ingest-review-2026-04-23.md`
+- `origin/codex/contracts-freeze:docs/v120-v3-kb-full-ingest-dispatch-2026-04-23.md`
+
+From this point, the local V120 workbook / control memo becomes the latest
+primary source format for sample and field alignment, while V108 becomes the
+comparison baseline.
 
 This 2026-04-22 field overlay remains historical proposal reference. Where it
-conflicts with V108, use
-`docs/contracts/export-overlays/seedance2-v108-v3-docs-alignment-refresh-2026-04-23.md`
-as the current docs-only alignment addendum.
+conflicts with V120, use
+`docs/contracts/export-overlays/seedance2-v120-v3-docs-alignment-refresh-2026-04-23.md`
+as the current docs-only alignment addendum. The older
+`seedance2-v108-v3-docs-alignment-refresh-2026-04-23.md` remains the comparison
+baseline, not the current primary-source addendum.
 
-V108-specific alignment changes:
+V120-specific alignment changes:
 
-- `sample_type` now means `single_shot` or `sequence_shot`; it must not be
-  confused with the old golden-sample sample-category meaning.
-- `scene_performance_core` fuses the old `visual_scene_core` and
-  `motion_performance_core` source axes.
-- `continuity_negative_core` fuses continuity locks with negative constraints
-  and needs a future split/retention decision.
+- source field count remains `23`, so the delta from V108 is row/count emphasis
+  and source priority, not a new source-column schema
+- total rows move from `115` to `120`; `official` remains `108`, while
+  `reserve` expands from `7` to `12`
+- reviewed sequence emphasis increases from the V108 baseline by expanding
+  `sequence_shot` rows from `36` to `48` and adding `CNSEQ04`, `CNSEQ05`, and
+  `CNSEQ06`
+- `sample_type` still means `single_shot` or `sequence_shot`; it must not be
+  confused with the old golden-sample sample-category meaning
+- `scene_performance_core` still fuses the old `visual_scene_core` and
+  `motion_performance_core` source axes
+- `continuity_negative_core` still fuses continuity locks with negative
+  constraints and needs a future split/retention decision
 - `reference_bundle` is only source input for `external_reference_handles`, not
-  image paths, URLs, asset IDs, or completed `reference_control_core`.
+  image paths, URLs, asset IDs, or completed `reference_control_core`
 - `prompt_body` is source prompt text / candidate text, not compiled Seedance
-  adapter output.
-- Blank and placeholder surfaces are preserved as `future_model_fill_surface`;
-  they must not be guessed, backfilled, or promoted into positive few-shot.
+  adapter output
+- unresolved gaps and `future_model_fill_surface` remain explicit planning
+  markers; exact V120 field-level placeholder counts must be recomputed by KB
+  ingest, not guessed in this V3 refresh
 
 No Hope product implementation, exporter, Rust DTO, validator, desktop, intake,
 Qwen, Seedance, workbook, or `hope-kb` mutation is authorized by this refresh.
@@ -62,7 +75,8 @@ This proposal intentionally carries the source material alongside the field hand
 | V3 黄金样本库 | `https://www.notion.so/642bd7876e0d4649814f35fb133b67f3` | User will add 48 golden samples later; fields are reserved here. |
 | V4 structured schema source | `docs/contracts/export-overlays/source-materials/Hope_V4_结构化分镜Schema_Seedance优先版.md` | Verbatim local source copied from `D:\Downloads`. |
 | V4 Notion build-list source | `docs/contracts/export-overlays/source-materials/Hope_V4_Notion建库清单.md` | Verbatim local source copied from `D:\Downloads`. |
-| Seedance2 V108 alignment refresh | `docs/contracts/export-overlays/seedance2-v108-v3-docs-alignment-refresh-2026-04-23.md` | 2026-04-23 addendum. V108 XLSX / DOCX is the latest canonical source format for this gate. |
+| Seedance2 V120 alignment refresh | `docs/contracts/export-overlays/seedance2-v120-v3-docs-alignment-refresh-2026-04-23.md` | 2026-04-23 current addendum. V120 is the primary source; V108 is the comparison baseline. |
+| Seedance2 V108 alignment refresh | `docs/contracts/export-overlays/seedance2-v108-v3-docs-alignment-refresh-2026-04-23.md` | Historical comparison baseline addendum carried forward under the V120 gate. |
 
 V3 source note: the canonical source remains the Notion page above because it contains embedded databases and live Notion schema. This handoff preserves the V3 field content that matters for engineering review in the field tables and appendices below, and commits the complete local V4 markdown sources as companion material.
 
