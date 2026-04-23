@@ -11,16 +11,16 @@ export type QwenRuntimeStatus =
   | "local_invalid";
 
 export type WorkbenchModelId =
-  | "hope_desktop_default"
-  | "qwen_contract_shell"
-  | "seedance_overlay_proposal";
+  | "gpt_4o"
+  | "gpt_4_1_mini"
+  | "hope_storyboard_mode";
 
 export type SceneFusionOption =
-  | "悬疑开场"
-  | "人物对话"
-  | "动作推进"
-  | "情绪转场"
-  | "结尾收束";
+  | "热血战斗"
+  | "悬疑追踪"
+  | "都市奇幻"
+  | "校园日常"
+  | "治愈成长";
 
 export interface StoryboardWorkbenchRow {
   id: string;

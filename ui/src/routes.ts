@@ -11,8 +11,8 @@ export const ROUTES: RouteEntry[] = [
   {
     id: "workbench",
     hash: "#/workbench",
-    label: "Hope 工作台",
-    description: "单页中文工作台，融合脚本整理、分镜产出和桌面端导出。",
+    label: "Hope 动漫分镜脚本生成工作台",
+    description: "严格参考图对齐的单页中文工作台，涵盖脚本区、任务条、分镜表格、分页和导出区。",
   },
 ];
 
