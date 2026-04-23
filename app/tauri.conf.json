@@ -26,7 +26,18 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all"
+    "active": true,
+    "targets": [
+      "msi"
+    ],
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "wix": {
+        "template": "wix/hope-per-user-main.wxs",
+        "upgradeCode": "3d516b1d-8b4d-5c0e-9918-1bfda3a2b190"
+      }
+    }
   }
 }
