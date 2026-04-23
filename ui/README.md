@@ -1,12 +1,12 @@
 # Hope Desktop UI
 
-React + TypeScript desktop shell for the Hope MVP internal trial.
+React + TypeScript single-page workbench for the Hope desktop internal trial.
 
 The UI must not bypass Rust commands to touch SQLite directly.
 
 ## Current desktop shell scope
 
-- Four packaged entry surfaces remain in place: Projects, Script Workbench, Storyboard Review, and Export Center.
-- The shell prefers packaged desktop IPC when it is available and falls back to fixture data only in browser preview mode.
-- Writer readiness captures a local input package only; it does not call Qwen, Seedance, or write export payloads.
-- UI alignment can improve naming, layout, and workflow clarity, but it must not widen backend contracts.
+- The primary surface is now one Chinese workbench page rather than a multi-route engineering shell.
+- The page distinguishes packaged readonly signals, packaged writer/preview snapshots, and editable front-end working state.
+- Script expansion, storyboard generation, pagination, row editing, and export are real front-end interactions inside the frozen desktop boundary.
+- The workbench does not claim live Qwen, Seedance, KB retrieval, exporter integration, or runtime growth.

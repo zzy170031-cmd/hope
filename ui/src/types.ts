@@ -1,4 +1,4 @@
-export type ViewId = "projects" | "writer" | "preview" | "export";
+export type ViewId = "workbench";
 
 export type LoadStatus = "loading" | "ready" | "empty" | "error";
 
@@ -9,6 +9,31 @@ export type QwenRuntimeStatus =
   | "local_checking"
   | "local_present"
   | "local_invalid";
+
+export type WorkbenchModelId =
+  | "hope_desktop_default"
+  | "qwen_contract_shell"
+  | "seedance_overlay_proposal";
+
+export type SceneFusionOption =
+  | "悬疑开场"
+  | "人物对话"
+  | "动作推进"
+  | "情绪转场"
+  | "结尾收束";
+
+export interface StoryboardWorkbenchRow {
+  id: string;
+  order: number;
+  person: string;
+  shot: string;
+  sceneScale: string;
+  visualDescription: string;
+  characterAction: string;
+  dialogue: string;
+  prompt: string;
+  durationSeconds: number;
+}
 
 export type StoryboardReadinessStatus =
   | "Draft"
