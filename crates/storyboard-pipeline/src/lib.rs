@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod shot_language_selection;
+
 use std::fmt;
 
 pub use core_domain::{Exporter, LLMProvider, PromptRenderer, SceneTaxonomyRecord, Validator};
