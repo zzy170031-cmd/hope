@@ -1,12 +1,12 @@
-# ui
+# Hope Desktop UI
 
-React + TypeScript UI for Hope.
+React + TypeScript desktop shell for the Hope MVP internal trial.
 
 The UI must not bypass Rust commands to touch SQLite directly.
 
-## Track B skeleton status
+## Current desktop shell scope
 
-- Four entry views are wired as hash routes: projects, writer, preview, export.
-- Tauri calls are currently mocked behind `src/bridge/hopeBridge.ts`.
-- The placeholder command names are documented in `contracts/ui-skeleton-contract.md`.
-- Any IPC payload, response shape, or field name still marked as `待 Track A 对齐` must stay as a placeholder until Track A freezes the contract.
+- Four packaged entry surfaces remain in place: Projects, Script Workbench, Storyboard Review, and Export Center.
+- The shell prefers packaged desktop IPC when it is available and falls back to fixture data only in browser preview mode.
+- Writer readiness captures a local input package only; it does not call Qwen, Seedance, or write export payloads.
+- UI alignment can improve naming, layout, and workflow clarity, but it must not widen backend contracts.

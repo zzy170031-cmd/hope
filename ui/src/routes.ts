@@ -11,26 +11,26 @@ export const ROUTES: RouteEntry[] = [
   {
     id: "projects",
     hash: "#/projects",
-    label: "项目创建 / 切换",
-    description: "选择、创建或切换当前工作项目。",
+    label: "Projects",
+    description: "Select the working project and confirm the active desktop context.",
   },
   {
     id: "writer",
     hash: "#/writer",
-    label: "Writer 四层查看",
-    description: "Synopsis -> Story -> Screenplay -> Storyboard。",
+    label: "Script Workbench",
+    description: "Capture the brief, review writing layers, and prepare storyboard input.",
   },
   {
     id: "preview",
     hash: "#/preview",
-    label: "Storyboard / RenderSegment / Cuts 预览",
-    description: "查看三层预览入口与当前占位状态。",
+    label: "Storyboard Review",
+    description: "Check frames, motion, and cut continuity before delivery.",
   },
   {
     id: "export",
     hash: "#/export",
-    label: "Export / Validation 面板",
-    description: "查看导出与校验面板的最小入口。",
+    label: "Export Center",
+    description: "Review validation and keep Excel delivery on track.",
   },
 ];
 

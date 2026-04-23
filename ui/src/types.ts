@@ -11,20 +11,20 @@ export type QwenRuntimeStatus =
   | "local_invalid";
 
 export type StoryboardReadinessStatus =
-  | "草案"
-  | "待补全"
-  | "待修正"
-  | "校验通过"
-  | "可导出"
-  | "阻断";
+  | "Draft"
+  | "Needs Detail"
+  | "Needs Polish"
+  | "Validated"
+  | "Ready to Export"
+  | "Blocked";
 
 export type StoryboardSemanticGroup =
-  | "画面意图"
-  | "运动与镜头"
-  | "声音与对白"
-  | "连续性与交接"
-  | "参考与锁定"
-  | "导出就绪";
+  | "Visual Intent"
+  | "Camera and Motion"
+  | "Sound and Dialogue"
+  | "Continuity and Handoff"
+  | "Reference Locks"
+  | "Delivery Prep";
 
 export type WriterInputKind = "synopsis" | "script" | "brief";
 

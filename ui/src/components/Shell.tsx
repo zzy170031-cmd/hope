@@ -15,9 +15,9 @@ export function Shell({ activeView, onNavigate, children }: ShellProps) {
         <div className="brand">
           <div>
             <div className="brand__eyebrow">Hope</div>
-            <h1>UI Skeleton</h1>
+            <h1>Desktop Workbench</h1>
           </div>
-          <span className="brand__badge">Track B</span>
+          <span className="brand__badge">Internal Trial</span>
         </div>
 
         <nav className="nav">
@@ -35,8 +35,10 @@ export function Shell({ activeView, onNavigate, children }: ShellProps) {
         </nav>
 
         <section className="sidebar__note">
-          <strong>边界说明</strong>
-          <p>桌面壳优先走 IPC，浏览器开发模式回落到 fixture mock；UI 不直接触碰 SQLite，也不扩展主线程 contract。</p>
+          <strong>Trial Boundary</strong>
+          <p>
+            Desktop prefers packaged IPC when it is available. Browser preview falls back to local fixture data. This shell does not call live Qwen, Seedance, or SQLite directly.
+          </p>
         </section>
       </aside>
 

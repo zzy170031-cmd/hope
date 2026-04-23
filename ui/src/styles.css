@@ -156,6 +156,18 @@ button {
   margin-bottom: 24px;
 }
 
+.workspace__title {
+  display: grid;
+  gap: 8px;
+}
+
+.workspace__lede {
+  max-width: 62ch;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .workspace__status {
   display: flex;
   justify-content: flex-end;
