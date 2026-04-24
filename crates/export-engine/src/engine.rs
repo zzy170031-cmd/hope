@@ -666,6 +666,12 @@ fn sanitize_natural_text(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    use core_domain::{
+        PromptBodyCandidate, ScenePerformanceProjection, SequenceFieldState, SequenceGrouping,
+        StructureMode,
+    };
     use serde_json::json;
 
     #[test]
@@ -757,9 +763,86 @@ mod tests {
         assert!(constraint.identity_baseline_clause.contains("面部细节"));
         assert!(constraint.negative_guard_clause.contains("脏脸"));
         assert!(constraint.negative_guard_clause.contains("五官错位"));
-        assert!(constraint
-            .negative_guard_clause
-            .contains("低清晰度面部纹理"));
+        assert!(
+            constraint
+                .negative_guard_clause
+                .contains("低清晰度面部纹理")
+        );
+    }
+    #[test]
+    fn export_v120_storyboard_bundle_writes_ready_structured_artifacts() {
+        let request = V120StoryboardExportRequest {
+            export_manifest_id: "storyboard-export-152".to_string(),
+            result_id: "storyboard-152".to_string(),
+            rows: vec![GeneratedStoryboardRow {
+                shot_id: "GS-BRIDGE-001".to_string(),
+                order: 1,
+                person: "lead_pair".to_string(),
+                shot_title: "Bridge dialogue sample".to_string(),
+                scene_scale: "MCU".to_string(),
+                visual_description: "Two leads hold a restrained dialogue beat.".to_string(),
+                character_action: "One lead answers with a quiet nod.".to_string(),
+                dialogue: "We move before dawn.".to_string(),
+                prompt_text: String::new(),
+                duration_seconds: 8,
+                prompt_body_candidate: PromptBodyCandidate {
+                    source_sample_id: "GS-BRIDGE-001".to_string(),
+                    source_prompt_body: "raw prompt body should stay out of prompt_text"
+                        .to_string(),
+                    candidate_text: Some(
+                        "raw prompt body should stay out of prompt_text".to_string(),
+                    ),
+                    blocked: false,
+                    blocker_codes: vec![],
+                },
+                scene_performance_projection: ScenePerformanceProjection {
+                    source_sample_id: "GS-BRIDGE-001".to_string(),
+                    source_sample_title: "Bridge dialogue sample".to_string(),
+                    scene_scale: "MCU".to_string(),
+                    person: "lead_pair".to_string(),
+                    visual_description: "Two leads hold a restrained dialogue beat.".to_string(),
+                    character_action: "One lead answers with a quiet nod.".to_string(),
+                    fused_source_text: "Dialogue bridge evidence".to_string(),
+                    sequence_grouping: SequenceGrouping {
+                        structure_mode: StructureMode::SingleShot,
+                        sequence_id: None,
+                        shot_order: None,
+                        sequence_field_state: SequenceFieldState::NotApplicable,
+                    },
+                },
+                external_reference_handle_candidates: vec![],
+                sequence_grouping: SequenceGrouping {
+                    structure_mode: StructureMode::SingleShot,
+                    sequence_id: None,
+                    shot_order: None,
+                    sequence_field_state: SequenceFieldState::NotApplicable,
+                },
+            }],
+        };
+
+        let bundle =
+            export_v120_storyboard_bundle(&request).expect("v120 storyboard export should succeed");
+
+        assert_eq!(bundle.workbook.sheets.len(), 1);
+        assert_eq!(bundle.workbook.sheets[0].rows.len(), 1);
+        assert_eq!(bundle.artifacts.len(), 3);
+        assert!(
+            bundle
+                .artifacts
+                .iter()
+                .all(|artifact| artifact.row_count == 1 && artifact.path.is_file())
+        );
+
+        let json_artifact = bundle
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.artifact_kind == "storyboard_json")
+            .expect("json artifact should exist");
+        let json_text =
+            fs::read_to_string(&json_artifact.path).expect("json artifact should be readable");
+
+        assert!(json_text.contains("Bridge dialogue sample"));
+        assert!(!json_text.contains("raw prompt body should stay out of prompt_text"));
     }
 }
 

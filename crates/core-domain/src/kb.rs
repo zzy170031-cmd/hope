@@ -57,6 +57,36 @@ pub struct KbGoldenSampleRuntimePackage {
     pub source_register: GoldenSampleSourceRegister,
 }
 
+impl KbGoldenSampleRuntimePackage {
+    pub fn manifest_golden_sample_record_count(&self) -> usize {
+        self.manifest.record_counts.golden_sample_library
+    }
+
+    pub fn official_record_count(&self) -> usize {
+        self.golden_sample_library
+            .records
+            .iter()
+            .filter(|record| record.is_official())
+            .count()
+    }
+
+    pub fn reserve_record_count(&self) -> usize {
+        self.golden_sample_library
+            .records
+            .iter()
+            .filter(|record| record.is_reserve())
+            .count()
+    }
+
+    pub fn positive_fewshot_record_count(&self) -> usize {
+        self.golden_sample_library
+            .records
+            .iter()
+            .filter(|record| record.is_positive_fewshot_candidate())
+            .count()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GoldenSampleLibraryAsset {
     pub schema_version: String,
@@ -92,6 +122,31 @@ pub struct GoldenSampleLibraryRecord {
     pub negative_sample: GoldenSampleNegativeSample,
     pub v3_core_coverage: GoldenSampleV3CoreCoverage,
     pub repair_mapping_planning: GoldenSampleRepairMappingPlanning,
+}
+
+impl GoldenSampleLibraryRecord {
+    pub fn is_official(&self) -> bool {
+        self.classification
+            .library_status
+            .eq_ignore_ascii_case("official")
+    }
+
+    pub fn is_reserve(&self) -> bool {
+        self.classification
+            .library_status
+            .eq_ignore_ascii_case("reserve")
+    }
+
+    pub fn is_positive_fewshot_candidate(&self) -> bool {
+        self.is_official()
+            && self.classification.usable_for_fewshot
+            && self.fewshot.eligible
+            && self.fewshot.source_value.eq_ignore_ascii_case("Yes")
+            && self
+                .source_fields
+                .usable_for_fewshot
+                .eq_ignore_ascii_case("Yes")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

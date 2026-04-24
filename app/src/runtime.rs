@@ -11,12 +11,12 @@ use core_domain::{
     SequenceFieldState, SequenceGrouping, StoryboardDurationPlan, StoryboardExportStatus,
     StructureMode,
 };
-use export_engine::{export_v120_storyboard_bundle, V120StoryboardExportRequest};
+use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
 use validators::{
+    RepairRecommendation, WEEK3_SHARED_FIXTURE_PATH, Week3SharedFixture,
     generate_week3_repair_recommendations, generate_week3_validation_report,
-    load_week3_shared_fixture, project_v120_evidence_aware_findings, RepairRecommendation,
-    Week3SharedFixture, WEEK3_SHARED_FIXTURE_PATH,
+    load_week3_shared_fixture, project_v120_evidence_aware_findings,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -410,7 +410,7 @@ fn select_golden_sample_records<'a>(
 
     let mut selected = records
         .iter()
-        .filter(|record| record.classification.library_status == "official")
+        .filter(|record| record.is_official())
         .filter(|record| {
             let fields = &record.source_fields;
             query.contains(&fields.scene_category.to_lowercase())
@@ -423,7 +423,7 @@ fn select_golden_sample_records<'a>(
     if selected.is_empty() {
         selected = records
             .iter()
-            .filter(|record| record.classification.library_status == "official")
+            .filter(|record| record.is_official())
             .take(target_rows)
             .collect();
     }
@@ -746,19 +746,20 @@ mod tests {
     };
 
     use super::{
-        build_storyboard_preview_plan, build_validation_export_panel_snapshot_from_fixture,
-        expand_script, export_bundle, generate_storyboard, resolve_scene_taxonomy,
         StoryboardPreviewPlanRequest, ValidationExportPanelSnapshotRequest,
-        ValidationExportPanelState,
+        ValidationExportPanelState, build_storyboard_preview_plan,
+        build_validation_export_panel_snapshot_from_fixture, expand_script, export_bundle,
+        generate_storyboard, resolve_scene_taxonomy, select_golden_sample_records,
     };
     use crate::state::AppState;
-    use validators::{load_week3_shared_fixture, WEEK3_SHARED_FIXTURE_PATH};
+    use validators::{WEEK3_SHARED_FIXTURE_PATH, load_week3_shared_fixture};
 
     fn test_state() -> AppState {
         let store = StoreSkeleton::new(DualSqliteConnectionPolicy::new(
             "E:/codex/hope-kb/snapshots/hope-kb-v0.1.sqlite3".into(),
             "E:/codex/hope/data/hope.sqlite3".into(),
         ));
+        let golden_sample_package = test_golden_sample_package();
         let kb_runtime = KbRuntimeHandle {
             snapshot: KbSnapshotRecord {
                 snapshot_id: "hope-kb-v0.1".to_string(),
@@ -775,8 +776,14 @@ mod tests {
                 has_failure_patterns: true,
                 has_repair_template_mapping: true,
                 has_golden_sample_v120_package: true,
-                golden_sample_record_count: 1,
-                golden_sample_source_count: 1,
+                golden_sample_record_count: golden_sample_package
+                    .manifest
+                    .record_counts
+                    .golden_sample_library,
+                golden_sample_source_count: golden_sample_package
+                    .manifest
+                    .record_counts
+                    .golden_sample_sources,
             },
         };
         let kb_knowledge = KbKnowledgeBundle {
@@ -857,51 +864,208 @@ mod tests {
             ],
         };
 
-        AppState::new(
-            store,
-            kb_runtime,
-            kb_knowledge,
-            test_golden_sample_package(),
-        )
+        AppState::new(store, kb_runtime, kb_knowledge, golden_sample_package)
     }
 
     fn test_golden_sample_package() -> KbGoldenSampleRuntimePackage {
-        let record = GoldenSampleLibraryRecord {
-            machine_id: "golden_sample_bridge_01".to_string(),
-            sample_id: "GS-BRIDGE-01".to_string(),
+        let official_count = 108usize;
+        let reserve_count = 44usize;
+        let total_count = official_count + reserve_count;
+        let mut records = Vec::with_capacity(total_count);
+        let mut failure_records = Vec::with_capacity(total_count);
+        let mut repair_records = Vec::with_capacity(total_count);
+
+        for index in 0..total_count {
+            let is_official = index < official_count;
+            let record = test_golden_sample_record(index + 1, is_official);
+            failure_records.push(test_failure_mapping_record(index + 1, &record));
+            repair_records.push(test_repair_mapping_record(index + 1, &record));
+            records.push(record);
+        }
+
+        KbGoldenSampleRuntimePackage {
+            manifest: KbBundleManifestRecord {
+                snapshot_version: "v0.2".to_string(),
+                snapshot_name: "hope-kb-golden-sample-library-v0.2".to_string(),
+                content_hash_algo: "sha256".to_string(),
+                content_hash: "bundle-sha256:test".to_string(),
+                seed_import_format: "hope-kb-golden-sample-seed-bundle-v0.2".to_string(),
+                imported_at: "2026-04-23".to_string(),
+                primary_key: "machine_id".to_string(),
+                bundle_order: vec![
+                    "seed/v0.2/manifest.json".to_string(),
+                    "seed/v0.2/golden_sample_library.json".to_string(),
+                    "seed/v0.2/golden_sample_field_coverage_rules.json".to_string(),
+                    "seed/v0.2/golden_sample_failure_mapping.json".to_string(),
+                    "seed/v0.2/golden_sample_repair_mapping.json".to_string(),
+                    "seed/v0.2/source_register.json".to_string(),
+                ],
+                record_counts: KbBundleRecordCounts {
+                    golden_sample_library: total_count,
+                    golden_sample_field_coverage_rules: 5,
+                    golden_sample_failure_mapping: total_count,
+                    golden_sample_repair_mapping: total_count,
+                    golden_sample_sources: 14,
+                    golden_sample_provenance_entries: 4,
+                },
+            },
+            golden_sample_library: GoldenSampleLibraryAsset {
+                schema_version: "golden_sample_library.v0.2".to_string(),
+                asset_name: "golden_sample_library".to_string(),
+                generated_at: "2026-04-23".to_string(),
+                source: GoldenSampleAssetSource {
+                    primary_workbook: "workbook.xlsx".to_string(),
+                    primary_workbook_sha256: "hash".to_string(),
+                    control_memo: "memo.docx".to_string(),
+                    control_memo_sha256: "hash".to_string(),
+                    control_review: "review.md".to_string(),
+                    control_dispatch: "dispatch.md".to_string(),
+                    comparison_baseline_source_id: "v108".to_string(),
+                },
+                record_count: total_count,
+                source_field_order: vec![
+                    "shot_id".to_string(),
+                    "library_status".to_string(),
+                    "sample_type".to_string(),
+                    "scene_category".to_string(),
+                    "prompt_body".to_string(),
+                ],
+                records,
+            },
+            field_coverage_rules: GoldenSampleFieldCoverageRuleAsset {
+                schema_version: "golden_sample_field_coverage_rules.v0.2".to_string(),
+                asset_name: "golden_sample_field_coverage_rules".to_string(),
+                generated_at: "2026-04-23".to_string(),
+                source_context: GoldenSampleSourceContext {
+                    primary_source_id: "v120".to_string(),
+                    comparison_source_id: "v108".to_string(),
+                },
+                record_count: 5,
+                records: test_field_coverage_rules(total_count as u32, official_count as u32),
+            },
+            failure_mapping: GoldenSampleFailureMappingAsset {
+                schema_version: "golden_sample_failure_mapping.v0.2".to_string(),
+                asset_name: "golden_sample_failure_mapping".to_string(),
+                generated_at: "2026-04-23".to_string(),
+                source_context: GoldenSampleSourceContext {
+                    primary_source_id: "v120".to_string(),
+                    comparison_source_id: "v108".to_string(),
+                },
+                failure_code_definitions: vec![GoldenSampleFailureCodeDefinition {
+                    failure_code: "golden_coverage_gap".to_string(),
+                    source_fields: vec!["missed_points".to_string()],
+                    meaning: "coverage gap".to_string(),
+                }],
+                record_count: total_count,
+                records: failure_records,
+            },
+            repair_mapping: GoldenSampleRepairMappingAsset {
+                schema_version: "golden_sample_repair_mapping.v0.2".to_string(),
+                asset_name: "golden_sample_repair_mapping".to_string(),
+                generated_at: "2026-04-23".to_string(),
+                source_context: GoldenSampleSourceContext {
+                    primary_source_id: "v120".to_string(),
+                    comparison_source_id: "v108".to_string(),
+                },
+                record_count: total_count,
+                records: repair_records,
+            },
+            source_register: GoldenSampleSourceRegister {
+                schema_version: "hope-kb-v0.2-source-register".to_string(),
+                register_name: "hope-kb-v0.2-source-register".to_string(),
+                updated_at: "2026-04-23".to_string(),
+                sources: (1..=14)
+                    .map(|index| GoldenSampleSourceRegisterEntry {
+                        source_id: format!("v120_source_{index:02}"),
+                        source_type: "immutable_raw_xlsx".to_string(),
+                        label: format!("V120 Source {index:02}"),
+                        path: format!("sources/workbook_{index:02}.xlsx"),
+                        sha256: Some(format!("hash-{index:02}")),
+                        applies_to: vec!["golden_sample_library".to_string()],
+                        notes: "test source".to_string(),
+                    })
+                    .collect(),
+                provenance_entries: (1..=4)
+                    .map(|index| GoldenSampleSourceRegisterProvenance {
+                        provenance_id: format!("v120_package_{index:02}"),
+                        source_ids: vec![format!("v120_source_{index:02}")],
+                        generated_files: vec![format!(
+                            "seed/v0.2/golden_sample_library_part_{index:02}.json"
+                        )],
+                        preservation_contract: BTreeMap::from([(
+                            "imports_into_live_hope_runtime".to_string(),
+                            false,
+                        )]),
+                    })
+                    .collect(),
+            },
+        }
+    }
+
+    fn test_golden_sample_record(index: usize, is_official: bool) -> GoldenSampleLibraryRecord {
+        let sample_id = if index == 1 {
+            "GS-BRIDGE-01".to_string()
+        } else {
+            format!("GS-BRIDGE-{index:03}")
+        };
+        let machine_id = if index == 1 {
+            "golden_sample_bridge_01".to_string()
+        } else {
+            format!("golden_sample_bridge_{index:03}")
+        };
+        let library_status = if is_official { "official" } else { "reserve" };
+        let reserve_reason = if is_official {
+            String::new()
+        } else {
+            "new_kb152_candidate".to_string()
+        };
+        let usable_for_fewshot = if is_official { "Yes" } else { "No" };
+        let reference_bundle = if index == 1 {
+            "scene_room(layout,strong) char_lead(face,reference) plate_url(url,strong) plate_uri(uri,strong) plate_media(media,strong) plate_asset(asset,strong) plate_file(file,strong) C:/refs/chair(layout,strong)".to_string()
+        } else {
+            format!("scene_room_{index}(layout,strong) char_lead_{index}(face,reference)")
+        };
+
+        GoldenSampleLibraryRecord {
+            machine_id,
+            sample_id: sample_id.clone(),
             schema_version: "golden_sample_library.v0.2".to_string(),
             source_fields: GoldenSampleSourceFields {
-                shot_id: "GS-BRIDGE-01".to_string(),
-                library_status: "official".to_string(),
-                reserve_reason: String::new(),
+                shot_id: sample_id.clone(),
+                library_status: library_status.to_string(),
+                reserve_reason: reserve_reason.clone(),
                 sample_type: "single_shot".to_string(),
                 sequence_id: String::new(),
                 shot_order: String::new(),
-                sample_title: "Bridge dialogue sample".to_string(),
+                sample_title: format!("Bridge dialogue sample {index:03}"),
                 style_cluster: "dialogue".to_string(),
                 scene_category: "daily_dialogue".to_string(),
                 scene_tag: "daily_dialogue,interior".to_string(),
                 quality_grade: "good".to_string(),
-                usable_for_fewshot: "Yes".to_string(),
+                usable_for_fewshot: usable_for_fewshot.to_string(),
                 technical_profile: "duration 8s / MCU / 24fps".to_string(),
-                scene_performance_core: "Two people hold a restrained dialogue beat.".to_string(),
+                scene_performance_core: format!(
+                    "Two people hold a restrained dialogue beat {index:03}."
+                ),
                 camera_directing_core: "Hold a stable medium close composition.".to_string(),
                 audio_directing_core: "Room tone and breath stay low.".to_string(),
                 continuity_negative_core: "Do not drift eyeline or prop handoff.".to_string(),
-                reference_bundle: "scene_room(layout,strong) char_lead(face,reference) plate_url(url,strong) plate_uri(uri,strong) plate_media(media,strong) plate_asset(asset,strong) plate_file(file,strong) C:/refs/chair(layout,strong)".to_string(),
+                reference_bundle,
                 ip_abstraction_note: "abstracted".to_string(),
                 covered_points: "dialogue / eyeline".to_string(),
                 missed_points: String::new(),
                 teaching_note: "Use as bridge evidence only.".to_string(),
-                prompt_body: "Compose a restrained dialogue shot with stable eyeline.".to_string(),
+                prompt_body: format!(
+                    "Compose a restrained dialogue shot with stable eyeline {index:03}."
+                ),
             },
             provenance: GoldenSampleLibraryProvenance {
-                source_workbook: "workbook.xlsx".to_string(),
-                source_workbook_sha256: "hash".to_string(),
+                source_workbook: format!("workbook_{index:03}.xlsx"),
+                source_workbook_sha256: format!("hash-{index:03}"),
                 source_control_memo: "memo.docx".to_string(),
                 source_control_memo_sha256: "hash".to_string(),
-                source_row_index: 1,
-                source_library_status: "official".to_string(),
+                source_row_index: index as u32,
+                source_library_status: library_status.to_string(),
                 source_sample_type: "single_shot".to_string(),
                 comparison_baseline_source_id: "v108".to_string(),
                 control_review_doc: "review.md".to_string(),
@@ -909,7 +1073,7 @@ mod tests {
             },
             classification: GoldenSampleClassification {
                 core: "full_stack_single_shot_sample".to_string(),
-                library_status: "official".to_string(),
+                library_status: library_status.to_string(),
                 sample_type: "single_shot".to_string(),
                 sequence_id: String::new(),
                 shot_order: String::new(),
@@ -917,23 +1081,27 @@ mod tests {
                 scene_category: "daily_dialogue".to_string(),
                 scene_tags: vec!["daily_dialogue".to_string()],
                 quality_grade: "good".to_string(),
-                usable_for_fewshot: true,
+                usable_for_fewshot: is_official,
                 coverage_surfaces: vec![
                     "scene_performance_core".to_string(),
                     "continuity_negative_core".to_string(),
                 ],
             },
             fewshot: GoldenSampleFewshotState {
-                eligible: true,
-                source_value: "Yes".to_string(),
-                retrieval_status: "candidate_positive_fewshot".to_string(),
+                eligible: is_official,
+                source_value: usable_for_fewshot.to_string(),
+                retrieval_status: if is_official {
+                    "candidate_positive_fewshot".to_string()
+                } else {
+                    "reserve_candidate_only".to_string()
+                },
             },
             validator_evidence: GoldenSampleValidatorEvidence {
                 covered_points: "dialogue / eyeline".to_string(),
                 missed_points: String::new(),
                 teaching_note: "Use as bridge evidence only.".to_string(),
                 source_quality_grade: "good".to_string(),
-                source_library_status: "official".to_string(),
+                source_library_status: library_status.to_string(),
                 source_sample_type: "single_shot".to_string(),
                 has_coverage_gap: false,
                 has_placeholder_signal: false,
@@ -946,7 +1114,7 @@ mod tests {
             negative_sample: GoldenSampleNegativeSample {
                 is_negative_sample: false,
                 signal_codes: vec![],
-                reserve_reason: String::new(),
+                reserve_reason,
             },
             v3_core_coverage: GoldenSampleV3CoreCoverage {
                 core: "full_stack_single_shot_sample".to_string(),
@@ -963,186 +1131,125 @@ mod tests {
                 },
             },
             repair_mapping_planning: GoldenSampleRepairMappingPlanning {
-                failure_mapping_id: "failure_map_01".to_string(),
-                repair_mapping_id: "repair_map_01".to_string(),
+                failure_mapping_id: format!("failure_map_{index:03}"),
+                repair_mapping_id: format!("repair_map_{index:03}"),
                 planning_only: true,
             },
-        };
+        }
+    }
 
-        KbGoldenSampleRuntimePackage {
-            manifest: KbBundleManifestRecord {
-                snapshot_version: "v0.2".to_string(),
-                snapshot_name: "hope-kb-golden-sample-library-v0.2".to_string(),
-                content_hash_algo: "sha256".to_string(),
-                content_hash: "bundle-sha256:test".to_string(),
-                seed_import_format: "hope-kb-golden-sample-seed-bundle-v0.2".to_string(),
-                imported_at: "2026-04-23".to_string(),
-                primary_key: "machine_id".to_string(),
-                bundle_order: vec!["seed/v0.2/golden_sample_library.json".to_string()],
-                record_counts: KbBundleRecordCounts {
-                    golden_sample_library: 1,
-                    golden_sample_field_coverage_rules: 1,
-                    golden_sample_failure_mapping: 1,
-                    golden_sample_repair_mapping: 1,
-                    golden_sample_sources: 1,
-                    golden_sample_provenance_entries: 1,
-                },
+    fn test_field_coverage_rules(
+        total_count: u32,
+        official_count: u32,
+    ) -> Vec<GoldenSampleFieldCoverageRuleRecord> {
+        let reserve_count = total_count - official_count;
+        [
+            "scene_performance_core",
+            "camera_directing_core",
+            "audio_directing_core",
+            "continuity_negative_core",
+            "prompt_body",
+        ]
+        .into_iter()
+        .map(|core| GoldenSampleFieldCoverageRuleRecord {
+            rule_id: format!("gs_field_rule_{core}"),
+            core: core.to_string(),
+            row_count: total_count as usize,
+            source_sample_ids: vec!["GS-BRIDGE-01".to_string()],
+            required_source_fields: vec![core.to_string()],
+            validator_evidence_fields: vec!["covered_points".to_string()],
+            fewshot_gate: GoldenSampleFewshotGate {
+                eligible_source_field: "usable_for_fewshot".to_string(),
+                positive_value: "Yes".to_string(),
+                negative_value: "No".to_string(),
+                library_status_field: "library_status".to_string(),
+                official_value: "official".to_string(),
+                reserve_value: "reserve".to_string(),
+                reserve_rows_excluded_from_positive_fewshot: true,
+                negative_quality_value: "bad".to_string(),
             },
-            golden_sample_library: GoldenSampleLibraryAsset {
-                schema_version: "golden_sample_library.v0.2".to_string(),
-                asset_name: "golden_sample_library".to_string(),
-                generated_at: "2026-04-23".to_string(),
-                source: GoldenSampleAssetSource {
-                    primary_workbook: "workbook.xlsx".to_string(),
-                    primary_workbook_sha256: "hash".to_string(),
-                    control_memo: "memo.docx".to_string(),
-                    control_memo_sha256: "hash".to_string(),
-                    control_review: "review.md".to_string(),
-                    control_dispatch: "dispatch.md".to_string(),
-                    comparison_baseline_source_id: "v108".to_string(),
-                },
-                record_count: 1,
-                source_field_order: vec!["shot_id".to_string()],
-                records: vec![record],
+            negative_sample_gate: GoldenSampleNegativeSampleGate {
+                quality_field: "quality_grade".to_string(),
+                negative_quality_value: "bad".to_string(),
+                library_status_field: "library_status".to_string(),
+                reserve_value: "reserve".to_string(),
+                reserve_reason_field: "reserve_reason".to_string(),
             },
-            field_coverage_rules: GoldenSampleFieldCoverageRuleAsset {
-                schema_version: "golden_sample_field_coverage_rules.v0.2".to_string(),
-                asset_name: "golden_sample_field_coverage_rules".to_string(),
-                generated_at: "2026-04-23".to_string(),
-                source_context: GoldenSampleSourceContext {
-                    primary_source_id: "v120".to_string(),
-                    comparison_source_id: "v108".to_string(),
-                },
-                record_count: 1,
-                records: vec![GoldenSampleFieldCoverageRuleRecord {
-                    rule_id: "gs_field_rule_scene_performance_core".to_string(),
-                    core: "scene_performance_core".to_string(),
-                    row_count: 1,
-                    source_sample_ids: vec!["GS-BRIDGE-01".to_string()],
-                    required_source_fields: vec!["scene_performance_core".to_string()],
-                    validator_evidence_fields: vec!["covered_points".to_string()],
-                    fewshot_gate: GoldenSampleFewshotGate {
-                        eligible_source_field: "usable_for_fewshot".to_string(),
-                        positive_value: "Yes".to_string(),
-                        negative_value: "No".to_string(),
-                        library_status_field: "library_status".to_string(),
-                        official_value: "official".to_string(),
-                        reserve_value: "reserve".to_string(),
-                        reserve_rows_excluded_from_positive_fewshot: true,
-                        negative_quality_value: "bad".to_string(),
-                    },
-                    negative_sample_gate: GoldenSampleNegativeSampleGate {
-                        quality_field: "quality_grade".to_string(),
-                        negative_quality_value: "bad".to_string(),
-                        library_status_field: "library_status".to_string(),
-                        reserve_value: "reserve".to_string(),
-                        reserve_reason_field: "reserve_reason".to_string(),
-                    },
-                    coverage_summary: GoldenSampleCoverageSummary {
-                        library_status: BTreeMap::from([("official".to_string(), 1)]),
-                        quality_grade: BTreeMap::from([("good".to_string(), 1)]),
-                        sample_type: BTreeMap::from([("single_shot".to_string(), 1)]),
-                        scene_category: BTreeMap::from([("daily_dialogue".to_string(), 1)]),
-                        sequence_groups: BTreeMap::new(),
-                        style_cluster: BTreeMap::from([("dialogue".to_string(), 1)]),
-                        surface_completeness: BTreeMap::from([(
-                            "scene_performance_core".to_string(),
-                            1,
-                        )]),
-                        usable_for_fewshot: BTreeMap::from([("Yes".to_string(), 1)]),
-                    },
-                    future_gate_owner: vec!["Hope runtime ingest planning".to_string()],
-                    planning_only: true,
-                }],
+            coverage_summary: GoldenSampleCoverageSummary {
+                library_status: BTreeMap::from([
+                    ("official".to_string(), official_count),
+                    ("reserve".to_string(), reserve_count),
+                ]),
+                quality_grade: BTreeMap::from([("good".to_string(), total_count)]),
+                sample_type: BTreeMap::from([("single_shot".to_string(), total_count)]),
+                scene_category: BTreeMap::from([("daily_dialogue".to_string(), total_count)]),
+                sequence_groups: BTreeMap::new(),
+                style_cluster: BTreeMap::from([("dialogue".to_string(), total_count)]),
+                surface_completeness: BTreeMap::from([(core.to_string(), total_count)]),
+                usable_for_fewshot: BTreeMap::from([
+                    ("Yes".to_string(), official_count),
+                    ("No".to_string(), reserve_count),
+                ]),
             },
-            failure_mapping: GoldenSampleFailureMappingAsset {
-                schema_version: "golden_sample_failure_mapping.v0.2".to_string(),
-                asset_name: "golden_sample_failure_mapping".to_string(),
-                generated_at: "2026-04-23".to_string(),
-                source_context: GoldenSampleSourceContext {
-                    primary_source_id: "v120".to_string(),
-                    comparison_source_id: "v108".to_string(),
-                },
-                failure_code_definitions: vec![GoldenSampleFailureCodeDefinition {
-                    failure_code: "golden_coverage_gap".to_string(),
-                    source_fields: vec!["missed_points".to_string()],
-                    meaning: "coverage gap".to_string(),
-                }],
-                record_count: 1,
-                records: vec![GoldenSampleFailureMappingRecord {
-                    mapping_id: "failure_map_01".to_string(),
-                    sample_id: "GS-BRIDGE-01".to_string(),
-                    core: "full_stack_single_shot_sample".to_string(),
-                    tier: "good".to_string(),
-                    usable_for_fewshot: "Yes".to_string(),
-                    negative_sample_signal: false,
-                    planned_failure_codes: vec![],
-                    validator_evidence: GoldenSampleFailureValidatorEvidence {
-                        covered_points: "dialogue".to_string(),
-                        missed_points: String::new(),
-                        teaching_note: "bridge evidence".to_string(),
-                        library_status: "official".to_string(),
-                        sample_type: "single_shot".to_string(),
-                        sequence_id: String::new(),
-                        shot_order: String::new(),
-                        reference_bundle_present: true,
-                    },
-                    source_field_refs: vec!["covered_points".to_string()],
-                }],
+            future_gate_owner: vec!["Hope runtime ingest planning".to_string()],
+            planning_only: true,
+        })
+        .collect()
+    }
+
+    fn test_failure_mapping_record(
+        index: usize,
+        record: &GoldenSampleLibraryRecord,
+    ) -> GoldenSampleFailureMappingRecord {
+        GoldenSampleFailureMappingRecord {
+            mapping_id: format!("failure_map_{index:03}"),
+            sample_id: record.sample_id.clone(),
+            core: record.classification.core.clone(),
+            tier: record.classification.quality_grade.clone(),
+            usable_for_fewshot: record.source_fields.usable_for_fewshot.clone(),
+            negative_sample_signal: false,
+            planned_failure_codes: vec![],
+            validator_evidence: GoldenSampleFailureValidatorEvidence {
+                covered_points: record.validator_evidence.covered_points.clone(),
+                missed_points: record.validator_evidence.missed_points.clone(),
+                teaching_note: record.validator_evidence.teaching_note.clone(),
+                library_status: record.classification.library_status.clone(),
+                sample_type: record.classification.sample_type.clone(),
+                sequence_id: record.classification.sequence_id.clone(),
+                shot_order: record.classification.shot_order.clone(),
+                reference_bundle_present: record.validator_evidence.reference_bundle_present,
             },
-            repair_mapping: GoldenSampleRepairMappingAsset {
-                schema_version: "golden_sample_repair_mapping.v0.2".to_string(),
-                asset_name: "golden_sample_repair_mapping".to_string(),
-                generated_at: "2026-04-23".to_string(),
-                source_context: GoldenSampleSourceContext {
-                    primary_source_id: "v120".to_string(),
-                    comparison_source_id: "v108".to_string(),
-                },
-                record_count: 1,
-                records: vec![GoldenSampleRepairMappingRecord {
-                    mapping_id: "repair_map_01".to_string(),
-                    sample_id: "GS-BRIDGE-01".to_string(),
-                    core: "full_stack_single_shot_sample".to_string(),
-                    repair_planning_mode: "positive_fewshot_candidate".to_string(),
-                    linked_failure_mapping_id: "failure_map_01".to_string(),
-                    planned_repair_inputs: GoldenSampleRepairInputs {
-                        library_status: "official".to_string(),
-                        missed_points: String::new(),
-                        reserve_reason: String::new(),
-                        sample_type: "single_shot".to_string(),
-                        scene_category: "daily_dialogue".to_string(),
-                        sequence_id: String::new(),
-                        style_cluster: "dialogue".to_string(),
-                        teaching_note: "bridge evidence".to_string(),
-                        usable_for_fewshot: "Yes".to_string(),
-                    },
-                    future_repair_gate: "fewshot_retrieval_gate".to_string(),
-                    planning_only: true,
-                }],
+            source_field_refs: vec!["covered_points".to_string()],
+        }
+    }
+
+    fn test_repair_mapping_record(
+        index: usize,
+        record: &GoldenSampleLibraryRecord,
+    ) -> GoldenSampleRepairMappingRecord {
+        GoldenSampleRepairMappingRecord {
+            mapping_id: format!("repair_map_{index:03}"),
+            sample_id: record.sample_id.clone(),
+            core: record.classification.core.clone(),
+            repair_planning_mode: if record.is_positive_fewshot_candidate() {
+                "positive_fewshot_candidate".to_string()
+            } else {
+                "reserve_candidate_only".to_string()
             },
-            source_register: GoldenSampleSourceRegister {
-                schema_version: "hope-kb-v0.2-source-register".to_string(),
-                register_name: "hope-kb-v0.2-source-register".to_string(),
-                updated_at: "2026-04-23".to_string(),
-                sources: vec![GoldenSampleSourceRegisterEntry {
-                    source_id: "v120".to_string(),
-                    source_type: "immutable_raw_xlsx".to_string(),
-                    label: "V120".to_string(),
-                    path: "workbook.xlsx".to_string(),
-                    sha256: Some("hash".to_string()),
-                    applies_to: vec!["golden_sample_library".to_string()],
-                    notes: "test source".to_string(),
-                }],
-                provenance_entries: vec![GoldenSampleSourceRegisterProvenance {
-                    provenance_id: "v120_package".to_string(),
-                    source_ids: vec!["v120".to_string()],
-                    generated_files: vec!["seed/v0.2/golden_sample_library.json".to_string()],
-                    preservation_contract: BTreeMap::from([(
-                        "imports_into_live_hope_runtime".to_string(),
-                        false,
-                    )]),
-                }],
+            linked_failure_mapping_id: format!("failure_map_{index:03}"),
+            planned_repair_inputs: GoldenSampleRepairInputs {
+                library_status: record.classification.library_status.clone(),
+                missed_points: record.validator_evidence.missed_points.clone(),
+                reserve_reason: record.negative_sample.reserve_reason.clone(),
+                sample_type: record.classification.sample_type.clone(),
+                scene_category: record.classification.scene_category.clone(),
+                sequence_id: record.classification.sequence_id.clone(),
+                style_cluster: record.classification.style_cluster.clone(),
+                teaching_note: record.validator_evidence.teaching_note.clone(),
+                usable_for_fewshot: record.source_fields.usable_for_fewshot.clone(),
             },
+            future_repair_gate: "fewshot_retrieval_gate".to_string(),
+            planning_only: true,
         }
     }
 
@@ -1181,6 +1288,40 @@ mod tests {
     }
 
     #[test]
+    fn v120_consumer_accepts_152_package_without_promoting_reserve_rows() {
+        let state = test_state();
+        let package = &state.kb_golden_sample_runtime;
+
+        assert_eq!(state.kb_runtime.summary.golden_sample_record_count, 152);
+        assert_eq!(package.manifest_golden_sample_record_count(), 152);
+        assert_eq!(package.official_record_count(), 108);
+        assert_eq!(package.reserve_record_count(), 44);
+        assert_eq!(package.positive_fewshot_record_count(), 108);
+        assert!(
+            package
+                .golden_sample_library
+                .records
+                .iter()
+                .filter(|record| record.is_reserve())
+                .all(|record| record.source_fields.usable_for_fewshot == "No")
+        );
+
+        let selected = select_golden_sample_records(
+            &state,
+            "daily_dialogue bridge script",
+            &GenerateStoryboardRequest {
+                task_name: "daily_dialogue_scene".to_string(),
+                script_id: Some("script-test".to_string()),
+                expanded_script_text: None,
+                selected_total_duration_seconds: 16,
+            },
+        );
+
+        assert_eq!(selected.len(), 2);
+        assert!(selected.iter().all(|record| record.is_official()));
+    }
+
+    #[test]
     fn v120_bridge_expands_generates_and_exports_without_live_model() {
         let state = test_state();
         let script = expand_script(
@@ -1193,10 +1334,12 @@ mod tests {
 
         assert!(script.script_id.starts_with("script-"));
         assert!(script.expanded_script_text.contains("daily_dialogue"));
-        assert!(script
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "qwen_live_generation_closed"));
+        assert!(
+            script
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "qwen_live_generation_closed")
+        );
 
         let storyboard = generate_storyboard(
             &state,
@@ -1208,28 +1351,35 @@ mod tests {
             },
         );
 
+        assert_eq!(state.kb_runtime.summary.golden_sample_record_count, 152);
         assert_eq!(storyboard.rows.len(), 1);
         assert_eq!(storyboard.rows[0].shot_id, "GS-BRIDGE-01");
         assert!(storyboard.rows[0].prompt_text.is_empty());
-        assert!(storyboard.rows[0]
-            .prompt_body_candidate
-            .candidate_text
-            .is_some());
+        assert!(
+            storyboard.rows[0]
+                .prompt_body_candidate
+                .candidate_text
+                .is_some()
+        );
         assert_eq!(
             storyboard.rows[0].sequence_grouping.sequence_field_state,
             core_domain::SequenceFieldState::NotApplicable
         );
-        assert!(storyboard.rows[0]
-            .external_reference_handle_candidates
-            .iter()
-            .any(|candidate| candidate.reference_name == "scene_room"));
-        assert!(storyboard.rows[0]
-            .external_reference_handle_candidates
-            .iter()
-            .all(|candidate| !matches!(
-                candidate.reference_kind.as_str(),
-                "path" | "url" | "uri" | "media" | "asset" | "file"
-            )));
+        assert!(
+            storyboard.rows[0]
+                .external_reference_handle_candidates
+                .iter()
+                .any(|candidate| candidate.reference_name == "scene_room")
+        );
+        assert!(
+            storyboard.rows[0]
+                .external_reference_handle_candidates
+                .iter()
+                .all(|candidate| !matches!(
+                    candidate.reference_kind.as_str(),
+                    "path" | "url" | "uri" | "media" | "asset" | "file"
+                ))
+        );
         for forbidden_name in [
             "plate_url",
             "plate_uri",
@@ -1238,10 +1388,12 @@ mod tests {
             "plate_file",
             "chair",
         ] {
-            assert!(storyboard.rows[0]
-                .external_reference_handle_candidates
-                .iter()
-                .all(|candidate| candidate.reference_name != forbidden_name));
+            assert!(
+                storyboard.rows[0]
+                    .external_reference_handle_candidates
+                    .iter()
+                    .all(|candidate| candidate.reference_name != forbidden_name)
+            );
         }
         assert_eq!(
             storyboard.export_status.status,
@@ -1258,10 +1410,12 @@ mod tests {
 
         assert_eq!(export.export_status.status, BridgeCallStatus::WarningOnly);
         assert_eq!(export.artifacts.len(), 4);
-        assert!(export
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.artifact_kind == "v120_bridge_manifest" && artifact.ready));
+        assert!(
+            export
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.artifact_kind == "v120_bridge_manifest" && artifact.ready)
+        );
         for artifact_kind in ["storyboard_json", "storyboard_csv", "excel_workbook"] {
             let artifact = export
                 .artifacts
@@ -1303,17 +1457,21 @@ mod tests {
         );
 
         assert_eq!(export.export_status.status, BridgeCallStatus::Blocked);
-        assert!(export
-            .export_status
-            .blockers
-            .iter()
-            .any(|blocker| blocker.code == "storyboard_result_not_found"));
+        assert!(
+            export
+                .export_status
+                .blockers
+                .iter()
+                .any(|blocker| blocker.code == "storyboard_result_not_found")
+        );
         assert!(export.artifacts.iter().all(|artifact| !artifact.ready));
-        assert!(export
-            .artifacts
-            .iter()
-            .all(|artifact| artifact.blocked_reason.as_deref()
-                == Some("storyboard_result_not_found")));
+        assert!(
+            export
+                .artifacts
+                .iter()
+                .all(|artifact| artifact.blocked_reason.as_deref()
+                    == Some("storyboard_result_not_found"))
+        );
     }
 
     #[test]
@@ -1432,15 +1590,19 @@ mod tests {
             snapshot.summary_items[2].state,
             ValidationExportPanelState::Ready
         );
-        assert!(snapshot
-            .repair_recommendations
-            .iter()
-            .any(|item| item.failure_code == "chinese_prompt_noise"));
-        assert!(snapshot
-            .repair_recommendations
-            .iter()
-            .flat_map(|item| item.prompt_template_names.iter())
-            .any(|name| name == "Repair Prompt Language"));
+        assert!(
+            snapshot
+                .repair_recommendations
+                .iter()
+                .any(|item| item.failure_code == "chinese_prompt_noise")
+        );
+        assert!(
+            snapshot
+                .repair_recommendations
+                .iter()
+                .flat_map(|item| item.prompt_template_names.iter())
+                .any(|name| name == "Repair Prompt Language")
+        );
     }
 
     #[test]

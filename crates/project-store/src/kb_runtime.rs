@@ -519,7 +519,22 @@ struct PromptTemplateSeedRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::fs::{self, File};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use core_domain::kb::{
+        GoldenSampleAssetSource, GoldenSampleClassification, GoldenSampleComparisonBaseline,
+        GoldenSampleCoverageSummary, GoldenSampleFailureCodeDefinition,
+        GoldenSampleFailureMappingRecord, GoldenSampleFailureValidatorEvidence,
+        GoldenSampleFewshotGate, GoldenSampleFewshotState, GoldenSampleFieldCoverageRuleRecord,
+        GoldenSampleLibraryProvenance, GoldenSampleLibraryRecord, GoldenSampleNegativeSample,
+        GoldenSampleNegativeSampleGate, GoldenSampleRepairInputs,
+        GoldenSampleRepairMappingPlanning, GoldenSampleRepairMappingRecord,
+        GoldenSampleSourceContext, GoldenSampleSourceFields, GoldenSampleSourceRegisterEntry,
+        GoldenSampleSourceRegisterProvenance, GoldenSampleV3CoreCoverage,
+        GoldenSampleValidatorEvidence, KbBundleRecordCounts,
+    };
 
     #[test]
     fn load_kb_runtime_requires_existing_snapshot() {
@@ -585,10 +600,12 @@ mod tests {
 
         assert!(runtime.supports_scene_taxonomy());
         assert!(runtime.supports_failure_repairs());
-        assert!(runtime
-            .summary
-            .mirror_tables
-            .contains(&"scene_taxonomy".to_string()));
+        assert!(
+            runtime
+                .summary
+                .mirror_tables
+                .contains(&"scene_taxonomy".to_string())
+        );
         assert_eq!(runtime.snapshot.source_name, "hope-kb");
 
         fs::remove_file(temp_path).expect("temp snapshot should be removable");
@@ -680,5 +697,484 @@ mod tests {
         assert_eq!(bundle.prompt_templates[0].stage, "repair_pass");
 
         fs::remove_dir_all(repo_root).expect("temp repo root should be removable");
+    }
+
+    #[test]
+    fn load_kb_runtime_and_v120_package_accept_manifest_driven_152_counts() {
+        let repo_root = unique_temp_repo_root("hope-kb-runtime-v120-152");
+        let snapshots_dir = repo_root.join("snapshots");
+        let v01_seed_dir = repo_root.join("seed").join("v0.1");
+        let v02_seed_dir = repo_root.join("seed").join("v0.2");
+        fs::create_dir_all(&snapshots_dir).expect("snapshots dir should be creatable");
+        fs::create_dir_all(&v01_seed_dir).expect("v0.1 seed dir should be creatable");
+        fs::create_dir_all(&v02_seed_dir).expect("v0.2 seed dir should be creatable");
+
+        let snapshot_path = snapshots_dir.join("hope-kb-v0.1.sqlite3");
+        File::create(&snapshot_path).expect("snapshot file should be creatable");
+
+        write_minimal_v01_seed_bundle(&v01_seed_dir);
+
+        let package = synthetic_golden_sample_package_152();
+        write_v02_package(&v02_seed_dir, &package);
+
+        let runtime = load_kb_runtime(snapshot_path).expect("runtime should load");
+        assert!(runtime.supports_golden_sample_v120_package());
+        assert_eq!(runtime.summary.golden_sample_record_count, 152);
+        assert_eq!(runtime.summary.golden_sample_source_count, 14);
+
+        let loaded = load_kb_golden_sample_runtime_package(&runtime)
+            .expect("152 golden sample runtime package should load");
+
+        assert_eq!(loaded.manifest.record_counts.golden_sample_library, 152);
+        assert_eq!(
+            loaded.manifest.record_counts.golden_sample_failure_mapping,
+            152
+        );
+        assert_eq!(
+            loaded.manifest.record_counts.golden_sample_repair_mapping,
+            152
+        );
+        assert_eq!(
+            loaded
+                .manifest
+                .record_counts
+                .golden_sample_field_coverage_rules,
+            5
+        );
+        assert_eq!(loaded.official_record_count(), 108);
+        assert_eq!(loaded.reserve_record_count(), 44);
+        assert_eq!(loaded.positive_fewshot_record_count(), 108);
+        assert!(
+            loaded
+                .golden_sample_library
+                .records
+                .iter()
+                .filter(|record| record.is_reserve())
+                .all(|record| record.source_fields.usable_for_fewshot == "No")
+        );
+
+        fs::remove_dir_all(repo_root).expect("temp repo root should be removable");
+    }
+
+    fn unique_temp_repo_root(prefix: &str) -> PathBuf {
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be valid")
+            .as_millis();
+        std::env::temp_dir().join(format!("{prefix}-{millis}-{}", std::process::id()))
+    }
+
+    fn write_minimal_v01_seed_bundle(seed_dir: &Path) {
+        fs::write(seed_dir.join("scene_taxonomy.json"), "[]")
+            .expect("scene taxonomy seed should be writable");
+        fs::write(seed_dir.join("failure_pattern_library.json"), "[]")
+            .expect("failure pattern seed should be writable");
+        fs::write(seed_dir.join("prompt_templates.json"), "[]")
+            .expect("prompt template seed should be writable");
+    }
+
+    fn write_v02_package(seed_dir: &Path, package: &KbGoldenSampleRuntimePackage) {
+        fs::write(
+            seed_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&package.manifest).expect("manifest should serialize"),
+        )
+        .expect("manifest should be writable");
+        fs::write(
+            seed_dir.join("golden_sample_library.json"),
+            serde_json::to_string_pretty(&package.golden_sample_library)
+                .expect("library should serialize"),
+        )
+        .expect("library should be writable");
+        fs::write(
+            seed_dir.join("golden_sample_field_coverage_rules.json"),
+            serde_json::to_string_pretty(&package.field_coverage_rules)
+                .expect("field coverage rules should serialize"),
+        )
+        .expect("field coverage rules should be writable");
+        fs::write(
+            seed_dir.join("golden_sample_failure_mapping.json"),
+            serde_json::to_string_pretty(&package.failure_mapping)
+                .expect("failure mapping should serialize"),
+        )
+        .expect("failure mapping should be writable");
+        fs::write(
+            seed_dir.join("golden_sample_repair_mapping.json"),
+            serde_json::to_string_pretty(&package.repair_mapping)
+                .expect("repair mapping should serialize"),
+        )
+        .expect("repair mapping should be writable");
+        fs::write(
+            seed_dir.join("source_register.json"),
+            serde_json::to_string_pretty(&package.source_register)
+                .expect("source register should serialize"),
+        )
+        .expect("source register should be writable");
+    }
+
+    fn synthetic_golden_sample_package_152() -> KbGoldenSampleRuntimePackage {
+        let official_count = 108usize;
+        let reserve_count = 44usize;
+        let total_count = official_count + reserve_count;
+        let mut records = Vec::with_capacity(total_count);
+        let mut failure_records = Vec::with_capacity(total_count);
+        let mut repair_records = Vec::with_capacity(total_count);
+
+        for index in 0..total_count {
+            let record = synthetic_golden_sample_record(index + 1, index < official_count);
+            failure_records.push(synthetic_failure_mapping_record(index + 1, &record));
+            repair_records.push(synthetic_repair_mapping_record(index + 1, &record));
+            records.push(record);
+        }
+
+        KbGoldenSampleRuntimePackage {
+            manifest: KbBundleManifestRecord {
+                snapshot_version: "v0.2".to_string(),
+                snapshot_name: "hope-kb-golden-sample-library-v0.2".to_string(),
+                content_hash_algo: "sha256".to_string(),
+                content_hash: "bundle-sha256:test".to_string(),
+                seed_import_format: "hope-kb-golden-sample-seed-bundle-v0.2".to_string(),
+                imported_at: "2026-04-24".to_string(),
+                primary_key: "machine_id".to_string(),
+                bundle_order: vec![
+                    "seed/v0.2/manifest.json".to_string(),
+                    "seed/v0.2/golden_sample_library.json".to_string(),
+                    "seed/v0.2/golden_sample_field_coverage_rules.json".to_string(),
+                    "seed/v0.2/golden_sample_failure_mapping.json".to_string(),
+                    "seed/v0.2/golden_sample_repair_mapping.json".to_string(),
+                    "seed/v0.2/source_register.json".to_string(),
+                ],
+                record_counts: KbBundleRecordCounts {
+                    golden_sample_library: total_count,
+                    golden_sample_field_coverage_rules: 5,
+                    golden_sample_failure_mapping: total_count,
+                    golden_sample_repair_mapping: total_count,
+                    golden_sample_sources: 14,
+                    golden_sample_provenance_entries: 4,
+                },
+            },
+            golden_sample_library: GoldenSampleLibraryAsset {
+                schema_version: "golden_sample_library.v0.2".to_string(),
+                asset_name: "golden_sample_library".to_string(),
+                generated_at: "2026-04-24".to_string(),
+                source: GoldenSampleAssetSource {
+                    primary_workbook: "workbook.xlsx".to_string(),
+                    primary_workbook_sha256: "hash".to_string(),
+                    control_memo: "memo.docx".to_string(),
+                    control_memo_sha256: "hash".to_string(),
+                    control_review: "review.md".to_string(),
+                    control_dispatch: "dispatch.md".to_string(),
+                    comparison_baseline_source_id: "v108".to_string(),
+                },
+                record_count: total_count,
+                source_field_order: vec![
+                    "shot_id".to_string(),
+                    "library_status".to_string(),
+                    "usable_for_fewshot".to_string(),
+                ],
+                records,
+            },
+            field_coverage_rules: GoldenSampleFieldCoverageRuleAsset {
+                schema_version: "golden_sample_field_coverage_rules.v0.2".to_string(),
+                asset_name: "golden_sample_field_coverage_rules".to_string(),
+                generated_at: "2026-04-24".to_string(),
+                source_context: GoldenSampleSourceContext {
+                    primary_source_id: "v120".to_string(),
+                    comparison_source_id: "v108".to_string(),
+                },
+                record_count: 5,
+                records: synthetic_field_coverage_rules(total_count as u32, official_count as u32),
+            },
+            failure_mapping: GoldenSampleFailureMappingAsset {
+                schema_version: "golden_sample_failure_mapping.v0.2".to_string(),
+                asset_name: "golden_sample_failure_mapping".to_string(),
+                generated_at: "2026-04-24".to_string(),
+                source_context: GoldenSampleSourceContext {
+                    primary_source_id: "v120".to_string(),
+                    comparison_source_id: "v108".to_string(),
+                },
+                failure_code_definitions: vec![GoldenSampleFailureCodeDefinition {
+                    failure_code: "golden_coverage_gap".to_string(),
+                    source_fields: vec!["missed_points".to_string()],
+                    meaning: "coverage gap".to_string(),
+                }],
+                record_count: total_count,
+                records: failure_records,
+            },
+            repair_mapping: GoldenSampleRepairMappingAsset {
+                schema_version: "golden_sample_repair_mapping.v0.2".to_string(),
+                asset_name: "golden_sample_repair_mapping".to_string(),
+                generated_at: "2026-04-24".to_string(),
+                source_context: GoldenSampleSourceContext {
+                    primary_source_id: "v120".to_string(),
+                    comparison_source_id: "v108".to_string(),
+                },
+                record_count: total_count,
+                records: repair_records,
+            },
+            source_register: GoldenSampleSourceRegister {
+                schema_version: "hope-kb-v0.2-source-register".to_string(),
+                register_name: "hope-kb-v0.2-source-register".to_string(),
+                updated_at: "2026-04-24".to_string(),
+                sources: (1..=14)
+                    .map(|index| GoldenSampleSourceRegisterEntry {
+                        source_id: format!("v120_source_{index:02}"),
+                        source_type: "immutable_raw_xlsx".to_string(),
+                        label: format!("V120 Source {index:02}"),
+                        path: format!("sources/workbook_{index:02}.xlsx"),
+                        sha256: Some(format!("hash-{index:02}")),
+                        applies_to: vec!["golden_sample_library".to_string()],
+                        notes: "test source".to_string(),
+                    })
+                    .collect(),
+                provenance_entries: (1..=4)
+                    .map(|index| GoldenSampleSourceRegisterProvenance {
+                        provenance_id: format!("v120_package_{index:02}"),
+                        source_ids: vec![format!("v120_source_{index:02}")],
+                        generated_files: vec![format!(
+                            "seed/v0.2/golden_sample_library_part_{index:02}.json"
+                        )],
+                        preservation_contract: BTreeMap::from([(
+                            "imports_into_live_hope_runtime".to_string(),
+                            false,
+                        )]),
+                    })
+                    .collect(),
+            },
+        }
+    }
+
+    fn synthetic_golden_sample_record(
+        index: usize,
+        is_official: bool,
+    ) -> GoldenSampleLibraryRecord {
+        let library_status = if is_official { "official" } else { "reserve" };
+        let reserve_reason = if is_official {
+            String::new()
+        } else {
+            "new_kb152_candidate".to_string()
+        };
+        let usable_for_fewshot = if is_official { "Yes" } else { "No" };
+
+        GoldenSampleLibraryRecord {
+            machine_id: format!("golden_sample_bridge_{index:03}"),
+            sample_id: format!("GS-BRIDGE-{index:03}"),
+            schema_version: "golden_sample_library.v0.2".to_string(),
+            source_fields: GoldenSampleSourceFields {
+                shot_id: format!("GS-BRIDGE-{index:03}"),
+                library_status: library_status.to_string(),
+                reserve_reason: reserve_reason.clone(),
+                sample_type: "single_shot".to_string(),
+                sequence_id: String::new(),
+                shot_order: String::new(),
+                sample_title: format!("Bridge dialogue sample {index:03}"),
+                style_cluster: "dialogue".to_string(),
+                scene_category: "daily_dialogue".to_string(),
+                scene_tag: "daily_dialogue,interior".to_string(),
+                quality_grade: "good".to_string(),
+                usable_for_fewshot: usable_for_fewshot.to_string(),
+                technical_profile: "duration 8s / MCU / 24fps".to_string(),
+                scene_performance_core: format!("Dialogue beat {index:03}."),
+                camera_directing_core: "Stable medium close composition.".to_string(),
+                audio_directing_core: "Quiet room tone.".to_string(),
+                continuity_negative_core: "Do not drift eyeline.".to_string(),
+                reference_bundle: "scene_room(layout,strong) char_lead(face,reference)".to_string(),
+                ip_abstraction_note: "abstracted".to_string(),
+                covered_points: "dialogue / eyeline".to_string(),
+                missed_points: String::new(),
+                teaching_note: "Use as bridge evidence only.".to_string(),
+                prompt_body: format!("Compose a restrained dialogue shot {index:03}."),
+            },
+            provenance: GoldenSampleLibraryProvenance {
+                source_workbook: "workbook.xlsx".to_string(),
+                source_workbook_sha256: "hash".to_string(),
+                source_control_memo: "memo.docx".to_string(),
+                source_control_memo_sha256: "hash".to_string(),
+                source_row_index: index as u32,
+                source_library_status: library_status.to_string(),
+                source_sample_type: "single_shot".to_string(),
+                comparison_baseline_source_id: "v108".to_string(),
+                control_review_doc: "review.md".to_string(),
+                control_dispatch_doc: "dispatch.md".to_string(),
+            },
+            classification: GoldenSampleClassification {
+                core: "full_stack_single_shot_sample".to_string(),
+                library_status: library_status.to_string(),
+                sample_type: "single_shot".to_string(),
+                sequence_id: String::new(),
+                shot_order: String::new(),
+                style_cluster: "dialogue".to_string(),
+                scene_category: "daily_dialogue".to_string(),
+                scene_tags: vec!["daily_dialogue".to_string()],
+                quality_grade: "good".to_string(),
+                usable_for_fewshot: is_official,
+                coverage_surfaces: vec![
+                    "scene_performance_core".to_string(),
+                    "continuity_negative_core".to_string(),
+                ],
+            },
+            fewshot: GoldenSampleFewshotState {
+                eligible: is_official,
+                source_value: usable_for_fewshot.to_string(),
+                retrieval_status: if is_official {
+                    "candidate_positive_fewshot".to_string()
+                } else {
+                    "reserve_candidate_only".to_string()
+                },
+            },
+            validator_evidence: GoldenSampleValidatorEvidence {
+                covered_points: "dialogue / eyeline".to_string(),
+                missed_points: String::new(),
+                teaching_note: "Use as bridge evidence only.".to_string(),
+                source_quality_grade: "good".to_string(),
+                source_library_status: library_status.to_string(),
+                source_sample_type: "single_shot".to_string(),
+                has_coverage_gap: false,
+                has_placeholder_signal: false,
+                surface_completeness: BTreeMap::from([
+                    ("scene_performance_core".to_string(), true),
+                    ("continuity_negative_core".to_string(), true),
+                ]),
+                reference_bundle_present: true,
+            },
+            negative_sample: GoldenSampleNegativeSample {
+                is_negative_sample: false,
+                signal_codes: vec![],
+                reserve_reason,
+            },
+            v3_core_coverage: GoldenSampleV3CoreCoverage {
+                core: "full_stack_single_shot_sample".to_string(),
+                coverage_rule_ids: vec!["gs_field_rule_scene_performance_core".to_string()],
+                source_coverage_statement: "covered".to_string(),
+                source_missing_statement: String::new(),
+                source_field_presence: BTreeMap::from([
+                    ("scene_performance_core".to_string(), true),
+                    ("continuity_negative_core".to_string(), true),
+                ]),
+                comparison_baseline: GoldenSampleComparisonBaseline {
+                    primary_source_id: "v120".to_string(),
+                    comparison_source_id: "v108".to_string(),
+                },
+            },
+            repair_mapping_planning: GoldenSampleRepairMappingPlanning {
+                failure_mapping_id: format!("failure_map_{index:03}"),
+                repair_mapping_id: format!("repair_map_{index:03}"),
+                planning_only: true,
+            },
+        }
+    }
+
+    fn synthetic_field_coverage_rules(
+        total_count: u32,
+        official_count: u32,
+    ) -> Vec<GoldenSampleFieldCoverageRuleRecord> {
+        let reserve_count = total_count - official_count;
+        [
+            "scene_performance_core",
+            "camera_directing_core",
+            "audio_directing_core",
+            "continuity_negative_core",
+            "prompt_body",
+        ]
+        .into_iter()
+        .map(|core| GoldenSampleFieldCoverageRuleRecord {
+            rule_id: format!("gs_field_rule_{core}"),
+            core: core.to_string(),
+            row_count: total_count as usize,
+            source_sample_ids: vec!["GS-BRIDGE-001".to_string()],
+            required_source_fields: vec![core.to_string()],
+            validator_evidence_fields: vec!["covered_points".to_string()],
+            fewshot_gate: GoldenSampleFewshotGate {
+                eligible_source_field: "usable_for_fewshot".to_string(),
+                positive_value: "Yes".to_string(),
+                negative_value: "No".to_string(),
+                library_status_field: "library_status".to_string(),
+                official_value: "official".to_string(),
+                reserve_value: "reserve".to_string(),
+                reserve_rows_excluded_from_positive_fewshot: true,
+                negative_quality_value: "bad".to_string(),
+            },
+            negative_sample_gate: GoldenSampleNegativeSampleGate {
+                quality_field: "quality_grade".to_string(),
+                negative_quality_value: "bad".to_string(),
+                library_status_field: "library_status".to_string(),
+                reserve_value: "reserve".to_string(),
+                reserve_reason_field: "reserve_reason".to_string(),
+            },
+            coverage_summary: GoldenSampleCoverageSummary {
+                library_status: BTreeMap::from([
+                    ("official".to_string(), official_count),
+                    ("reserve".to_string(), reserve_count),
+                ]),
+                quality_grade: BTreeMap::from([("good".to_string(), total_count)]),
+                sample_type: BTreeMap::from([("single_shot".to_string(), total_count)]),
+                scene_category: BTreeMap::from([("daily_dialogue".to_string(), total_count)]),
+                sequence_groups: BTreeMap::new(),
+                style_cluster: BTreeMap::from([("dialogue".to_string(), total_count)]),
+                surface_completeness: BTreeMap::from([(core.to_string(), total_count)]),
+                usable_for_fewshot: BTreeMap::from([
+                    ("Yes".to_string(), official_count),
+                    ("No".to_string(), reserve_count),
+                ]),
+            },
+            future_gate_owner: vec!["Hope runtime ingest planning".to_string()],
+            planning_only: true,
+        })
+        .collect()
+    }
+
+    fn synthetic_failure_mapping_record(
+        index: usize,
+        record: &GoldenSampleLibraryRecord,
+    ) -> GoldenSampleFailureMappingRecord {
+        GoldenSampleFailureMappingRecord {
+            mapping_id: format!("failure_map_{index:03}"),
+            sample_id: record.sample_id.clone(),
+            core: record.classification.core.clone(),
+            tier: record.classification.quality_grade.clone(),
+            usable_for_fewshot: record.source_fields.usable_for_fewshot.clone(),
+            negative_sample_signal: false,
+            planned_failure_codes: vec![],
+            validator_evidence: GoldenSampleFailureValidatorEvidence {
+                covered_points: record.validator_evidence.covered_points.clone(),
+                missed_points: record.validator_evidence.missed_points.clone(),
+                teaching_note: record.validator_evidence.teaching_note.clone(),
+                library_status: record.classification.library_status.clone(),
+                sample_type: record.classification.sample_type.clone(),
+                sequence_id: record.classification.sequence_id.clone(),
+                shot_order: record.classification.shot_order.clone(),
+                reference_bundle_present: record.validator_evidence.reference_bundle_present,
+            },
+            source_field_refs: vec!["covered_points".to_string()],
+        }
+    }
+
+    fn synthetic_repair_mapping_record(
+        index: usize,
+        record: &GoldenSampleLibraryRecord,
+    ) -> GoldenSampleRepairMappingRecord {
+        GoldenSampleRepairMappingRecord {
+            mapping_id: format!("repair_map_{index:03}"),
+            sample_id: record.sample_id.clone(),
+            core: record.classification.core.clone(),
+            repair_planning_mode: if record.is_positive_fewshot_candidate() {
+                "positive_fewshot_candidate".to_string()
+            } else {
+                "reserve_candidate_only".to_string()
+            },
+            linked_failure_mapping_id: format!("failure_map_{index:03}"),
+            planned_repair_inputs: GoldenSampleRepairInputs {
+                library_status: record.classification.library_status.clone(),
+                missed_points: record.validator_evidence.missed_points.clone(),
+                reserve_reason: record.negative_sample.reserve_reason.clone(),
+                sample_type: record.classification.sample_type.clone(),
+                scene_category: record.classification.scene_category.clone(),
+                sequence_id: record.classification.sequence_id.clone(),
+                style_cluster: record.classification.style_cluster.clone(),
+                teaching_note: record.validator_evidence.teaching_note.clone(),
+                usable_for_fewshot: record.source_fields.usable_for_fewshot.clone(),
+            },
+            future_repair_gate: "fewshot_retrieval_gate".to_string(),
+            planning_only: true,
+        }
     }
 }
