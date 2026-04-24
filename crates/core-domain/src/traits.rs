@@ -14,6 +14,14 @@ pub trait LLMProvider {
     fn complete(&self, request: &Self::Request) -> Result<Self::Response, Self::Error>;
 }
 
+pub trait TextGenerationProvider {
+    type Request;
+    type Response;
+    type Error;
+
+    fn generate_text(&self, request: &Self::Request) -> Result<Self::Response, Self::Error>;
+}
+
 pub trait Validator {
     type Input;
     type Output;

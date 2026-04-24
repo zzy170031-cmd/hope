@@ -1,6 +1,7 @@
 use crate::domain::HierarchyRef;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ModelChannel {
@@ -28,6 +29,90 @@ pub struct ModelResponse {
     pub request_id: String,
     pub body: String,
     pub raw_response: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TextModelProviderKind {
+    Qwen,
+    Doubao,
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TextModelProvider {
+    pub provider: TextModelProviderKind,
+    pub model: String,
+    pub base_url: Option<String>,
+    pub api_key_ref: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TextGenerationTask {
+    ExpandScript,
+    GenerateStoryboard,
+    RepairStoryboard,
+    CompileSeedancePromptText,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TextGenerationOutputSchema {
+    PlainText,
+    StoryboardRowsJson,
+    RepairPlanJson,
+    SeedancePromptText,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TextGenerationRequest {
+    pub task_type: TextGenerationTask,
+    pub scene_type: Option<String>,
+    pub story_input: String,
+    pub duration_plan: Option<StoryboardDurationPlan>,
+    pub kb_context_summary: String,
+    pub selected_sample_ids: Vec<String>,
+    pub output_schema: TextGenerationOutputSchema,
+    pub temperature: Option<f32>,
+    pub max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TextGenerationResponse {
+    pub text: String,
+    pub structured_json: Option<Value>,
+    pub usage_tokens: Option<u32>,
+    pub latency_ms: Option<u64>,
+    pub warnings: Vec<ProductWarning>,
+    pub provider: TextModelProviderKind,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PromptTextCompilationRow {
+    pub shot_id: String,
+    pub shot_title: String,
+    pub scene_scale: String,
+    pub visual_description: String,
+    pub character_action: String,
+    pub dialogue: String,
+    pub duration_seconds: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PromptTextCompilationRequest {
+    pub row: PromptTextCompilationRow,
+    pub selected_kb_rules: Vec<String>,
+    pub continuity_negative_core: String,
+    pub target_profile: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PromptTextCompilationResponse {
+    pub prompt_text: String,
+    pub target_profile: String,
+    pub warnings: Vec<ProductWarning>,
+    pub provider: TextModelProviderKind,
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

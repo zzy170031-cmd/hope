@@ -9,8 +9,11 @@ pub use contracts::{
     GenerateStoryboardRequest, GenerateStoryboardResponse, GeneratedStoryboardRow,
     GoldenSampleGateDecision, GoldenSampleSelectionResult, GoldenSampleSelectorInput, ModelChannel,
     ModelRequest, ModelResponse, ProductWarning, PromptBodyCandidate, PromptPackageRecord,
+    PromptTextCompilationRequest, PromptTextCompilationResponse, PromptTextCompilationRow,
     ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, StoryboardDurationPlan,
-    StoryboardExportStatus, StructureMode, ValidationSummary,
+    StoryboardExportStatus, StructureMode, TextGenerationOutputSchema, TextGenerationRequest,
+    TextGenerationResponse, TextGenerationTask, TextModelProvider, TextModelProviderKind,
+    ValidationSummary,
 };
 pub use domain::{
     CutRecord, DirectorCutSampleRecord, DirectorProfileRecord, EpisodeRecord, HandoffZoneRecord,
@@ -33,4 +36,4 @@ pub use kb::{
     KbGoldenSampleRuntimePackage, KbRuntimeSummary, KbSnapshotRecord, PromptTemplateRecord,
     RepairTemplateLink, SceneTaxonomyRecord,
 };
-pub use traits::{Exporter, LLMProvider, PromptRenderer, Validator};
+pub use traits::{Exporter, LLMProvider, PromptRenderer, TextGenerationProvider, Validator};
