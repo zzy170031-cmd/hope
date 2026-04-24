@@ -4,8 +4,13 @@ pub mod kb;
 pub mod traits;
 
 pub use contracts::{
-    ExportSummary, ModelChannel, ModelRequest, ModelResponse, PromptPackageRecord,
-    ValidationSummary,
+    BridgeCallStatus, ExpandScriptRequest, ExpandScriptResponse, ExportArtifactRecord,
+    ExportBundleRequest, ExportBundleResponse, ExportSummary, ExternalReferenceHandleCandidate,
+    GenerateStoryboardRequest, GenerateStoryboardResponse, GeneratedStoryboardRow,
+    GoldenSampleGateDecision, GoldenSampleSelectionResult, GoldenSampleSelectorInput, ModelChannel,
+    ModelRequest, ModelResponse, ProductWarning, PromptBodyCandidate, PromptPackageRecord,
+    ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, StoryboardDurationPlan,
+    StoryboardExportStatus, StructureMode, ValidationSummary,
 };
 pub use domain::{
     CutRecord, DirectorCutSampleRecord, DirectorProfileRecord, EpisodeRecord, HandoffZoneRecord,
@@ -13,7 +18,19 @@ pub use domain::{
     PromptPackageSource, RenderSegmentRecord, SegmentBoundary, StaleEventRecord,
 };
 pub use kb::{
-    FailurePatternRecord, KbRuntimeSummary, KbSnapshotRecord, PromptTemplateRecord,
+    FailurePatternRecord, GoldenSampleAssetSource, GoldenSampleClassification,
+    GoldenSampleComparisonBaseline, GoldenSampleCoverageSummary, GoldenSampleFailureCodeDefinition,
+    GoldenSampleFailureMappingAsset, GoldenSampleFailureMappingRecord,
+    GoldenSampleFailureValidatorEvidence, GoldenSampleFewshotGate, GoldenSampleFewshotState,
+    GoldenSampleFieldCoverageRuleAsset, GoldenSampleFieldCoverageRuleRecord,
+    GoldenSampleLibraryAsset, GoldenSampleLibraryProvenance, GoldenSampleLibraryRecord,
+    GoldenSampleNegativeSample, GoldenSampleNegativeSampleGate, GoldenSampleRepairInputs,
+    GoldenSampleRepairMappingAsset, GoldenSampleRepairMappingPlanning,
+    GoldenSampleRepairMappingRecord, GoldenSampleSourceContext, GoldenSampleSourceFields,
+    GoldenSampleSourceRegister, GoldenSampleSourceRegisterEntry,
+    GoldenSampleSourceRegisterProvenance, GoldenSampleV3CoreCoverage,
+    GoldenSampleValidatorEvidence, KbBundleManifestRecord, KbBundleRecordCounts,
+    KbGoldenSampleRuntimePackage, KbRuntimeSummary, KbSnapshotRecord, PromptTemplateRecord,
     RepairTemplateLink, SceneTaxonomyRecord,
 };
 pub use traits::{Exporter, LLMProvider, PromptRenderer, Validator};

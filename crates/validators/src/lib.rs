@@ -7,10 +7,11 @@ pub mod shared_fixture;
 pub mod week3;
 
 pub use contract::{
-    ValidationDecision, ValidationEnvelope, ValidationFinding, ValidationReport,
-    ValidationReportRow, ValidationSeverity, contains_placeholder_marker,
+    contains_placeholder_marker, project_v120_evidence_aware_findings, EvidenceAwareValidationItem,
+    EvidenceAwareValidationProjection, ValidationDecision, ValidationEnvelope, ValidationFinding,
+    ValidationReport, ValidationReportRow, ValidationSeverity,
 };
-pub use repair::{RepairRecommendation, derive_repair_recommendations};
+pub use repair::{derive_repair_recommendations, RepairRecommendation};
 pub use rules::{
     ContinuityInput, ContinuityValidator, HandoffCoverageInput, HandoffCoverageValidator,
     HardLockInjectorGuard, HardLockInjectorGuardInput, LayerTraceabilityInput,
@@ -19,9 +20,9 @@ pub use rules::{
 };
 pub use shared_fixture::Week3SharedFixture;
 pub use week3::{
-    WEEK3_SHARED_FIXTURE_PATH, WEEK3_VALIDATION_REPORT_PATH, collect_week3_validation_reports,
-    generate_week3_repair_recommendations, generate_week3_validation_report,
-    load_week3_shared_fixture, write_week3_validation_report,
+    collect_week3_validation_reports, generate_week3_repair_recommendations,
+    generate_week3_validation_report, load_week3_shared_fixture, write_week3_validation_report,
+    WEEK3_SHARED_FIXTURE_PATH, WEEK3_VALIDATION_REPORT_PATH,
 };
 
 pub const VALIDATION_SHEET_MACHINE_NAME: &str = "validation_report";

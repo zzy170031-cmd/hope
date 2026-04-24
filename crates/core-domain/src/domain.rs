@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum HierarchyLevel {
     Project,
     Episode,
@@ -7,7 +9,7 @@ pub enum HierarchyLevel {
     Cut,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HierarchyRef {
     pub level: HierarchyLevel,
     pub id: String,
