@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use hope_app::{
     desktop_bridge::{DesktopInvokeRequest, DesktopInvokeResponse, invoke_desktop_command},
     ipc::{
