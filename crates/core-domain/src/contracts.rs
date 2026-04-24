@@ -253,9 +253,11 @@ pub struct ExpandScriptRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExpandScriptResponse {
+    pub status: BridgeCallStatus,
     pub script_id: String,
     pub expanded_script_text: String,
     pub script_hash: String,
+    pub blockers: Vec<ProductWarning>,
     pub warnings: Vec<ProductWarning>,
 }
 
@@ -307,16 +309,36 @@ pub struct StoryboardExportStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GenerateStoryboardResponse {
+    pub task_id: Option<String>,
     pub result_id: String,
     pub rows: Vec<GeneratedStoryboardRow>,
+    pub selected_total_duration_seconds: u16,
     pub duration_plan: StoryboardDurationPlan,
     pub export_status: StoryboardExportStatus,
+    pub busy: bool,
+    pub operation_id: String,
+    pub revision: u32,
+    pub updated_at_ms: u64,
+    pub rows_hash: String,
+    pub dirty: bool,
+    pub dirty_source_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExportBundleRequest {
-    pub result_id: String,
+    pub result_id: Option<String>,
+    pub task_id: Option<String>,
     pub export_format: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateStoryboardRowsRequest {
+    pub result_id: String,
+    pub task_id: Option<String>,
+    pub rows: Vec<GeneratedStoryboardRow>,
+    pub operation_id: String,
+    pub base_revision: u32,
+    pub dirty_source_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -330,6 +352,11 @@ pub struct ExportArtifactRecord {
     pub content_hash: Option<String>,
     pub byte_size: Option<u64>,
     pub row_count: Option<u32>,
+    pub selected_total_duration_seconds: Option<u16>,
+    pub source_result_id: Option<String>,
+    pub edited_rows_applied: bool,
+    pub prompt_text_compilation_statuses: Vec<String>,
+    pub prompt_text_compilation_warning_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

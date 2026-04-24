@@ -13,7 +13,7 @@ pub use contracts::{
     PromptTextCompilationStatus, ScenePerformanceProjection, SequenceFieldState, SequenceGrouping,
     StoryboardDurationPlan, StoryboardExportStatus, StructureMode, TextGenerationOutputSchema,
     TextGenerationRequest, TextGenerationResponse, TextGenerationTask, TextModelProvider,
-    TextModelProviderKind, ValidationSummary,
+    TextModelProviderKind, UpdateStoryboardRowsRequest, ValidationSummary,
 };
 pub use domain::{
     CutRecord, DirectorCutSampleRecord, DirectorProfileRecord, EpisodeRecord, HandoffZoneRecord,

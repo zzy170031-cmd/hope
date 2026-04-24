@@ -61,6 +61,9 @@ pub struct ExportBundle {
 pub struct V120StoryboardExportRequest {
     pub export_manifest_id: String,
     pub result_id: String,
+    pub selected_total_duration_seconds: u16,
+    pub source_result_id: String,
+    pub edited_rows_applied: bool,
     pub rows: Vec<GeneratedStoryboardRow>,
 }
 
@@ -216,11 +219,18 @@ fn write_export_files(workbook: &WorkbookManifest) -> Result<(), ExportError> {
 }
 
 fn build_v120_storyboard_workbook(request: &V120StoryboardExportRequest) -> WorkbookManifest {
-    let rows = request.rows.iter().map(v120_storyboard_row_cells).collect();
+    let rows = request
+        .rows
+        .iter()
+        .map(|row| v120_storyboard_row_cells(request, row))
+        .collect();
     let mut columns = V120_STORYBOARD_COLUMNS.to_vec();
     columns.push("prompt_text_compilation_status");
     columns.push("prompt_text_compilation_warnings");
     columns.push("prompt_text_source_row_id");
+    columns.push("selected_total_duration_seconds");
+    columns.push("source_result_id");
+    columns.push("edited_rows_applied");
     WorkbookManifest {
         workbook_machine_name: "v120_storyboard_export_bundle",
         workbook_chinese_name: "V120 Storyboard Export Bundle",
@@ -233,7 +243,10 @@ fn build_v120_storyboard_workbook(request: &V120StoryboardExportRequest) -> Work
     }
 }
 
-fn v120_storyboard_row_cells(row: &GeneratedStoryboardRow) -> Vec<String> {
+fn v120_storyboard_row_cells(
+    request: &V120StoryboardExportRequest,
+    row: &GeneratedStoryboardRow,
+) -> Vec<String> {
     vec![
         row.order.to_string(),
         row.person.clone(),
@@ -243,6 +256,7 @@ fn v120_storyboard_row_cells(row: &GeneratedStoryboardRow) -> Vec<String> {
         row.character_action.clone(),
         row.dialogue.clone(),
         row.prompt_text.clone(),
+        row.duration_seconds.to_string(),
         format!("{:?}", row.prompt_text_compilation_status),
         row.prompt_text_compilation_warnings
             .iter()
@@ -250,7 +264,9 @@ fn v120_storyboard_row_cells(row: &GeneratedStoryboardRow) -> Vec<String> {
             .collect::<Vec<_>>()
             .join("|"),
         row.prompt_text_source_row_id.clone(),
-        row.duration_seconds.to_string(),
+        request.selected_total_duration_seconds.to_string(),
+        request.source_result_id.clone(),
+        request.edited_rows_applied.to_string(),
     ]
 }
 
@@ -785,6 +801,9 @@ mod tests {
         let request = V120StoryboardExportRequest {
             export_manifest_id: "storyboard-export-152".to_string(),
             result_id: "storyboard-152".to_string(),
+            selected_total_duration_seconds: 10,
+            source_result_id: "storyboard-152".to_string(),
+            edited_rows_applied: true,
             rows: vec![GeneratedStoryboardRow {
                 shot_id: "GS-BRIDGE-001".to_string(),
                 order: 1,
@@ -862,6 +881,9 @@ mod tests {
         assert!(json_text.contains("Bridge dialogue sample"));
         assert!(json_text.contains("ReadyStub"));
         assert!(json_text.contains("seedance_prompt_text_stub"));
+        assert!(json_text.contains("storyboard-152"));
+        assert!(json_text.contains("true"));
+        assert!(json_text.contains("10"));
         assert!(!json_text.contains("raw prompt body should stay out of prompt_text"));
     }
 }

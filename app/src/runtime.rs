@@ -1,5 +1,6 @@
 use std::hash::{Hash, Hasher};
 use std::io;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::state::AppState;
 
@@ -12,6 +13,7 @@ use core_domain::{
     ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, StoryboardDurationPlan,
     StoryboardExportStatus, StructureMode, TextGenerationOutputSchema, TextGenerationRequest,
     TextGenerationResponse, TextGenerationTask, TextModelProvider, TextModelProviderKind,
+    UpdateStoryboardRowsRequest,
 };
 use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
@@ -78,6 +80,39 @@ pub struct ValidationRepairRecommendationItem {
 }
 
 pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandScriptResponse {
+    let mut blockers = Vec::new();
+    if request.synopsis_text.trim().is_empty() {
+        blockers.push(ProductWarning {
+            code: "synopsis_required".to_string(),
+            message: "请输入故事梗概后再扩写脚本。".to_string(),
+            related_sample_id: None,
+        });
+    }
+    if request.scene_type.trim().is_empty() {
+        blockers.push(ProductWarning {
+            code: "scene_type_required".to_string(),
+            message: "请选择有效的场景类型后再扩写脚本。".to_string(),
+            related_sample_id: None,
+        });
+    } else if resolve_scene_taxonomy(state, Some(&request.scene_type)).is_none() {
+        blockers.push(ProductWarning {
+            code: "scene_type_invalid".to_string(),
+            message: "当前场景类型无效，无法扩写脚本。".to_string(),
+            related_sample_id: None,
+        });
+    }
+
+    if !blockers.is_empty() {
+        return ExpandScriptResponse {
+            status: BridgeCallStatus::Blocked,
+            script_id: String::new(),
+            expanded_script_text: String::new(),
+            script_hash: String::new(),
+            blockers,
+            warnings: vec![],
+        };
+    }
+
     let script_hash = stable_hash_hex(&format!(
         "{}\n{}",
         request.scene_type.trim(),
@@ -107,6 +142,7 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
     }
 
     let response = ExpandScriptResponse {
+        status: BridgeCallStatus::WarningOnly,
         script_id,
         expanded_script_text: format!(
             "scene_type: {}\nsynopsis: {}\nsource_package: {}",
@@ -115,6 +151,7 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
             state.kb_golden_sample_runtime.manifest.snapshot_name
         ),
         script_hash,
+        blockers: vec![],
         warnings,
     };
     state.remember_script(response.clone());
@@ -125,6 +162,7 @@ pub fn generate_storyboard(
     state: &AppState,
     request: GenerateStoryboardRequest,
 ) -> GenerateStoryboardResponse {
+    let now_ms = now_epoch_ms();
     let script_text = request
         .expanded_script_text
         .clone()
@@ -136,13 +174,86 @@ pub fn generate_storyboard(
                 .map(|script| script.expanded_script_text)
         })
         .unwrap_or_default();
+    let scene_type = extract_scene_type(&script_text);
+    let mut blockers = Vec::new();
+
+    if script_text.trim().is_empty() {
+        blockers.push(ProductWarning {
+            code: "task_script_required".to_string(),
+            message: "请先完成脚本扩写或提供有效脚本内容，再生成分镜。".to_string(),
+            related_sample_id: None,
+        });
+    }
+    if request.task_name.trim().is_empty() {
+        blockers.push(ProductWarning {
+            code: "task_name_required".to_string(),
+            message: "请填写镜头任务名称后再生成分镜。".to_string(),
+            related_sample_id: None,
+        });
+    }
+    if !is_supported_storyboard_duration(request.selected_total_duration_seconds) {
+        blockers.push(ProductWarning {
+            code: "duration_not_supported".to_string(),
+            message: "总时长仅支持 5/10/15/30/45/60 秒。".to_string(),
+            related_sample_id: None,
+        });
+    }
+    if scene_type.trim().is_empty() {
+        blockers.push(ProductWarning {
+            code: "scene_type_required".to_string(),
+            message: "脚本中缺少有效场景类型，无法生成分镜。".to_string(),
+            related_sample_id: None,
+        });
+    } else if resolve_scene_taxonomy(state, Some(&scene_type)).is_none() {
+        blockers.push(ProductWarning {
+            code: "scene_type_invalid".to_string(),
+            message: "脚本中的场景类型无效，无法生成分镜。".to_string(),
+            related_sample_id: None,
+        });
+    }
+
+    if !blockers.is_empty() {
+        return blocked_storyboard_response(
+            None,
+            request.selected_total_duration_seconds,
+            blockers,
+            now_ms,
+        );
+    }
 
     let selected_records = select_golden_sample_records(state, &script_text, &request);
+    if selected_records.is_empty() {
+        return blocked_storyboard_response(
+            None,
+            request.selected_total_duration_seconds,
+            vec![ProductWarning {
+                code: "no_selectable_rows".to_string(),
+                message: "当前任务没有可用的官方分镜样本，无法生成分镜。".to_string(),
+                related_sample_id: None,
+            }],
+            now_ms,
+        );
+    }
     let row_count = selected_records.len().max(1);
-    let per_row_seconds = (request.selected_total_duration_seconds / row_count as u16).max(1);
     let mut rows = Vec::new();
-    let mut blockers = Vec::new();
     let mut warnings = Vec::new();
+    let row_durations =
+        match allocate_storyboard_row_durations(request.selected_total_duration_seconds, row_count)
+        {
+            Some(durations) => durations,
+            None => {
+                return blocked_storyboard_response(
+                    None,
+                    request.selected_total_duration_seconds,
+                    vec![ProductWarning {
+                        code: "duration_allocation_failed".to_string(),
+                        message: "镜头时长分配失败，无法生成满足总时长守恒的分镜。".to_string(),
+                        related_sample_id: None,
+                    }],
+                    now_ms,
+                );
+            }
+        };
 
     for (index, record) in selected_records.iter().enumerate() {
         let failure_mapping = state
@@ -176,7 +287,7 @@ pub fn generate_storyboard(
         }
         let prompt_compilation = compile_seedance_prompt_text(
             state,
-            build_prompt_text_compilation_request(record, &scene_projection, per_row_seconds),
+            build_prompt_text_compilation_request(record, &scene_projection, row_durations[index]),
         );
         warnings.extend(prompt_compilation.warnings.iter().cloned());
 
@@ -193,26 +304,11 @@ pub fn generate_storyboard(
             prompt_text_compilation_status: prompt_compilation.compilation_status,
             prompt_text_compilation_warnings: prompt_compilation.warnings.clone(),
             prompt_text_source_row_id: prompt_compilation.source_row_id.clone(),
-            duration_seconds: per_row_seconds,
+            duration_seconds: row_durations[index],
             prompt_body_candidate: prompt_candidate,
             scene_performance_projection: scene_projection.clone(),
             external_reference_handle_candidates: project_reference_handle_candidates(record),
             sequence_grouping: scene_projection.sequence_grouping,
-        });
-    }
-
-    if rows.is_empty() {
-        blockers.push(ProductWarning {
-            code: "v120_no_selectable_rows".to_string(),
-            message: "No V120 rows matched the bridge selector.".to_string(),
-            related_sample_id: None,
-        });
-    }
-    if script_text.trim().is_empty() {
-        blockers.push(ProductWarning {
-            code: "script_input_missing".to_string(),
-            message: "generate_storyboard requires script_id or expanded_script_text.".to_string(),
-            related_sample_id: None,
         });
     }
 
@@ -238,6 +334,22 @@ pub fn generate_storyboard(
         .len() as u32;
     let ready_row_count = rows.len() as u32 - blocked_row_count.min(rows.len() as u32);
     let allocated_seconds = rows.iter().map(|row| row.duration_seconds).sum::<u16>();
+    if allocated_seconds != request.selected_total_duration_seconds {
+        return blocked_storyboard_response(
+            None,
+            request.selected_total_duration_seconds,
+            vec![ProductWarning {
+                code: "duration_conservation_failed".to_string(),
+                message: "分镜总时长与任务时长不一致，已阻断生成结果。".to_string(),
+                related_sample_id: None,
+            }],
+            now_ms,
+        );
+    }
+    let task_id = format!(
+        "task-{}",
+        &stable_hash_hex(&format!("{}\n{}", request.task_name.trim(), scene_type))[..12]
+    );
     let result_id = format!(
         "storyboard-{}",
         &stable_hash_hex(&format!(
@@ -245,14 +357,21 @@ pub fn generate_storyboard(
             request.task_name, script_text, request.selected_total_duration_seconds
         ))[..12]
     );
+    let operation_id = format!(
+        "op-{}",
+        &stable_hash_hex(&format!("{result_id}\n{allocated_seconds}\n{now_ms}"))[..12]
+    );
+    let rows_hash = stable_hash_hex(&serialize_storyboard_rows(&rows));
 
     let response = GenerateStoryboardResponse {
+        task_id: Some(task_id),
         result_id,
         rows,
+        selected_total_duration_seconds: request.selected_total_duration_seconds,
         duration_plan: StoryboardDurationPlan {
             total_duration_seconds: request.selected_total_duration_seconds,
             row_count: row_count as u32,
-            per_row_seconds,
+            per_row_seconds: (allocated_seconds / row_count as u16).max(1),
             allocated_seconds,
         },
         export_status: StoryboardExportStatus {
@@ -262,26 +381,157 @@ pub fn generate_storyboard(
             ready_row_count,
             blocked_row_count,
         },
+        busy: false,
+        operation_id,
+        revision: 1,
+        updated_at_ms: now_ms,
+        rows_hash,
+        dirty: false,
+        dirty_source_note: None,
     };
     state.remember_storyboard(response.clone());
     response
 }
 
+pub fn save_storyboard_rows(
+    state: &AppState,
+    request: UpdateStoryboardRowsRequest,
+) -> GenerateStoryboardResponse {
+    let now_ms = now_epoch_ms();
+    let Some(mut snapshot) = state.find_storyboard(&request.result_id) else {
+        return blocked_storyboard_response(
+            request.task_id,
+            0,
+            vec![ProductWarning {
+                code: "storyboard_result_not_found".to_string(),
+                message: "未找到可编辑的分镜结果。".to_string(),
+                related_sample_id: None,
+            }],
+            now_ms,
+        );
+    };
+
+    if snapshot.revision != request.base_revision {
+        return blocked_storyboard_response(
+            snapshot.task_id.clone(),
+            snapshot.selected_total_duration_seconds,
+            vec![ProductWarning {
+                code: "storyboard_revision_conflict".to_string(),
+                message: "分镜内容已被其他操作更新，请刷新后重试。".to_string(),
+                related_sample_id: None,
+            }],
+            now_ms,
+        );
+    }
+
+    if request.rows.is_empty() {
+        return blocked_storyboard_response(
+            snapshot.task_id.clone(),
+            snapshot.selected_total_duration_seconds,
+            vec![ProductWarning {
+                code: "storyboard_rows_required".to_string(),
+                message: "保存分镜前请至少保留一条镜头。".to_string(),
+                related_sample_id: None,
+            }],
+            now_ms,
+        );
+    }
+
+    if request.rows.iter().any(|row| row.duration_seconds == 0) {
+        return blocked_storyboard_response(
+            snapshot.task_id.clone(),
+            snapshot.selected_total_duration_seconds,
+            vec![ProductWarning {
+                code: "row_duration_required".to_string(),
+                message: "每条分镜的时长都必须大于 0 秒。".to_string(),
+                related_sample_id: None,
+            }],
+            now_ms,
+        );
+    }
+
+    let total_duration = request
+        .rows
+        .iter()
+        .map(|row| row.duration_seconds)
+        .sum::<u16>();
+    if total_duration != snapshot.selected_total_duration_seconds {
+        return blocked_storyboard_response(
+            snapshot.task_id.clone(),
+            snapshot.selected_total_duration_seconds,
+            vec![ProductWarning {
+                code: "duration_conservation_failed".to_string(),
+                message: "编辑后的镜头总时长必须与任务总时长保持一致。".to_string(),
+                related_sample_id: None,
+            }],
+            now_ms,
+        );
+    }
+
+    snapshot.rows = request.rows;
+    snapshot.duration_plan.row_count = snapshot.rows.len() as u32;
+    snapshot.duration_plan.allocated_seconds = total_duration;
+    snapshot.duration_plan.per_row_seconds = if snapshot.rows.is_empty() {
+        0
+    } else {
+        (total_duration / snapshot.rows.len() as u16).max(1)
+    };
+    snapshot.export_status.warnings = snapshot
+        .rows
+        .iter()
+        .flat_map(|row| row.prompt_text_compilation_warnings.clone())
+        .collect();
+    snapshot.export_status.status = if snapshot.export_status.warnings.is_empty() {
+        BridgeCallStatus::Ready
+    } else {
+        BridgeCallStatus::WarningOnly
+    };
+    snapshot.export_status.ready_row_count = snapshot.rows.len() as u32;
+    snapshot.export_status.blocked_row_count = 0;
+    snapshot.task_id = request.task_id.or(snapshot.task_id.clone());
+    snapshot.revision += 1;
+    snapshot.updated_at_ms = now_ms;
+    snapshot.operation_id = request.operation_id;
+    snapshot.rows_hash = stable_hash_hex(&serialize_storyboard_rows(&snapshot.rows));
+    snapshot.dirty = true;
+    snapshot.dirty_source_note = request
+        .dirty_source_note
+        .or_else(|| Some("storyboard_rows_edited".to_string()));
+
+    state.remember_storyboard(snapshot.clone());
+    snapshot
+}
+
 pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBundleResponse {
     let export_manifest_id = format!(
         "export-manifest-{}",
-        &stable_hash_hex(&format!("{}\n{}", request.result_id, request.export_format))[..12]
+        &stable_hash_hex(&format!(
+            "{}\n{}\n{}",
+            request.result_id.as_deref().unwrap_or_default(),
+            request.task_id.as_deref().unwrap_or_default(),
+            request.export_format
+        ))[..12]
     );
 
-    let Some(storyboard) = state.find_storyboard(&request.result_id) else {
+    let storyboard = request
+        .result_id
+        .as_deref()
+        .and_then(|result_id| state.find_storyboard(result_id))
+        .or_else(|| {
+            request
+                .task_id
+                .as_deref()
+                .and_then(|task_id| state.find_storyboard_by_task_id(task_id))
+        });
+
+    let Some(storyboard) = storyboard else {
         return ExportBundleResponse {
             export_manifest_id: export_manifest_id.clone(),
             export_status: StoryboardExportStatus {
                 status: BridgeCallStatus::Blocked,
                 blockers: vec![ProductWarning {
                     code: "storyboard_result_not_found".to_string(),
-                    message: "export_bundle requires a previously generated storyboard result_id."
-                        .to_string(),
+                    message: "导出前请先生成或恢复有效分镜结果。".to_string(),
                     related_sample_id: None,
                 }],
                 warnings: vec![],
@@ -292,6 +542,9 @@ pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBu
                 &export_manifest_id,
                 &request.export_format,
                 "storyboard_result_not_found",
+                None,
+                None,
+                false,
             ),
         };
     };
@@ -304,15 +557,25 @@ pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBu
         ready: true,
         blocked_reason: None,
         artifact_path: None,
-        content_hash: None,
+        content_hash: Some(stable_hash_hex(&serialize_storyboard_rows(
+            &storyboard.rows,
+        ))),
         byte_size: None,
         row_count: Some(storyboard.rows.len() as u32),
+        selected_total_duration_seconds: Some(storyboard.selected_total_duration_seconds),
+        source_result_id: Some(storyboard.result_id.clone()),
+        edited_rows_applied: storyboard.dirty,
+        prompt_text_compilation_statuses: collect_compilation_statuses(&storyboard.rows),
+        prompt_text_compilation_warning_codes: collect_compilation_warning_codes(&storyboard.rows),
     }];
 
     match export_v120_storyboard_bundle(&V120StoryboardExportRequest {
         export_manifest_id: export_manifest_id.clone(),
-        result_id: request.result_id,
-        rows: storyboard.rows,
+        result_id: storyboard.result_id.clone(),
+        selected_total_duration_seconds: storyboard.selected_total_duration_seconds,
+        source_result_id: storyboard.result_id.clone(),
+        edited_rows_applied: storyboard.dirty,
+        rows: storyboard.rows.clone(),
     }) {
         Ok(bundle) => {
             artifacts.extend(
@@ -329,6 +592,17 @@ pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBu
                         content_hash: Some(artifact.content_hash),
                         byte_size: Some(artifact.byte_size),
                         row_count: Some(artifact.row_count),
+                        selected_total_duration_seconds: Some(
+                            storyboard.selected_total_duration_seconds,
+                        ),
+                        source_result_id: Some(storyboard.result_id.clone()),
+                        edited_rows_applied: storyboard.dirty,
+                        prompt_text_compilation_statuses: collect_compilation_statuses(
+                            &storyboard.rows,
+                        ),
+                        prompt_text_compilation_warning_codes: collect_compilation_warning_codes(
+                            &storyboard.rows,
+                        ),
                     }),
             );
         }
@@ -337,12 +611,15 @@ pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBu
             export_status.status = BridgeCallStatus::Blocked;
             export_status.blockers.push(ProductWarning {
                 code: "v120_export_artifact_generation_failed".to_string(),
-                message: reason.clone(),
+                message: reason,
                 related_sample_id: None,
             });
             artifacts.extend(blocked_storyboard_export_artifacts(
                 &export_manifest_id,
                 "v120_export_artifact_generation_failed",
+                Some(storyboard.selected_total_duration_seconds),
+                Some(storyboard.result_id.clone()),
+                storyboard.dirty,
             ));
         }
     }
@@ -358,6 +635,9 @@ fn blocked_export_artifacts(
     export_manifest_id: &str,
     requested_format: &str,
     blocked_reason: &str,
+    selected_total_duration_seconds: Option<u16>,
+    source_result_id: Option<String>,
+    edited_rows_applied: bool,
 ) -> Vec<ExportArtifactRecord> {
     let mut artifacts = vec![ExportArtifactRecord {
         artifact_id: format!("{}-bridge-manifest", export_manifest_id),
@@ -369,10 +649,18 @@ fn blocked_export_artifacts(
         content_hash: None,
         byte_size: None,
         row_count: None,
+        selected_total_duration_seconds,
+        source_result_id: source_result_id.clone(),
+        edited_rows_applied,
+        prompt_text_compilation_statuses: vec![],
+        prompt_text_compilation_warning_codes: vec![],
     }];
     artifacts.extend(blocked_storyboard_export_artifacts(
         export_manifest_id,
         blocked_reason,
+        selected_total_duration_seconds,
+        source_result_id,
+        edited_rows_applied,
     ));
     artifacts
 }
@@ -380,6 +668,9 @@ fn blocked_export_artifacts(
 fn blocked_storyboard_export_artifacts(
     export_manifest_id: &str,
     blocked_reason: &str,
+    selected_total_duration_seconds: Option<u16>,
+    source_result_id: Option<String>,
+    edited_rows_applied: bool,
 ) -> Vec<ExportArtifactRecord> {
     ["storyboard_json", "storyboard_csv", "excel_workbook"]
         .into_iter()
@@ -399,6 +690,11 @@ fn blocked_storyboard_export_artifacts(
             content_hash: None,
             byte_size: None,
             row_count: None,
+            selected_total_duration_seconds,
+            source_result_id: source_result_id.clone(),
+            edited_rows_applied,
+            prompt_text_compilation_statuses: vec![],
+            prompt_text_compilation_warning_codes: vec![],
         })
         .collect()
 }
@@ -816,6 +1112,131 @@ fn non_blank_string(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+fn now_epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+fn extract_scene_type(script_text: &str) -> String {
+    script_text
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("scene_type:")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_default()
+}
+
+fn is_supported_storyboard_duration(duration_seconds: u16) -> bool {
+    matches!(duration_seconds, 5 | 10 | 15 | 30 | 45 | 60)
+}
+
+fn allocate_storyboard_row_durations(
+    total_duration_seconds: u16,
+    row_count: usize,
+) -> Option<Vec<u16>> {
+    if row_count == 0 || !is_supported_storyboard_duration(total_duration_seconds) {
+        return None;
+    }
+
+    let base = total_duration_seconds / row_count as u16;
+    if base == 0 {
+        return None;
+    }
+
+    let mut durations = vec![base; row_count];
+    let mut remainder = total_duration_seconds % row_count as u16;
+    let mut index = 0usize;
+    while remainder > 0 {
+        durations[index] += 1;
+        remainder -= 1;
+        index = (index + 1) % row_count;
+    }
+
+    (durations.iter().copied().sum::<u16>() == total_duration_seconds).then_some(durations)
+}
+
+fn serialize_storyboard_rows(rows: &[GeneratedStoryboardRow]) -> String {
+    rows.iter()
+        .map(|row| {
+            format!(
+                "{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}",
+                row.shot_id,
+                row.order,
+                row.person,
+                row.shot_title,
+                row.visual_description,
+                row.character_action,
+                row.dialogue,
+                row.prompt_text,
+                row.prompt_text_compilation_status,
+                row.prompt_text_source_row_id,
+                row.duration_seconds,
+                row.prompt_text_compilation_warnings
+                    .iter()
+                    .map(|warning| warning.code.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn collect_compilation_statuses(rows: &[GeneratedStoryboardRow]) -> Vec<String> {
+    rows.iter()
+        .map(|row| format!("{:?}", row.prompt_text_compilation_status))
+        .collect()
+}
+
+fn collect_compilation_warning_codes(rows: &[GeneratedStoryboardRow]) -> Vec<String> {
+    rows.iter()
+        .flat_map(|row| {
+            row.prompt_text_compilation_warnings
+                .iter()
+                .map(|warning| warning.code.clone())
+        })
+        .collect()
+}
+
+fn blocked_storyboard_response(
+    task_id: Option<String>,
+    selected_total_duration_seconds: u16,
+    blockers: Vec<ProductWarning>,
+    now_ms: u64,
+) -> GenerateStoryboardResponse {
+    GenerateStoryboardResponse {
+        task_id,
+        result_id: String::new(),
+        rows: vec![],
+        selected_total_duration_seconds,
+        duration_plan: StoryboardDurationPlan {
+            total_duration_seconds: selected_total_duration_seconds,
+            row_count: 0,
+            per_row_seconds: 0,
+            allocated_seconds: 0,
+        },
+        export_status: StoryboardExportStatus {
+            status: BridgeCallStatus::Blocked,
+            blocked_row_count: 0,
+            ready_row_count: 0,
+            warnings: vec![],
+            blockers,
+        },
+        busy: false,
+        operation_id: String::new(),
+        revision: 0,
+        updated_at_ms: now_ms,
+        rows_hash: String::new(),
+        dirty: false,
+        dirty_source_note: None,
+    }
+}
+
 fn stable_hash_hex<T: Hash>(value: &T) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut hasher);
@@ -975,7 +1396,7 @@ mod tests {
         GoldenSampleV3CoreCoverage, GoldenSampleValidatorEvidence, KbBundleManifestRecord,
         KbBundleRecordCounts, KbGoldenSampleRuntimePackage, KbRuntimeSummary, KbSnapshotRecord,
         PromptTemplateRecord, PromptTextCompilationStatus, SceneTaxonomyRecord,
-        TextModelProviderKind,
+        TextModelProviderKind, UpdateStoryboardRowsRequest,
     };
     use project_store::{
         DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeHandle, StoreSkeleton,
@@ -987,7 +1408,7 @@ mod tests {
         build_storyboard_preview_plan, build_validation_export_panel_snapshot_from_fixture,
         compile_seedance_prompt_text, default_text_model_provider, expand_script, export_bundle,
         generate_storyboard, project_scene_performance, resolve_scene_taxonomy,
-        select_golden_sample_records,
+        save_storyboard_rows, select_golden_sample_records,
     };
     use crate::state::AppState;
     use validators::{WEEK3_SHARED_FIXTURE_PATH, load_week3_shared_fixture};
@@ -1551,11 +1972,11 @@ mod tests {
                 task_name: "daily_dialogue_scene".to_string(),
                 script_id: Some("script-test".to_string()),
                 expanded_script_text: None,
-                selected_total_duration_seconds: 16,
+                selected_total_duration_seconds: 15,
             },
         );
 
-        assert_eq!(selected.len(), 2);
+        assert_eq!(selected.len(), 1);
         assert!(selected.iter().all(|record| record.is_official()));
     }
 
@@ -1639,7 +2060,7 @@ mod tests {
                 task_name: "daily_dialogue_scene".to_string(),
                 script_id: Some(script.script_id.clone()),
                 expanded_script_text: None,
-                selected_total_duration_seconds: 8,
+                selected_total_duration_seconds: 10,
             },
         );
 
@@ -1729,7 +2150,8 @@ mod tests {
         let export = export_bundle(
             &state,
             ExportBundleRequest {
-                result_id: storyboard.result_id,
+                result_id: Some(storyboard.result_id.clone()),
+                task_id: storyboard.task_id.clone(),
                 export_format: "xlsx".to_string(),
             },
         );
@@ -1779,7 +2201,8 @@ mod tests {
         let export = export_bundle(
             &state,
             ExportBundleRequest {
-                result_id: "storyboard-missing".to_string(),
+                result_id: Some("storyboard-missing".to_string()),
+                task_id: None,
                 export_format: "xlsx".to_string(),
             },
         );
@@ -1800,6 +2223,216 @@ mod tests {
                 .all(|artifact| artifact.blocked_reason.as_deref()
                     == Some("storyboard_result_not_found"))
         );
+    }
+
+    #[test]
+    fn expand_script_blocks_empty_synopsis_without_creating_script_id() {
+        let state = test_state();
+
+        let response = expand_script(
+            &state,
+            ExpandScriptRequest {
+                scene_type: "daily_dialogue".to_string(),
+                synopsis_text: "   ".to_string(),
+            },
+        );
+
+        assert_eq!(response.status, BridgeCallStatus::Blocked);
+        assert!(response.script_id.is_empty());
+        assert!(
+            response
+                .blockers
+                .iter()
+                .any(|item| item.code == "synopsis_required")
+        );
+    }
+
+    #[test]
+    fn generate_storyboard_blocks_empty_script_and_invalid_duration() {
+        let state = test_state();
+
+        let empty_script = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "empty-script".to_string(),
+                script_id: None,
+                expanded_script_text: Some("".to_string()),
+                selected_total_duration_seconds: 10,
+            },
+        );
+        assert_eq!(empty_script.export_status.status, BridgeCallStatus::Blocked);
+        assert!(empty_script.result_id.is_empty());
+        assert!(empty_script.rows.is_empty());
+        assert!(
+            empty_script
+                .export_status
+                .blockers
+                .iter()
+                .any(|item| item.code == "task_script_required")
+        );
+
+        for duration in [7u16, 20u16, 0u16] {
+            let response = generate_storyboard(
+                &state,
+                GenerateStoryboardRequest {
+                    task_name: format!("invalid-duration-{duration}"),
+                    script_id: None,
+                    expanded_script_text: Some(
+                        "scene_type: daily_dialogue\nsynopsis: valid synopsis".to_string(),
+                    ),
+                    selected_total_duration_seconds: duration,
+                },
+            );
+            assert_eq!(response.export_status.status, BridgeCallStatus::Blocked);
+            assert!(response.result_id.is_empty());
+            assert!(
+                response
+                    .export_status
+                    .blockers
+                    .iter()
+                    .any(|item| item.code == "duration_not_supported")
+            );
+        }
+    }
+
+    #[test]
+    fn generate_storyboard_keeps_duration_sum_for_supported_values() {
+        let state = test_state();
+
+        for duration in [5u16, 10u16, 15u16, 30u16, 45u16, 60u16] {
+            let response = generate_storyboard(
+                &state,
+                GenerateStoryboardRequest {
+                    task_name: format!("duration-{duration}"),
+                    script_id: None,
+                    expanded_script_text: Some(format!(
+                        "scene_type: daily_dialogue\nsynopsis: duration test {duration}"
+                    )),
+                    selected_total_duration_seconds: duration,
+                },
+            );
+
+            assert_ne!(response.result_id, "");
+            assert_eq!(
+                response
+                    .rows
+                    .iter()
+                    .map(|row| row.duration_seconds)
+                    .sum::<u16>(),
+                duration
+            );
+            assert_eq!(response.duration_plan.allocated_seconds, duration);
+        }
+    }
+
+    #[test]
+    fn save_storyboard_rows_marks_snapshot_dirty_and_export_uses_latest_rows() {
+        let state = test_state();
+        let storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "editable-storyboard".to_string(),
+                script_id: None,
+                expanded_script_text: Some(
+                    "scene_type: daily_dialogue\nsynopsis: editable export".to_string(),
+                ),
+                selected_total_duration_seconds: 10,
+            },
+        );
+
+        let mut edited_rows = storyboard.rows.clone();
+        edited_rows[0].visual_description = "Edited bridge visual description".to_string();
+        edited_rows[0].prompt_text = "Edited Seedance2.0 prompt text".to_string();
+        edited_rows[0].duration_seconds = 10;
+
+        let saved = save_storyboard_rows(
+            &state,
+            UpdateStoryboardRowsRequest {
+                result_id: storyboard.result_id.clone(),
+                task_id: storyboard.task_id.clone(),
+                rows: edited_rows,
+                operation_id: "op-edit-save-001".to_string(),
+                base_revision: storyboard.revision,
+                dirty_source_note: Some("desktop_table_edit".to_string()),
+            },
+        );
+
+        assert!(saved.dirty);
+        assert_eq!(saved.revision, storyboard.revision + 1);
+        assert_eq!(saved.duration_plan.allocated_seconds, 10);
+        assert_eq!(
+            saved.rows[0].visual_description,
+            "Edited bridge visual description"
+        );
+
+        let export = export_bundle(
+            &state,
+            ExportBundleRequest {
+                result_id: Some(storyboard.result_id),
+                task_id: saved.task_id.clone(),
+                export_format: "xlsx".to_string(),
+            },
+        );
+
+        let json_artifact = export
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.artifact_kind == "storyboard_json")
+            .expect("json artifact should exist");
+        assert!(json_artifact.edited_rows_applied);
+        assert_eq!(json_artifact.selected_total_duration_seconds, Some(10));
+        assert!(
+            json_artifact
+                .prompt_text_compilation_statuses
+                .iter()
+                .any(|status| status == "ReadyStub")
+        );
+
+        let json_text = fs::read_to_string(json_artifact.artifact_path.as_ref().unwrap())
+            .expect("json export should be readable");
+        assert!(json_text.contains("Edited bridge visual description"));
+        assert!(json_text.contains("Edited Seedance2.0 prompt text"));
+    }
+
+    #[test]
+    fn save_storyboard_rows_blocks_duration_mismatch() {
+        let state = test_state();
+        let storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "duration-mismatch".to_string(),
+                script_id: None,
+                expanded_script_text: Some(
+                    "scene_type: daily_dialogue\nsynopsis: duration mismatch".to_string(),
+                ),
+                selected_total_duration_seconds: 10,
+            },
+        );
+
+        let mut edited_rows = storyboard.rows.clone();
+        edited_rows[0].duration_seconds = 9;
+
+        let saved = save_storyboard_rows(
+            &state,
+            UpdateStoryboardRowsRequest {
+                result_id: storyboard.result_id,
+                task_id: storyboard.task_id,
+                rows: edited_rows,
+                operation_id: "op-edit-save-002".to_string(),
+                base_revision: storyboard.revision,
+                dirty_source_note: None,
+            },
+        );
+
+        assert_eq!(saved.export_status.status, BridgeCallStatus::Blocked);
+        assert!(
+            saved
+                .export_status
+                .blockers
+                .iter()
+                .any(|item| item.code == "duration_conservation_failed")
+        );
+        assert!(saved.result_id.is_empty());
     }
 
     #[test]
