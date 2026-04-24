@@ -94,6 +94,31 @@ pub struct GoldenSampleLibraryRecord {
     pub repair_mapping_planning: GoldenSampleRepairMappingPlanning,
 }
 
+impl GoldenSampleLibraryRecord {
+    pub fn is_official(&self) -> bool {
+        self.classification
+            .library_status
+            .eq_ignore_ascii_case("official")
+    }
+
+    pub fn is_reserve(&self) -> bool {
+        self.classification
+            .library_status
+            .eq_ignore_ascii_case("reserve")
+    }
+
+    pub fn is_positive_fewshot_candidate(&self) -> bool {
+        self.is_official()
+            && self.classification.usable_for_fewshot
+            && self.fewshot.eligible
+            && self.fewshot.source_value.eq_ignore_ascii_case("Yes")
+            && self
+                .source_fields
+                .usable_for_fewshot
+                .eq_ignore_ascii_case("Yes")
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GoldenSampleSourceFields {
     pub shot_id: String,

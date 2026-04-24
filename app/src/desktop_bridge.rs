@@ -417,10 +417,22 @@ mod tests {
                         .contains("api_key_present: true")
                 );
                 assert!(!response.expanded_script_text.contains("sk-"));
+                assert!(!response.kb_router_result.selected_sample_ids.is_empty());
+                assert!(!response.kb_router_result.selected_kb_rules.is_empty());
+                assert_eq!(
+                    response
+                        .kb_router_result
+                        .retrieval_trace
+                        .token_budget
+                        .full_kb_rows_included,
+                    0
+                );
                 println!(
-                    "expand_script smoke: script_id={} warnings={}",
+                    "expand_script smoke: script_id={} warnings={} kb_samples={} kb_rules={}",
                     response.script_id,
-                    response.warnings.len()
+                    response.warnings.len(),
+                    response.kb_router_result.selected_sample_ids.len(),
+                    response.kb_router_result.selected_kb_rules.len()
                 );
                 (response.script_id, response.expanded_script_text)
             }
@@ -457,11 +469,23 @@ mod tests {
                         .iter()
                         .any(|warning| warning.code == "model_provider_reserved")
                 );
+                assert!((3..=5).contains(&response.kb_router_result.selected_sample_ids.len()));
+                assert!(!response.kb_router_result.selected_kb_rules.is_empty());
+                assert_eq!(
+                    response
+                        .kb_router_result
+                        .retrieval_trace
+                        .token_budget
+                        .full_kb_rows_included,
+                    0
+                );
                 println!(
-                    "generate_storyboard smoke: result_id={} rows={} status={:?}",
+                    "generate_storyboard smoke: result_id={} rows={} status={:?} kb_samples={} kb_rules={}",
                     response.result_id,
                     response.rows.len(),
-                    response.export_status.status
+                    response.export_status.status,
+                    response.kb_router_result.selected_sample_ids.len(),
+                    response.kb_router_result.selected_kb_rules.len()
                 );
                 (
                     response.result_id,
@@ -537,6 +561,11 @@ mod tests {
                         .iter()
                         .any(|status| status == "ReadyStub")
                 );
+                assert!(!ready_artifact.selected_sample_ids.is_empty());
+                assert!(!ready_artifact.selected_kb_rule_ids.is_empty());
+                assert_eq!(ready_artifact.full_kb_rows_included, 0);
+                assert!(ready_artifact.kb_context_summary.is_some());
+                assert!(ready_artifact.retrieval_trace.is_some());
             }
             _ => panic!("export_bundle should return export response"),
         }

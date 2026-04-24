@@ -80,6 +80,22 @@ export interface ExpandScriptResponse {
   expanded_script_text: string;
   script_hash: string;
   warnings: ProductWarning[];
+  kb_router_result?: KbRouterRuntimeResponse | null;
+}
+
+export interface KbRouterSelectedRule {
+  rule_id: string;
+  family: string;
+  summary: string;
+  applies_to: string[];
+}
+
+export interface KbRouterRuntimeResponse {
+  selected_sample_ids: string[];
+  selected_kb_rules: KbRouterSelectedRule[];
+  kb_context_summary: string;
+  retrieval_trace?: unknown | null;
+  full_kb_rows_included?: number;
 }
 
 export interface GenerateStoryboardRequest {
@@ -146,6 +162,7 @@ export interface GenerateStoryboardResponse {
   rows_hash?: string;
   dirty?: boolean;
   dirty_source_note?: string | null;
+  kb_router_result?: KbRouterRuntimeResponse | null;
 }
 
 export interface ExportBundleRequest {
@@ -178,6 +195,11 @@ export interface ExportArtifactRecord {
   edited_rows_applied?: boolean;
   prompt_text_compilation_statuses?: string[];
   prompt_text_compilation_warning_codes?: string[];
+  selected_sample_ids?: string[];
+  selected_kb_rule_ids?: string[];
+  kb_context_summary?: string | null;
+  retrieval_trace?: unknown | null;
+  full_kb_rows_included?: number;
 }
 
 export interface ExportBundleResponse {

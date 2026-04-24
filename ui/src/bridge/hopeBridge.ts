@@ -10,6 +10,8 @@ import type {
   GenerateStoryboardRequest,
   GenerateStoryboardResponse,
   GeneratedStoryboardRow,
+  KbRouterRuntimeResponse,
+  KbRouterSelectedRule,
   PreviewItem,
   ProductWarning,
   ProjectCreateOrSwitchRequest,
@@ -462,6 +464,57 @@ function normalizeWarningList(raw: unknown): ProductWarning[] {
   return Array.isArray(raw) ? raw.map((item) => normalizeProductWarning(item)) : [];
 }
 
+function normalizeKbRouterSelectedRule(raw: unknown): KbRouterSelectedRule {
+  const rule = readObject(raw, "kb router selected rule");
+  return {
+    rule_id: String(rule.rule_id ?? rule.ruleId ?? ""),
+    family: String(rule.family ?? ""),
+    summary: String(rule.summary ?? ""),
+    applies_to: Array.isArray(rule.applies_to)
+      ? rule.applies_to.map(String)
+      : Array.isArray(rule.appliesTo)
+        ? rule.appliesTo.map(String)
+        : [],
+  };
+}
+
+function normalizeKbRouterResult(raw: unknown): KbRouterRuntimeResponse | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const router = readObject(raw, "kb router result");
+  const retrievalTrace = router.retrieval_trace ?? router.retrievalTrace ?? null;
+  const traceObject = retrievalTrace && typeof retrievalTrace === "object"
+    ? readObject(retrievalTrace, "kb router retrieval trace")
+    : null;
+  const tokenBudget = traceObject && (traceObject.token_budget ?? traceObject.tokenBudget)
+    ? readObject(traceObject.token_budget ?? traceObject.tokenBudget, "kb router token budget")
+    : null;
+
+  return {
+    selected_sample_ids: Array.isArray(router.selected_sample_ids)
+      ? router.selected_sample_ids.map(String)
+      : Array.isArray(router.selectedSampleIds)
+        ? router.selectedSampleIds.map(String)
+        : [],
+    selected_kb_rules: Array.isArray(router.selected_kb_rules)
+      ? router.selected_kb_rules.map((item) => normalizeKbRouterSelectedRule(item))
+      : Array.isArray(router.selectedKbRules)
+        ? router.selectedKbRules.map((item) => normalizeKbRouterSelectedRule(item))
+        : [],
+    kb_context_summary: String(router.kb_context_summary ?? router.kbContextSummary ?? ""),
+    retrieval_trace: retrievalTrace,
+    full_kb_rows_included: Number(
+      router.full_kb_rows_included ??
+        router.fullKbRowsIncluded ??
+        tokenBudget?.full_kb_rows_included ??
+        tokenBudget?.fullKbRowsIncluded ??
+        0,
+    ),
+  };
+}
+
 function normalizeExpandScriptResponse(raw: unknown): ExpandScriptResponse {
   const response = readObject(raw, "expand_script response");
   return {
@@ -471,6 +524,9 @@ function normalizeExpandScriptResponse(raw: unknown): ExpandScriptResponse {
     ),
     script_hash: String(response.script_hash ?? response.scriptHash ?? ""),
     warnings: normalizeWarningList(response.warnings),
+    kb_router_result: normalizeKbRouterResult(
+      response.kb_router_result ?? response.kbRouterResult ?? response,
+    ),
   };
 }
 
@@ -569,6 +625,9 @@ function normalizeGenerateStoryboardResponse(raw: unknown): GenerateStoryboardRe
     dirty_source_note: (response.dirty_source_note ?? response.dirtySourceNote ?? null) as
       | string
       | null,
+    kb_router_result: normalizeKbRouterResult(
+      response.kb_router_result ?? response.kbRouterResult ?? response,
+    ),
   };
 }
 
@@ -605,6 +664,23 @@ function normalizeExportArtifact(raw: unknown): ExportArtifactRecord {
       : Array.isArray(artifact.promptTextCompilationWarningCodes)
         ? artifact.promptTextCompilationWarningCodes.map(String)
         : [],
+    selected_sample_ids: Array.isArray(artifact.selected_sample_ids)
+      ? artifact.selected_sample_ids.map(String)
+      : Array.isArray(artifact.selectedSampleIds)
+        ? artifact.selectedSampleIds.map(String)
+        : [],
+    selected_kb_rule_ids: Array.isArray(artifact.selected_kb_rule_ids)
+      ? artifact.selected_kb_rule_ids.map(String)
+      : Array.isArray(artifact.selectedKbRuleIds)
+        ? artifact.selectedKbRuleIds.map(String)
+        : [],
+    kb_context_summary: (artifact.kb_context_summary ?? artifact.kbContextSummary ?? null) as
+      | string
+      | null,
+    retrieval_trace: artifact.retrieval_trace ?? artifact.retrievalTrace ?? null,
+    full_kb_rows_included: Number(
+      artifact.full_kb_rows_included ?? artifact.fullKbRowsIncluded ?? 0,
+    ),
   };
 }
 

@@ -14,6 +14,7 @@ import type {
   ExportBundleResponse,
   GenerateStoryboardResponse,
   GeneratedStoryboardRow,
+  KbRouterRuntimeResponse,
   ModelConfigSummary,
   ProductWarning,
   SceneFusionOption,
@@ -196,7 +197,7 @@ const API_DOC_SECTIONS = [
     items: [
       "WarningOnly 表示已生成但存在候选限制或证据限制，不等同失败。",
       "Excel workbook 未 ready 时不会伪造 Excel ready、下载路径或素材路径。",
-      "prompt_body 仍只能作为候选证据，不会被声明为最终 prompt_text。",
+      "候选提示词证据不会被声明为最终 prompt_text。",
     ],
   },
 ];
@@ -260,6 +261,7 @@ export function App() {
   const [taskDraft, setTaskDraft] = useState<TaskDraftState | null>(null);
   const [isTaskPickerOpen, setIsTaskPickerOpen] = useState(false);
   const [taskSerial, setTaskSerial] = useState(0);
+  const [isKbSummaryExpanded, setIsKbSummaryExpanded] = useState(false);
   const [exportMessage, setExportMessage] = useState("等待主线 bridge 返回结果。");
 
   const editingRow = editingDraft;
@@ -314,6 +316,7 @@ export function App() {
     () => buildModelConfigSummary(modelConfig),
     [modelConfig],
   );
+  const activeKbRouterResult = storyboardResult?.kb_router_result ?? expandedScriptResult?.kb_router_result ?? null;
 
   const confirmDiscardDirty = (actionLabel: string) => {
     if (!rowsDirty) {
@@ -1335,6 +1338,9 @@ export function App() {
                 {bridgeBusy === "expand" ? "扩写中" : "扩写脚本"}
               </button>
             </div>
+            <div className="kb-router-hint">
+              将根据场景类型、镜头意图、结构和时长自动匹配少量知识库规则，不会全量调用知识库。
+            </div>
             {showExpandedScriptStatus && (expandedScriptResult || expandedScript) ? (
               <div className="bridge-status bridge-status--script">
                 <div className="bridge-status__meta">
@@ -1431,6 +1437,14 @@ export function App() {
                 {bridgeBusy === "generate" ? "生成中" : "开始生成"}
               </button>
             </div>
+
+            {activeKbRouterResult ? (
+              <KbRouterSummary
+                router={activeKbRouterResult}
+                expanded={isKbSummaryExpanded}
+                onToggle={() => setIsKbSummaryExpanded((value) => !value)}
+              />
+            ) : null}
 
             <div className="table-wrapper">
               <table className="storyboard-table">
@@ -1896,6 +1910,37 @@ function LongTextCell({
   );
 }
 
+function KbRouterSummary({
+  router,
+  expanded,
+  onToggle,
+}: {
+  router: KbRouterRuntimeResponse;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const sampleCount = router.selected_sample_ids.length;
+  const ruleCount = router.selected_kb_rules.length;
+  const summary = formatUserKbSummary(router);
+
+  return (
+    <div className="kb-router-summary">
+      <div className="kb-router-summary__line">
+        <strong>已匹配知识库规则</strong>
+        <span>已匹配 {sampleCount} 个参考样本</span>
+        <span>已应用 {ruleCount} 条规则</span>
+        <span>{(router.full_kb_rows_included ?? 0) === 0 ? "未全量调用知识库" : "知识库调用已被限制"}</span>
+        <button type="button" className="link-button" onClick={onToggle}>
+          {expanded ? "收起摘要" : "展开摘要"}
+        </button>
+      </div>
+      {expanded ? (
+        <p className="kb-router-summary__detail">{summary}</p>
+      ) : null}
+    </div>
+  );
+}
+
 function resolveSceneOption(value: SceneFusionOption) {
   return SCENE_OPTIONS.find((option) => option.value === value) ?? SCENE_OPTIONS[0];
 }
@@ -2112,6 +2157,47 @@ function collectPromptWarningCodes(rows: GeneratedStoryboardRow[]) {
   );
 }
 
+function formatUserKbSummary(router: KbRouterRuntimeResponse) {
+  const ruleText = router.selected_kb_rules
+    .slice(0, 3)
+    .map((rule) => cleanKbDisplayText(rule.summary))
+    .filter(Boolean)
+    .join("；");
+  const summaryText = cleanKbDisplayText(router.kb_context_summary);
+  const baseSummary =
+    "本次只抽取与当前场景类型、镜头意图、结构和时长直接相关的少量参考样本与规则，重点用于场景结构、动作连续性、时长守恒和当前文本提示词约束。";
+  const detail = [summaryText, ruleText].filter(Boolean).join("；");
+  return truncatePreview(`${baseSummary}${detail ? `规则摘要：${detail}` : ""}`, 360);
+}
+
+function cleanKbDisplayText(value: string) {
+  return value
+    .replace(/source_register/gi, "来源内部字段")
+    .replace(/provenance/gi, "来源内部字段")
+    .replace(/overlay JSON/gi, "内部配置")
+    .replace(/prompt_body/gi, "候选提示词")
+    .replace(/teaching_note/gi, "教学说明")
+    .replace(/content_cache_key/gi, "缓存标记")
+    .replace(/snapshot_checksum/gi, "快照校验")
+    .replace(/retrieval_trace/gi, "匹配追溯摘要")
+    .replace(/selected_sample_ids=/gi, "参考样本=")
+    .replace(/参考样本=[^。]+。?/g, "参考样本已按数量统计。")
+    .replace(/样本\s+[A-Za-z0-9_.:-]+：/g, "参考样本：")
+    .replace(/full_kb_rows_included/gi, "全量知识库调用")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasRetrievalTraceSummary(response: ExportBundleResponse) {
+  return response.artifacts.some(
+    (artifact) =>
+      Boolean(artifact.retrieval_trace) ||
+      Boolean(artifact.kb_context_summary) ||
+      Boolean(artifact.selected_sample_ids?.length) ||
+      Boolean(artifact.selected_kb_rule_ids?.length),
+  );
+}
+
 function isBlockedStoryboardResponse(response: GenerateStoryboardResponse) {
   return response.export_status.status === "Blocked" || !response.result_id || response.rows.length === 0;
 }
@@ -2193,7 +2279,10 @@ function formatExportBundleMessage(response: ExportBundleResponse) {
   const warnings = primary?.prompt_text_compilation_warning_codes?.length
     ? ` / warnings=${primary.prompt_text_compilation_warning_codes.join(",")}`
     : "";
-  return `${prefix}：${response.export_manifest_id} / ${readyArtifacts.length}/${response.artifacts.length} ready / ${response.export_status.status}${rows}${hash}${edited}${statuses}${warnings}`;
+  const kbTrace = hasRetrievalTraceSummary(response)
+    ? " / 导出已包含知识库匹配摘要和样本 ID 追溯"
+    : "";
+  return `${prefix}：${response.export_manifest_id} / ${readyArtifacts.length}/${response.artifacts.length} ready / ${response.export_status.status}${rows}${hash}${edited}${statuses}${warnings}${kbTrace}`;
 }
 
 function formatArtifact(artifact: ExportArtifactRecord) {
