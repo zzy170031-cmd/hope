@@ -16,9 +16,9 @@ use core_domain::{
     BridgeCallStatus, ExpandScriptRequest, ExpandScriptResponse, ExportArtifactRecord,
     ExportBundleRequest, ExportBundleResponse, ExternalReferenceHandleCandidate,
     GenerateStoryboardRequest, GenerateStoryboardResponse, GeneratedStoryboardRow,
-    GoldenSampleLibraryRecord, ProductWarning, PromptBodyCandidate, ScenePerformanceProjection,
-    SequenceFieldState, SequenceGrouping, StoryboardDurationPlan, StoryboardExportStatus,
-    StructureMode,
+    GoldenSampleLibraryRecord, ModelConfigSummary, ProductWarning, PromptBodyCandidate,
+    ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, StoryboardDurationPlan,
+    StoryboardExportStatus, StructureMode,
 };
 use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
 use serde::Serialize;
@@ -130,10 +130,11 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
     let scene_label = request.scene_label.as_deref().unwrap_or_default().trim();
     let scene_category = request.scene_category.as_deref().unwrap_or_default().trim();
     let script_hash = stable_hash_hex(&format!(
-        "{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}",
         request.scene_type.trim(),
         scene_label,
         scene_category,
+        model_config_hash_input(request.model_config_summary.as_ref()),
         request.synopsis_text.trim()
     ));
     let script_id = format!("script-{}", &script_hash[..12]);
@@ -145,6 +146,7 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
                 .to_string(),
         related_sample_id: None,
     }];
+    warnings.extend(model_config_warnings(request.model_config_summary.as_ref()));
 
     let source_package = if let Some(package) = state.kb_golden_sample_runtime.as_ref() {
         if !package.manifest.seed_import_format.contains("v0.2") {
@@ -170,10 +172,30 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
     let response = ExpandScriptResponse {
         script_id,
         expanded_script_text: format!(
-            "scene_type: {}\nscene_label: {}\nscene_category: {}\nsynopsis: {}\nsource_package: {}",
+            "scene_type: {}\nscene_label: {}\nscene_category: {}\nmodel_provider: {}\nmodel: {}\nmodel_enabled: {}\napi_key_present: {}\nsynopsis: {}\nsource_package: {}",
             request.scene_type.trim(),
             scene_label,
             scene_category,
+            request
+                .model_config_summary
+                .as_ref()
+                .map(|item| item.provider.as_str())
+                .unwrap_or("qwen"),
+            request
+                .model_config_summary
+                .as_ref()
+                .map(|item| item.model.as_str())
+                .unwrap_or("qwen-plus"),
+            request
+                .model_config_summary
+                .as_ref()
+                .map(|item| item.enabled)
+                .unwrap_or(false),
+            request
+                .model_config_summary
+                .as_ref()
+                .map(|item| item.api_key_present)
+                .unwrap_or(false),
             request.synopsis_text.trim(),
             source_package
         ),
@@ -287,6 +309,7 @@ pub fn generate_storyboard(
                 .to_string(),
         related_sample_id: None,
     });
+    warnings.extend(model_config_warnings(request.model_config_summary.as_ref()));
 
     let status = if !blockers.is_empty() {
         BridgeCallStatus::Blocked
@@ -465,6 +488,45 @@ fn blocked_storyboard_export_artifacts(
             row_count: None,
         })
         .collect()
+}
+
+fn model_config_hash_input(model_config: Option<&ModelConfigSummary>) -> String {
+    match model_config {
+        Some(config) => format!(
+            "{}\n{}\n{}\n{}",
+            config.provider.trim(),
+            config.model.trim(),
+            config.enabled,
+            config.api_key_present
+        ),
+        None => "qwen\nqwen-plus\nfalse\nfalse".to_string(),
+    }
+}
+
+fn model_config_warnings(model_config: Option<&ModelConfigSummary>) -> Vec<ProductWarning> {
+    let Some(config) = model_config else {
+        return Vec::new();
+    };
+
+    let provider = config.provider.trim();
+    let mut warnings = Vec::new();
+    if !provider.eq_ignore_ascii_case("qwen") {
+        warnings.push(ProductWarning {
+            code: "model_provider_reserved".to_string(),
+            message: "该模型接口已配置为预留状态，当前仍使用本地文本生成桥接。".to_string(),
+            related_sample_id: None,
+        });
+    }
+
+    if !config.enabled {
+        warnings.push(ProductWarning {
+            code: "model_config_disabled".to_string(),
+            message: "模型配置当前未启用，本轮仍使用本地文本生成桥接。".to_string(),
+            related_sample_id: None,
+        });
+    }
+
+    warnings
 }
 
 fn select_golden_sample_records<'a>(

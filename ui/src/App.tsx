@@ -13,6 +13,7 @@ import type {
   ExportBundleResponse,
   GenerateStoryboardResponse,
   GeneratedStoryboardRow,
+  ModelConfigSummary,
   ProductWarning,
   SceneFusionOption,
   StoryboardExportStatus,
@@ -32,6 +33,19 @@ interface SceneOption extends Option<SceneFusionOption> {
   group: string;
 }
 
+interface ModelConfigState {
+  provider: WorkbenchModelId;
+  model: string;
+  baseUrl: string;
+  apiKeyRef: string;
+  enabled: boolean;
+  apiKeyPresent: boolean;
+}
+
+interface ModelConfigDraft extends ModelConfigState {
+  apiKeyInput: string;
+}
+
 const PAGE_SIZE = 5;
 const DURATION_OPTIONS = [15, 30, 45, 60];
 const DEFAULT_SYNOPSIS = "主角在废墟城市中与敌人激烈战斗，最终觉醒新力量，击败敌人。";
@@ -39,10 +53,42 @@ const DEFAULT_SCENE: SceneFusionOption = "hot_blood_battle";
 const DEFAULT_TASK_NAME = "第一集分镜生成";
 
 const MODEL_OPTIONS: Array<Option<WorkbenchModelId>> = [
-  { value: "gpt_4o", label: "GPT-4o" },
-  { value: "gpt_4_1_mini", label: "GPT-4.1 mini" },
-  { value: "hope_storyboard_mode", label: "Hope 工作台模式" },
+  { value: "qwen", label: "千问 Qwen" },
+  { value: "doubao", label: "豆包 Doubao（预留）" },
+  { value: "custom", label: "自定义模型（预留）" },
 ];
+
+const MODEL_DEFAULTS: Record<WorkbenchModelId, Pick<ModelConfigState, "model" | "baseUrl">> = {
+  qwen: {
+    model: "qwen-plus",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  },
+  doubao: {
+    model: "doubao-seed-reserved",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+  },
+  custom: {
+    model: "custom-text-model",
+    baseUrl: "",
+  },
+};
+
+const API_KEY_REF_OPTIONS = [
+  { value: "", label: "不使用引用" },
+  { value: "env:QWEN_API_KEY", label: "env:QWEN_API_KEY" },
+  { value: "env:DOUBAO_API_KEY", label: "env:DOUBAO_API_KEY" },
+  { value: "env:CUSTOM_MODEL_API_KEY", label: "env:CUSTOM_MODEL_API_KEY" },
+  { value: "keychain:hope-model-api-key", label: "keychain:hope-model-api-key" },
+];
+
+const DEFAULT_MODEL_CONFIG: ModelConfigState = {
+  provider: "qwen",
+  model: MODEL_DEFAULTS.qwen.model,
+  baseUrl: MODEL_DEFAULTS.qwen.baseUrl,
+  apiKeyRef: "",
+  enabled: true,
+  apiKeyPresent: false,
+};
 
 const SCENE_OPTIONS: SceneOption[] = [
   { group: "基础动漫叙事", value: "hot_blood_battle", label: "热血战斗" },
@@ -74,12 +120,6 @@ const API_DOC_ITEMS = [
   "导出动作仅作用于当前页面中的本地结果，不代表正式导出链路已经上线。",
 ];
 
-const API_INTERFACE_ITEMS = [
-  "当前版本保留可点击交互，但不宣称已接入实时 Qwen。",
-  "当前版本不宣称已接入实时 Seedance，也不代表外部引用链路已产品化完成。",
-  "当前版本不宣称 V120 已直接导入 Hope runtime。",
-];
-
 function useWorkbenchRoute(): ViewId {
   const [activeView, setActiveView] = useState<ViewId>(() => resolveRoute(window.location.hash));
 
@@ -105,7 +145,12 @@ export function App() {
   useWorkbenchRoute();
 
   const [activePanel, setActivePanel] = useState<HeaderPanel>("none");
-  const [selectedModel, setSelectedModel] = useState<WorkbenchModelId>("gpt_4o");
+  const [selectedModel, setSelectedModel] = useState<WorkbenchModelId>(DEFAULT_MODEL_CONFIG.provider);
+  const [modelConfig, setModelConfig] = useState<ModelConfigState>(DEFAULT_MODEL_CONFIG);
+  const [modelConfigDraft, setModelConfigDraft] = useState<ModelConfigDraft>({
+    ...DEFAULT_MODEL_CONFIG,
+    apiKeyInput: "",
+  });
   const [selectedScene, setSelectedScene] = useState<SceneFusionOption>(DEFAULT_SCENE);
   const [synopsis, setSynopsis] = useState(DEFAULT_SYNOPSIS);
   const [expandedScript, setExpandedScript] = useState("");
@@ -150,6 +195,85 @@ export function App() {
   const pageTokens = useMemo(() => buildPageTokens(pageCount, currentPage), [pageCount, currentPage]);
   const selectedSceneOption = useMemo(() => resolveSceneOption(selectedScene), [selectedScene]);
   const sceneOptionGroups = useMemo(() => groupSceneOptions(SCENE_OPTIONS), []);
+  const selectedModelLabel = useMemo(() => resolveModelLabel(modelConfig.provider), [modelConfig.provider]);
+  const modelReservedWarning = modelConfig.provider === "qwen"
+    ? ""
+    : "该模型接口已配置为预留状态，当前仍使用本地文本生成桥接。";
+  const modelConfigSummary = useMemo(
+    () => buildModelConfigSummary(modelConfig),
+    [modelConfig],
+  );
+
+  const handleModelSelect = (provider: WorkbenchModelId) => {
+    const defaults = MODEL_DEFAULTS[provider];
+    const nextConfig: ModelConfigState = {
+      ...modelConfig,
+      provider,
+      model: provider === modelConfig.provider ? modelConfig.model : defaults.model,
+      baseUrl: provider === modelConfig.provider ? modelConfig.baseUrl : defaults.baseUrl,
+      apiKeyPresent: provider === modelConfig.provider ? modelConfig.apiKeyPresent : false,
+    };
+    setSelectedModel(provider);
+    setModelConfig(nextConfig);
+    setModelConfigDraft({ ...nextConfig, apiKeyInput: "" });
+    setExportMessage(
+      provider === "qwen"
+        ? "已选择千问 Qwen，当前仍使用本地文本生成桥接。"
+        : "该模型接口已配置为预留状态，当前仍使用本地文本生成桥接。",
+    );
+  };
+
+  const handleModelConfigDraftChange = <K extends keyof ModelConfigDraft>(
+    field: K,
+    value: ModelConfigDraft[K],
+  ) => {
+    setModelConfigDraft((current) => {
+      const next = { ...current, [field]: value };
+      if (field === "provider" && typeof value === "string") {
+        const provider = value as WorkbenchModelId;
+        const defaults = MODEL_DEFAULTS[provider];
+        return {
+          ...next,
+          provider,
+          model: defaults.model,
+          baseUrl: defaults.baseUrl,
+          apiKeyPresent: false,
+          apiKeyInput: "",
+        };
+      }
+
+      return next;
+    });
+  };
+
+  const handleSaveModelConfig = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const provider = modelConfigDraft.provider;
+    const apiKeyRef = normalizeApiKeyRef(modelConfigDraft.apiKeyRef);
+    const hadRawValueInRef = modelConfigDraft.apiKeyRef.trim().length > 0 && !apiKeyRef;
+    const nextConfig: ModelConfigState = {
+      provider,
+      model: modelConfigDraft.model.trim() || MODEL_DEFAULTS[provider].model,
+      baseUrl: modelConfigDraft.baseUrl.trim(),
+      apiKeyRef,
+      enabled: modelConfigDraft.enabled,
+      apiKeyPresent:
+        modelConfigDraft.apiKeyInput.trim().length > 0 ||
+        apiKeyRef.length > 0 ||
+        hadRawValueInRef ||
+        (provider === modelConfig.provider && modelConfig.apiKeyPresent),
+    };
+    setSelectedModel(provider);
+    setModelConfig(nextConfig);
+    setModelConfigDraft({ ...nextConfig, apiKeyInput: "" });
+    setExportMessage(
+      hadRawValueInRef
+        ? "检测到密钥引用栏疑似填入了明文 Key，已清空该栏；只记录 api_key_present，不保留明文。"
+        : provider === "qwen"
+        ? `已保存 ${resolveModelLabel(provider)} 本地配置；本轮不会发起真实模型请求。`
+        : "已保存预留模型配置；当前仍使用本地文本生成桥接。",
+    );
+  };
 
   const handleExpandScript = async () => {
     setBridgeBusy("expand");
@@ -158,6 +282,7 @@ export function App() {
         scene_type: selectedSceneOption.value,
         scene_label: selectedSceneOption.label,
         scene_category: selectedSceneOption.group,
+        model_config_summary: modelConfigSummary,
         synopsis_text: synopsis,
       });
       setExpandedScriptResult(response);
@@ -214,6 +339,7 @@ export function App() {
         script_id: taskScriptId,
         expanded_script_text: taskScriptId ? null : source,
         selected_total_duration_seconds: durationSeconds,
+        model_config_summary: modelConfigSummary,
       });
       const nextRows = response.rows.map(mapGeneratedStoryboardRow);
       setStoryboardResult(response);
@@ -348,7 +474,7 @@ export function App() {
                 <span>模型选择：</span>
                 <select
                   value={selectedModel}
-                  onChange={(event) => setSelectedModel(event.target.value as WorkbenchModelId)}
+                  onChange={(event) => handleModelSelect(event.target.value as WorkbenchModelId)}
                 >
                   {MODEL_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -356,6 +482,9 @@ export function App() {
                     </option>
                   ))}
                 </select>
+                <small className="top-select__meta">
+                  {selectedModelLabel} · {modelConfig.model}
+                </small>
               </label>
               <button
                 type="button"
@@ -371,17 +500,116 @@ export function App() {
               >
                 API接口
               </button>
+              {modelReservedWarning ? (
+                <span className="model-reserved-warning">{modelReservedWarning}</span>
+              ) : null}
             </div>
           </header>
 
           {activePanel !== "none" ? (
             <section className="top-panel">
               <div className="top-panel__title">{activePanel === "docs" ? "API文档" : "API接口"}</div>
-              <ul>
-                {(activePanel === "docs" ? API_DOC_ITEMS : API_INTERFACE_ITEMS).map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
+              {activePanel === "docs" ? (
+                <ul>
+                  {API_DOC_ITEMS.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              ) : (
+                <form className="api-config" onSubmit={handleSaveModelConfig}>
+                  <div className="api-config__notice">
+                    当前为本地配置预留，本轮不发起真实模型请求；Seedance2.0 仅作为提示词适配目标，不是当前运行时视频接口。
+                  </div>
+                  <div className="api-config__rows">
+                    <div className="api-config__row api-config__row--primary">
+                      <label>
+                        <span>provider</span>
+                        <select
+                          value={modelConfigDraft.provider}
+                          onChange={(event) =>
+                            handleModelConfigDraftChange("provider", event.target.value as WorkbenchModelId)
+                          }
+                        >
+                          {MODEL_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>model</span>
+                        <input
+                          name="hope-model-name"
+                          autoComplete="off"
+                          value={modelConfigDraft.model}
+                          onChange={(event) => handleModelConfigDraftChange("model", event.target.value)}
+                          placeholder="qwen-plus"
+                        />
+                      </label>
+                      <label>
+                        <span>base_url</span>
+                        <input
+                          name="hope-model-base-url"
+                          autoComplete="off"
+                          value={modelConfigDraft.baseUrl}
+                          onChange={(event) => handleModelConfigDraftChange("baseUrl", event.target.value)}
+                          placeholder="https://..."
+                        />
+                      </label>
+                    </div>
+                    <div className="api-config__row api-config__row--secret">
+                      <label>
+                        <span>API Key（在这里输入）</span>
+                        <input
+                          name="hope-model-api-key"
+                          type="password"
+                          value={modelConfigDraft.apiKeyInput}
+                          onChange={(event) => handleModelConfigDraftChange("apiKeyInput", event.target.value)}
+                          placeholder={modelConfigDraft.apiKeyPresent ? "已配置，保存时不显示明文" : "仅用于本地 presence 标记"}
+                          autoComplete="new-password"
+                          data-lpignore="true"
+                        />
+                        <small>保存后只记录 api_key_present，不显示、不发送明文。</small>
+                      </label>
+                      <label>
+                        <span>api_key_ref（可选引用）</span>
+                        <select
+                          name="hope-model-api-key-ref"
+                          autoComplete="off"
+                          data-lpignore="true"
+                          value={normalizeApiKeyRef(modelConfigDraft.apiKeyRef)}
+                          onChange={(event) => handleModelConfigDraftChange("apiKeyRef", event.target.value)}
+                        >
+                          {API_KEY_REF_OPTIONS.map((option) => (
+                            <option key={option.value || "none"} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        <small>这里只能选环境变量/钥匙串引用，不填真实 Key。</small>
+                      </label>
+                      <label className="api-config__toggle">
+                        <input
+                          type="checkbox"
+                          checked={modelConfigDraft.enabled}
+                          onChange={(event) => handleModelConfigDraftChange("enabled", event.target.checked)}
+                        />
+                        <span>enabled</span>
+                      </label>
+                      <button type="submit" className="action-button action-button--dark">
+                        保存配置
+                      </button>
+                    </div>
+                    <div className="api-config__summary">
+                      payload 仅发送 provider / model / enabled / api_key_present，不发送明文 api_key。
+                      {modelConfigDraft.provider !== "qwen" ? (
+                        <strong>该模型接口已配置为预留状态，当前仍使用本地文本生成桥接。</strong>
+                      ) : null}
+                    </div>
+                  </div>
+                </form>
+              )}
             </section>
           ) : null}
 
@@ -728,6 +956,24 @@ function groupSceneOptions(options: SceneOption[]) {
   }
 
   return groups;
+}
+
+function resolveModelLabel(value: WorkbenchModelId) {
+  return MODEL_OPTIONS.find((option) => option.value === value)?.label ?? value;
+}
+
+function buildModelConfigSummary(config: ModelConfigState): ModelConfigSummary {
+  return {
+    provider: config.provider,
+    model: config.model.trim() || MODEL_DEFAULTS[config.provider].model,
+    enabled: config.enabled,
+    api_key_present: config.apiKeyPresent,
+  };
+}
+
+function normalizeApiKeyRef(value: string) {
+  const cleanValue = value.trim();
+  return API_KEY_REF_OPTIONS.some((option) => option.value === cleanValue) ? cleanValue : "";
 }
 
 function mapGeneratedStoryboardRow(row: GeneratedStoryboardRow): StoryboardWorkbenchRow {

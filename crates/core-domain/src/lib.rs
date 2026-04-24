@@ -8,9 +8,9 @@ pub use contracts::{
     ExportBundleRequest, ExportBundleResponse, ExportSummary, ExternalReferenceHandleCandidate,
     GenerateStoryboardRequest, GenerateStoryboardResponse, GeneratedStoryboardRow,
     GoldenSampleGateDecision, GoldenSampleSelectionResult, GoldenSampleSelectorInput, ModelChannel,
-    ModelRequest, ModelResponse, ProductWarning, PromptBodyCandidate, PromptPackageRecord,
-    ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, StoryboardDurationPlan,
-    StoryboardExportStatus, StructureMode, ValidationSummary,
+    ModelConfigSummary, ModelRequest, ModelResponse, ProductWarning, PromptBodyCandidate,
+    PromptPackageRecord, ScenePerformanceProjection, SequenceFieldState, SequenceGrouping,
+    StoryboardDurationPlan, StoryboardExportStatus, StructureMode, ValidationSummary,
 };
 pub use domain::{
     CutRecord, DirectorCutSampleRecord, DirectorProfileRecord, EpisodeRecord, HandoffZoneRecord,

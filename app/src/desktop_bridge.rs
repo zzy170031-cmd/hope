@@ -189,7 +189,8 @@ pub fn invoke_desktop_command(
 mod tests {
     use core_domain::{
         ExpandScriptRequest, ExportBundleRequest, FailurePatternRecord, GenerateStoryboardRequest,
-        KbRuntimeSummary, KbSnapshotRecord, PromptTemplateRecord, SceneTaxonomyRecord,
+        KbRuntimeSummary, KbSnapshotRecord, ModelConfigSummary, PromptTemplateRecord,
+        SceneTaxonomyRecord,
     };
     use project_store::{
         DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeHandle, StoreSkeleton,
@@ -363,6 +364,12 @@ mod tests {
                 scene_type: "slg_sandbox_view".to_string(),
                 scene_label: Some("沙盘战略视口".to_string()),
                 scene_category: Some("三国 / 国战 / SLG".to_string()),
+                model_config_summary: Some(ModelConfigSummary {
+                    provider: "qwen".to_string(),
+                    model: "qwen-plus".to_string(),
+                    enabled: true,
+                    api_key_present: true,
+                }),
                 synopsis_text: "主公在沙盘上观察敌军行军轨迹，调度两翼完成合围。".to_string(),
             }),
         )
@@ -382,6 +389,18 @@ mod tests {
                         .expanded_script_text
                         .contains("scene_label: 沙盘战略视口")
                 );
+                assert!(
+                    response
+                        .expanded_script_text
+                        .contains("model_provider: qwen")
+                );
+                assert!(response.expanded_script_text.contains("model: qwen-plus"));
+                assert!(
+                    response
+                        .expanded_script_text
+                        .contains("api_key_present: true")
+                );
+                assert!(!response.expanded_script_text.contains("sk-"));
                 println!(
                     "expand_script smoke: script_id={} warnings={}",
                     response.script_id,
@@ -400,6 +419,12 @@ mod tests {
                 script_id: Some(script_id),
                 expanded_script_text: Some(expanded_script_text),
                 selected_total_duration_seconds: 30,
+                model_config_summary: Some(ModelConfigSummary {
+                    provider: "doubao".to_string(),
+                    model: "doubao-seed-reserved".to_string(),
+                    enabled: true,
+                    api_key_present: false,
+                }),
             }),
         )
         .expect("generate_storyboard bridge command should succeed");
@@ -408,6 +433,13 @@ mod tests {
             DesktopInvokeResponse::GenerateStoryboard(response) => {
                 assert!(!response.rows.is_empty());
                 assert!(response.rows.iter().all(|row| row.prompt_text.is_empty()));
+                assert!(
+                    response
+                        .export_status
+                        .warnings
+                        .iter()
+                        .any(|warning| warning.code == "model_provider_reserved")
+                );
                 println!(
                     "generate_storyboard smoke: result_id={} rows={} status={:?}",
                     response.result_id,

@@ -156,7 +156,17 @@ pub struct ExpandScriptRequest {
     pub scene_label: Option<String>,
     #[serde(default)]
     pub scene_category: Option<String>,
+    #[serde(default)]
+    pub model_config_summary: Option<ModelConfigSummary>,
     pub synopsis_text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelConfigSummary {
+    pub provider: String,
+    pub model: String,
+    pub enabled: bool,
+    pub api_key_present: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -173,6 +183,8 @@ pub struct GenerateStoryboardRequest {
     pub script_id: Option<String>,
     pub expanded_script_text: Option<String>,
     pub selected_total_duration_seconds: u16,
+    #[serde(default)]
+    pub model_config_summary: Option<ModelConfigSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

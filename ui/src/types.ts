@@ -11,9 +11,9 @@ export type QwenRuntimeStatus =
   | "local_invalid";
 
 export type WorkbenchModelId =
-  | "gpt_4o"
-  | "gpt_4_1_mini"
-  | "hope_storyboard_mode";
+  | "qwen"
+  | "doubao"
+  | "custom";
 
 export type SceneFusionOption =
   | "hot_blood_battle"
@@ -62,7 +62,15 @@ export interface ExpandScriptRequest {
   scene_type: string;
   scene_label?: string;
   scene_category?: string;
+  model_config_summary?: ModelConfigSummary;
   synopsis_text: string;
+}
+
+export interface ModelConfigSummary {
+  provider: WorkbenchModelId;
+  model: string;
+  enabled: boolean;
+  api_key_present: boolean;
 }
 
 export interface ExpandScriptResponse {
@@ -77,6 +85,7 @@ export interface GenerateStoryboardRequest {
   script_id?: string | null;
   expanded_script_text?: string | null;
   selected_total_duration_seconds: number;
+  model_config_summary?: ModelConfigSummary;
 }
 
 export type BridgeCallStatus = "Ready" | "WarningOnly" | "Blocked" | "Gated";
