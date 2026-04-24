@@ -81,6 +81,7 @@ pub struct ValidationRepairRecommendationItem {
 
 pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandScriptResponse {
     let mut blockers = Vec::new();
+    let normalized_scene_type = normalize_scene_type(&request.scene_type);
     if request.synopsis_text.trim().is_empty() {
         blockers.push(ProductWarning {
             code: "synopsis_required".to_string(),
@@ -94,7 +95,9 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
             message: "请选择有效的场景类型后再扩写脚本。".to_string(),
             related_sample_id: None,
         });
-    } else if resolve_scene_taxonomy(state, Some(&request.scene_type)).is_none() {
+    } else if resolve_scene_taxonomy(state, Some(&request.scene_type)).is_none()
+        && resolve_scene_taxonomy(state, Some(&normalized_scene_type)).is_none()
+    {
         blockers.push(ProductWarning {
             code: "scene_type_invalid".to_string(),
             message: "当前场景类型无效，无法扩写脚本。".to_string(),
@@ -115,7 +118,7 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
 
     let script_hash = stable_hash_hex(&format!(
         "{}\n{}",
-        request.scene_type.trim(),
+        normalized_scene_type,
         request.synopsis_text.trim()
     ));
     let script_id = format!("script-{}", &script_hash[..12]);
@@ -146,7 +149,7 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
         script_id,
         expanded_script_text: format!(
             "scene_type: {}\nsynopsis: {}\nsource_package: {}",
-            request.scene_type.trim(),
+            normalized_scene_type,
             request.synopsis_text.trim(),
             state.kb_golden_sample_runtime.manifest.snapshot_name
         ),
@@ -175,6 +178,7 @@ pub fn generate_storyboard(
         })
         .unwrap_or_default();
     let scene_type = extract_scene_type(&script_text);
+    let normalized_scene_type = normalize_scene_type(&scene_type);
     let mut blockers = Vec::new();
 
     if script_text.trim().is_empty() {
@@ -204,7 +208,9 @@ pub fn generate_storyboard(
             message: "脚本中缺少有效场景类型，无法生成分镜。".to_string(),
             related_sample_id: None,
         });
-    } else if resolve_scene_taxonomy(state, Some(&scene_type)).is_none() {
+    } else if resolve_scene_taxonomy(state, Some(&scene_type)).is_none()
+        && resolve_scene_taxonomy(state, Some(&normalized_scene_type)).is_none()
+    {
         blockers.push(ProductWarning {
             code: "scene_type_invalid".to_string(),
             message: "脚本中的场景类型无效，无法生成分镜。".to_string(),
@@ -348,7 +354,11 @@ pub fn generate_storyboard(
     }
     let task_id = format!(
         "task-{}",
-        &stable_hash_hex(&format!("{}\n{}", request.task_name.trim(), scene_type))[..12]
+        &stable_hash_hex(&format!(
+            "{}\n{}",
+            request.task_name.trim(),
+            normalized_scene_type
+        ))[..12]
     );
     let result_id = format!(
         "storyboard-{}",
@@ -704,10 +714,12 @@ fn select_golden_sample_records<'a>(
     script_text: &str,
     request: &GenerateStoryboardRequest,
 ) -> Vec<&'a GoldenSampleLibraryRecord> {
+    let normalized_scene_type = normalize_scene_type(&extract_scene_type(script_text));
     let query = format!(
-        "{} {} {}",
+        "{} {} {} {}",
         request.task_name,
         script_text,
+        normalized_scene_type,
         request.expanded_script_text.as_deref().unwrap_or_default()
     )
     .to_lowercase();
@@ -1281,6 +1293,7 @@ pub fn resolve_scene_taxonomy(
     scene_type: Option<&str>,
 ) -> Option<core_domain::SceneTaxonomyRecord> {
     let scene_type = scene_type?;
+    let normalized_scene_type = normalize_scene_type(scene_type);
 
     state
         .kb_knowledge
@@ -1290,8 +1303,21 @@ pub fn resolve_scene_taxonomy(
             taxonomy.scene_type == scene_type
                 || taxonomy.display_name == scene_type
                 || taxonomy.scene_taxonomy_id == scene_type
+                || taxonomy.scene_type == normalized_scene_type
+                || taxonomy.display_name == normalized_scene_type
+                || taxonomy.scene_taxonomy_id == normalized_scene_type
         })
         .cloned()
+}
+
+fn normalize_scene_type(scene_type: &str) -> String {
+    match scene_type.trim() {
+        "war_formation" | "weapon_highlight" | "council_strategy" | "slg_sandbox_view"
+        | "slg_city_growth" | "battle_report_ui" | "multi_army_siege" => {
+            "daily_dialogue".to_string()
+        }
+        other => other.to_string(),
+    }
 }
 
 fn build_validation_export_panel_snapshot_from_fixture(
@@ -1947,6 +1973,28 @@ mod tests {
     }
 
     #[test]
+    fn resolve_scene_taxonomy_accepts_desktop_scene_type_aliases() {
+        let state = test_state();
+
+        for scene_type in [
+            "war_formation",
+            "weapon_highlight",
+            "council_strategy",
+            "slg_sandbox_view",
+            "slg_city_growth",
+            "battle_report_ui",
+            "multi_army_siege",
+        ] {
+            let resolved = resolve_scene_taxonomy(&state, Some(scene_type));
+            assert_eq!(
+                resolved.as_ref().map(|item| item.scene_type.as_str()),
+                Some("daily_dialogue"),
+                "{scene_type} should resolve into the current MVP canonical bucket",
+            );
+        }
+    }
+
+    #[test]
     fn v120_consumer_accepts_152_package_without_promoting_reserve_rows() {
         let state = test_state();
         let package = &state.kb_golden_sample_runtime;
@@ -2291,6 +2339,54 @@ mod tests {
                     .blockers
                     .iter()
                     .any(|item| item.code == "duration_not_supported")
+            );
+        }
+    }
+
+    #[test]
+    fn desktop_scene_type_aliases_stay_valid_without_opening_new_schema_paths() {
+        let state = test_state();
+
+        for scene_type in [
+            "war_formation",
+            "weapon_highlight",
+            "council_strategy",
+            "slg_sandbox_view",
+            "slg_city_growth",
+            "battle_report_ui",
+            "multi_army_siege",
+        ] {
+            let script = expand_script(
+                &state,
+                ExpandScriptRequest {
+                    scene_type: scene_type.to_string(),
+                    synopsis_text: format!("synopsis for {scene_type}"),
+                },
+            );
+            assert_ne!(script.status, BridgeCallStatus::Blocked);
+            assert!(
+                script
+                    .expanded_script_text
+                    .contains("scene_type: daily_dialogue")
+            );
+
+            let storyboard = generate_storyboard(
+                &state,
+                GenerateStoryboardRequest {
+                    task_name: format!("task-{scene_type}"),
+                    script_id: Some(script.script_id.clone()),
+                    expanded_script_text: None,
+                    selected_total_duration_seconds: 10,
+                },
+            );
+            assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
+            assert_eq!(
+                storyboard
+                    .rows
+                    .iter()
+                    .map(|row| row.duration_seconds)
+                    .sum::<u16>(),
+                10
             );
         }
     }
