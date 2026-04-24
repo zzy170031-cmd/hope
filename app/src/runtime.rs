@@ -127,9 +127,13 @@ pub struct ValidationRepairRecommendationItem {
 }
 
 pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandScriptResponse {
+    let scene_label = request.scene_label.as_deref().unwrap_or_default().trim();
+    let scene_category = request.scene_category.as_deref().unwrap_or_default().trim();
     let script_hash = stable_hash_hex(&format!(
-        "{}\n{}",
+        "{}\n{}\n{}\n{}",
         request.scene_type.trim(),
+        scene_label,
+        scene_category,
         request.synopsis_text.trim()
     ));
     let script_id = format!("script-{}", &script_hash[..12]);
@@ -166,8 +170,10 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
     let response = ExpandScriptResponse {
         script_id,
         expanded_script_text: format!(
-            "scene_type: {}\nsynopsis: {}\nsource_package: {}",
+            "scene_type: {}\nscene_label: {}\nscene_category: {}\nsynopsis: {}\nsource_package: {}",
             request.scene_type.trim(),
+            scene_label,
+            scene_category,
             request.synopsis_text.trim(),
             source_package
         ),

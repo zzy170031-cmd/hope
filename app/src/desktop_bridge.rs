@@ -360,8 +360,10 @@ mod tests {
             &state,
             EXPAND_SCRIPT_COMMAND,
             DesktopInvokeRequest::ExpandScript(ExpandScriptRequest {
-                scene_type: "热血战斗".to_string(),
-                synopsis_text: "主角在废墟城市中觉醒力量并完成反击。".to_string(),
+                scene_type: "slg_sandbox_view".to_string(),
+                scene_label: Some("沙盘战略视口".to_string()),
+                scene_category: Some("三国 / 国战 / SLG".to_string()),
+                synopsis_text: "主公在沙盘上观察敌军行军轨迹，调度两翼完成合围。".to_string(),
             }),
         )
         .expect("expand_script bridge command should succeed");
@@ -370,6 +372,16 @@ mod tests {
             DesktopInvokeResponse::ExpandScript(response) => {
                 assert!(response.script_id.starts_with("script-"));
                 assert!(response.expanded_script_text.contains("source_package"));
+                assert!(
+                    response
+                        .expanded_script_text
+                        .contains("scene_type: slg_sandbox_view")
+                );
+                assert!(
+                    response
+                        .expanded_script_text
+                        .contains("scene_label: 沙盘战略视口")
+                );
                 println!(
                     "expand_script smoke: script_id={} warnings={}",
                     response.script_id,

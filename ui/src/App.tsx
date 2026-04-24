@@ -28,10 +28,14 @@ interface Option<T extends string> {
   label: string;
 }
 
+interface SceneOption extends Option<SceneFusionOption> {
+  group: string;
+}
+
 const PAGE_SIZE = 5;
 const DURATION_OPTIONS = [15, 30, 45, 60];
 const DEFAULT_SYNOPSIS = "主角在废墟城市中与敌人激烈战斗，最终觉醒新力量，击败敌人。";
-const DEFAULT_SCENE: SceneFusionOption = "热血战斗";
+const DEFAULT_SCENE: SceneFusionOption = "hot_blood_battle";
 const DEFAULT_TASK_NAME = "第一集分镜生成";
 
 const MODEL_OPTIONS: Array<Option<WorkbenchModelId>> = [
@@ -40,12 +44,28 @@ const MODEL_OPTIONS: Array<Option<WorkbenchModelId>> = [
   { value: "hope_storyboard_mode", label: "Hope 工作台模式" },
 ];
 
-const SCENE_OPTIONS: Array<Option<SceneFusionOption>> = [
-  { value: "热血战斗", label: "热血战斗" },
-  { value: "悬疑追踪", label: "悬疑追踪" },
-  { value: "都市奇幻", label: "都市奇幻" },
-  { value: "校园日常", label: "校园日常" },
-  { value: "治愈成长", label: "治愈成长" },
+const SCENE_OPTIONS: SceneOption[] = [
+  { group: "基础动漫叙事", value: "hot_blood_battle", label: "热血战斗" },
+  { group: "基础动漫叙事", value: "ensemble_performance", label: "群像表演" },
+  { group: "基础动漫叙事", value: "emotional_dialogue", label: "情绪对话" },
+  { group: "基础动漫叙事", value: "encounter_performance", label: "相遇表演" },
+  { group: "基础动漫叙事", value: "field_chase", label: "场域追逐" },
+  { group: "基础动漫叙事", value: "spectacle_showcase", label: "奇观展示" },
+  { group: "基础动漫叙事", value: "daily_healing", label: "日常治愈" },
+  { group: "国漫 / 武侠 / 奇幻", value: "guoman_hot_blood_combat", label: "国漫热血打斗" },
+  { group: "国漫 / 武侠 / 奇幻", value: "guoman_ensemble_performance", label: "国漫群像表演" },
+  { group: "国漫 / 武侠 / 奇幻", value: "ink_wuxia_combat", label: "水墨武打" },
+  { group: "国漫 / 武侠 / 奇幻", value: "eastern_spectacle", label: "东方奇观" },
+  { group: "国漫 / 武侠 / 奇幻", value: "xianxia_action", label: "仙侠动作" },
+  { group: "国漫 / 武侠 / 奇幻", value: "urban_fantasy", label: "都市奇幻" },
+  { group: "三国 / 国战 / SLG", value: "chinese_war_formation", label: "国战军阵建立" },
+  { group: "三国 / 国战 / SLG", value: "weapon_highlight", label: "武将兵器高光" },
+  { group: "三国 / 国战 / SLG", value: "council_strategy", label: "朝堂军帐权谋" },
+  { group: "三国 / 国战 / SLG", value: "siege_defense", label: "城池攻防" },
+  { group: "三国 / 国战 / SLG", value: "slg_sandbox_view", label: "沙盘战略视口" },
+  { group: "三国 / 国战 / SLG", value: "slg_march_encirclement", label: "行军轨迹合围" },
+  { group: "三国 / 国战 / SLG", value: "slg_city_growth", label: "城建演进反馈" },
+  { group: "三国 / 国战 / SLG", value: "slg_battle_report", label: "武将揭示战报" },
 ];
 
 const API_DOC_ITEMS = [
@@ -128,12 +148,16 @@ export function App() {
   const canImportScript = expandedScript.trim().length > 0;
   const canGenerate = taskName.trim().length > 0 && (taskSourceScript.trim().length > 0 || expandedScript.trim().length > 0 || synopsis.trim().length > 0);
   const pageTokens = useMemo(() => buildPageTokens(pageCount, currentPage), [pageCount, currentPage]);
+  const selectedSceneOption = useMemo(() => resolveSceneOption(selectedScene), [selectedScene]);
+  const sceneOptionGroups = useMemo(() => groupSceneOptions(SCENE_OPTIONS), []);
 
   const handleExpandScript = async () => {
     setBridgeBusy("expand");
     try {
       const response = await invokeExpandScript({
-        scene_type: selectedScene,
+        scene_type: selectedSceneOption.value,
+        scene_label: selectedSceneOption.label,
+        scene_category: selectedSceneOption.group,
         synopsis_text: synopsis,
       });
       setExpandedScriptResult(response);
@@ -370,12 +394,19 @@ export function App() {
                   value={selectedScene}
                   onChange={(event) => setSelectedScene(event.target.value as SceneFusionOption)}
                 >
-                  {SCENE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
+                  {sceneOptionGroups.map(([group, options]) => (
+                    <optgroup key={group} label={group}>
+                      {options.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
+                <small className="scene-select__meta">
+                  {selectedSceneOption.group} · {selectedSceneOption.value}
+                </small>
               </label>
               <textarea
                 className="synopsis-input"
@@ -679,6 +710,24 @@ export function App() {
       </div>
     </Shell>
   );
+}
+
+function resolveSceneOption(value: SceneFusionOption) {
+  return SCENE_OPTIONS.find((option) => option.value === value) ?? SCENE_OPTIONS[0];
+}
+
+function groupSceneOptions(options: SceneOption[]) {
+  const groups: Array<[string, SceneOption[]]> = [];
+  for (const option of options) {
+    const group = groups.find(([name]) => name === option.group);
+    if (group) {
+      group[1].push(option);
+    } else {
+      groups.push([option.group, [option]]);
+    }
+  }
+
+  return groups;
 }
 
 function mapGeneratedStoryboardRow(row: GeneratedStoryboardRow): StoryboardWorkbenchRow {

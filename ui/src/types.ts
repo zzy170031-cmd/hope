@@ -16,11 +16,27 @@ export type WorkbenchModelId =
   | "hope_storyboard_mode";
 
 export type SceneFusionOption =
-  | "热血战斗"
-  | "悬疑追踪"
-  | "都市奇幻"
-  | "校园日常"
-  | "治愈成长";
+  | "hot_blood_battle"
+  | "ensemble_performance"
+  | "emotional_dialogue"
+  | "encounter_performance"
+  | "field_chase"
+  | "spectacle_showcase"
+  | "daily_healing"
+  | "guoman_hot_blood_combat"
+  | "guoman_ensemble_performance"
+  | "ink_wuxia_combat"
+  | "eastern_spectacle"
+  | "xianxia_action"
+  | "urban_fantasy"
+  | "chinese_war_formation"
+  | "weapon_highlight"
+  | "council_strategy"
+  | "siege_defense"
+  | "slg_sandbox_view"
+  | "slg_march_encirclement"
+  | "slg_city_growth"
+  | "slg_battle_report";
 
 export interface StoryboardWorkbenchRow {
   id: string;
@@ -44,6 +60,8 @@ export interface ProductWarning {
 
 export interface ExpandScriptRequest {
   scene_type: string;
+  scene_label?: string;
+  scene_category?: string;
   synopsis_text: string;
 }
 

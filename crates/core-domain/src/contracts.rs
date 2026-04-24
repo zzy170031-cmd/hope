@@ -152,6 +152,10 @@ pub struct ScenePerformanceProjection {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExpandScriptRequest {
     pub scene_type: String,
+    #[serde(default)]
+    pub scene_label: Option<String>,
+    #[serde(default)]
+    pub scene_category: Option<String>,
     pub synopsis_text: String,
 }
 

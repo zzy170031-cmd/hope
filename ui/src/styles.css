@@ -289,6 +289,17 @@ textarea {
   white-space: nowrap;
 }
 
+.scene-select__meta {
+  grid-column: 2;
+  min-width: 0;
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .scene-select select,
 .task-name-input,
 .duration-select select,
@@ -711,6 +722,10 @@ textarea {
   .scene-select,
   .duration-select {
     grid-template-columns: 1fr;
+  }
+
+  .scene-select__meta {
+    grid-column: auto;
   }
 
   .page-switcher {
