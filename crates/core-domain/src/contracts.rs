@@ -87,6 +87,85 @@ pub struct TextGenerationResponse {
     pub model: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum KbRouterTaskType {
+    ExpandScript,
+    GenerateStoryboard,
+    RepairStoryboard,
+    CompileSeedancePromptText,
+}
+
+impl KbRouterTaskType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ExpandScript => "expand_script",
+            Self::GenerateStoryboard => "generate_storyboard",
+            Self::RepairStoryboard => "repair_storyboard",
+            Self::CompileSeedancePromptText => "compile_seedance_prompt_text",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KbRouterRuntimeRequest {
+    pub scene_type: String,
+    pub synopsis_text: String,
+    pub duration_seconds: u16,
+    pub task_type: KbRouterTaskType,
+    pub shot_intent: Option<String>,
+    pub structure_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KbRouterSelectedRule {
+    pub rule_id: String,
+    pub family: String,
+    pub summary: String,
+    pub applies_to: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KbRouterSelectionReason {
+    pub sample_id: String,
+    pub reason_code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KbRouterExcludedCandidate {
+    pub sample_id: String,
+    pub reason_code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KbRouterTokenBudget {
+    pub kb_context_summary_target: String,
+    pub full_kb_rows_included: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KbRouterRetrievalTrace {
+    pub kb_version: String,
+    pub snapshot_id: String,
+    pub snapshot_checksum: String,
+    pub content_cache_key: String,
+    pub task_type: String,
+    pub top_k_samples: u8,
+    pub top_k_rules: u8,
+    pub duration_seconds: u16,
+    pub story_keywords: Vec<String>,
+    pub selection_reasons: Vec<KbRouterSelectionReason>,
+    pub excluded_candidates: Vec<KbRouterExcludedCandidate>,
+    pub token_budget: KbRouterTokenBudget,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KbRouterRuntimeResponse {
+    pub selected_sample_ids: Vec<String>,
+    pub selected_kb_rules: Vec<KbRouterSelectedRule>,
+    pub kb_context_summary: String,
+    pub retrieval_trace: KbRouterRetrievalTrace,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PromptTextCompilationRow {
     pub shot_id: String,
@@ -259,6 +338,7 @@ pub struct ExpandScriptResponse {
     pub script_hash: String,
     pub blockers: Vec<ProductWarning>,
     pub warnings: Vec<ProductWarning>,
+    pub kb_router_result: KbRouterRuntimeResponse,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -313,6 +393,7 @@ pub struct GenerateStoryboardResponse {
     pub result_id: String,
     pub rows: Vec<GeneratedStoryboardRow>,
     pub selected_total_duration_seconds: u16,
+    pub kb_router_result: KbRouterRuntimeResponse,
     pub duration_plan: StoryboardDurationPlan,
     pub export_status: StoryboardExportStatus,
     pub busy: bool,
@@ -357,6 +438,11 @@ pub struct ExportArtifactRecord {
     pub edited_rows_applied: bool,
     pub prompt_text_compilation_statuses: Vec<String>,
     pub prompt_text_compilation_warning_codes: Vec<String>,
+    pub selected_sample_ids: Vec<String>,
+    pub selected_kb_rule_ids: Vec<String>,
+    pub kb_context_summary: Option<String>,
+    pub retrieval_trace: Option<KbRouterRetrievalTrace>,
+    pub full_kb_rows_included: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

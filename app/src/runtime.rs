@@ -8,12 +8,14 @@ use core_domain::{
     BridgeCallStatus, ExpandScriptRequest, ExpandScriptResponse, ExportArtifactRecord,
     ExportBundleRequest, ExportBundleResponse, ExternalReferenceHandleCandidate,
     GenerateStoryboardRequest, GenerateStoryboardResponse, GeneratedStoryboardRow,
-    GoldenSampleLibraryRecord, ProductWarning, PromptBodyCandidate, PromptTextCompilationRequest,
-    PromptTextCompilationResponse, PromptTextCompilationRow, PromptTextCompilationStatus,
-    ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, StoryboardDurationPlan,
-    StoryboardExportStatus, StructureMode, TextGenerationOutputSchema, TextGenerationRequest,
-    TextGenerationResponse, TextGenerationTask, TextModelProvider, TextModelProviderKind,
-    UpdateStoryboardRowsRequest,
+    GoldenSampleLibraryRecord, KbRouterExcludedCandidate, KbRouterRetrievalTrace,
+    KbRouterRuntimeRequest, KbRouterRuntimeResponse, KbRouterSelectedRule, KbRouterSelectionReason,
+    KbRouterTaskType, KbRouterTokenBudget, ProductWarning, PromptBodyCandidate,
+    PromptTextCompilationRequest, PromptTextCompilationResponse, PromptTextCompilationRow,
+    PromptTextCompilationStatus, ScenePerformanceProjection, SequenceFieldState, SequenceGrouping,
+    StoryboardDurationPlan, StoryboardExportStatus, StructureMode, TextGenerationOutputSchema,
+    TextGenerationRequest, TextGenerationResponse, TextGenerationTask, TextModelProvider,
+    TextModelProviderKind, UpdateStoryboardRowsRequest,
 };
 use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
@@ -82,6 +84,14 @@ pub struct ValidationRepairRecommendationItem {
 pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandScriptResponse {
     let mut blockers = Vec::new();
     let normalized_scene_type = normalize_scene_type(&request.scene_type);
+    let router_request = KbRouterRuntimeRequest {
+        scene_type: normalized_scene_type.clone(),
+        synopsis_text: request.synopsis_text.clone(),
+        duration_seconds: 0,
+        task_type: KbRouterTaskType::ExpandScript,
+        shot_intent: None,
+        structure_type: None,
+    };
     if request.synopsis_text.trim().is_empty() {
         blockers.push(ProductWarning {
             code: "synopsis_required".to_string(),
@@ -113,6 +123,7 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
             script_hash: String::new(),
             blockers,
             warnings: vec![],
+            kb_router_result: empty_kb_router_response(&router_request, &state.kb_runtime),
         };
     }
 
@@ -156,6 +167,7 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
         script_hash,
         blockers: vec![],
         warnings,
+        kb_router_result: run_kb_router(state, router_request),
     };
     state.remember_script(response.clone());
     response
@@ -179,6 +191,15 @@ pub fn generate_storyboard(
         .unwrap_or_default();
     let scene_type = extract_scene_type(&script_text);
     let normalized_scene_type = normalize_scene_type(&scene_type);
+    let synopsis_text = extract_synopsis_text(&script_text);
+    let router_request = KbRouterRuntimeRequest {
+        scene_type: normalized_scene_type.clone(),
+        synopsis_text,
+        duration_seconds: request.selected_total_duration_seconds,
+        task_type: KbRouterTaskType::GenerateStoryboard,
+        shot_intent: None,
+        structure_type: None,
+    };
     let mut blockers = Vec::new();
 
     if script_text.trim().is_empty() {
@@ -224,10 +245,13 @@ pub fn generate_storyboard(
             request.selected_total_duration_seconds,
             blockers,
             now_ms,
+            &router_request,
+            &state.kb_runtime,
         );
     }
 
-    let selected_records = select_golden_sample_records(state, &script_text, &request);
+    let kb_router_result = run_kb_router(state, router_request.clone());
+    let selected_records = select_golden_sample_records_from_router(state, &kb_router_result);
     if selected_records.is_empty() {
         return blocked_storyboard_response(
             None,
@@ -238,6 +262,8 @@ pub fn generate_storyboard(
                 related_sample_id: None,
             }],
             now_ms,
+            &router_request,
+            &state.kb_runtime,
         );
     }
     let row_count = selected_records.len().max(1);
@@ -257,6 +283,8 @@ pub fn generate_storyboard(
                         related_sample_id: None,
                     }],
                     now_ms,
+                    &router_request,
+                    &state.kb_runtime,
                 );
             }
         };
@@ -293,7 +321,12 @@ pub fn generate_storyboard(
         }
         let prompt_compilation = compile_seedance_prompt_text(
             state,
-            build_prompt_text_compilation_request(record, &scene_projection, row_durations[index]),
+            build_prompt_text_compilation_request(
+                record,
+                &scene_projection,
+                row_durations[index],
+                &kb_router_result,
+            ),
         );
         warnings.extend(prompt_compilation.warnings.iter().cloned());
 
@@ -350,6 +383,8 @@ pub fn generate_storyboard(
                 related_sample_id: None,
             }],
             now_ms,
+            &router_request,
+            &state.kb_runtime,
         );
     }
     let task_id = format!(
@@ -378,6 +413,7 @@ pub fn generate_storyboard(
         result_id,
         rows,
         selected_total_duration_seconds: request.selected_total_duration_seconds,
+        kb_router_result,
         duration_plan: StoryboardDurationPlan {
             total_duration_seconds: request.selected_total_duration_seconds,
             row_count: row_count as u32,
@@ -408,6 +444,14 @@ pub fn save_storyboard_rows(
     request: UpdateStoryboardRowsRequest,
 ) -> GenerateStoryboardResponse {
     let now_ms = now_epoch_ms();
+    let missing_router_request = KbRouterRuntimeRequest {
+        scene_type: String::new(),
+        synopsis_text: String::new(),
+        duration_seconds: 0,
+        task_type: KbRouterTaskType::GenerateStoryboard,
+        shot_intent: None,
+        structure_type: None,
+    };
     let Some(mut snapshot) = state.find_storyboard(&request.result_id) else {
         return blocked_storyboard_response(
             request.task_id,
@@ -418,7 +462,24 @@ pub fn save_storyboard_rows(
                 related_sample_id: None,
             }],
             now_ms,
+            &missing_router_request,
+            &state.kb_runtime,
         );
+    };
+
+    let snapshot_router_request = KbRouterRuntimeRequest {
+        scene_type: snapshot
+            .kb_router_result
+            .retrieval_trace
+            .story_keywords
+            .first()
+            .cloned()
+            .unwrap_or_default(),
+        synopsis_text: snapshot.kb_router_result.kb_context_summary.clone(),
+        duration_seconds: snapshot.selected_total_duration_seconds,
+        task_type: KbRouterTaskType::GenerateStoryboard,
+        shot_intent: None,
+        structure_type: None,
     };
 
     if snapshot.revision != request.base_revision {
@@ -431,6 +492,8 @@ pub fn save_storyboard_rows(
                 related_sample_id: None,
             }],
             now_ms,
+            &snapshot_router_request,
+            &state.kb_runtime,
         );
     }
 
@@ -444,6 +507,8 @@ pub fn save_storyboard_rows(
                 related_sample_id: None,
             }],
             now_ms,
+            &snapshot_router_request,
+            &state.kb_runtime,
         );
     }
 
@@ -457,6 +522,8 @@ pub fn save_storyboard_rows(
                 related_sample_id: None,
             }],
             now_ms,
+            &snapshot_router_request,
+            &state.kb_runtime,
         );
     }
 
@@ -475,6 +542,8 @@ pub fn save_storyboard_rows(
                 related_sample_id: None,
             }],
             now_ms,
+            &snapshot_router_request,
+            &state.kb_runtime,
         );
     }
 
@@ -577,6 +646,20 @@ pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBu
         edited_rows_applied: storyboard.dirty,
         prompt_text_compilation_statuses: collect_compilation_statuses(&storyboard.rows),
         prompt_text_compilation_warning_codes: collect_compilation_warning_codes(&storyboard.rows),
+        selected_sample_ids: storyboard.kb_router_result.selected_sample_ids.clone(),
+        selected_kb_rule_ids: storyboard
+            .kb_router_result
+            .selected_kb_rules
+            .iter()
+            .map(|rule| rule.rule_id.clone())
+            .collect(),
+        kb_context_summary: Some(storyboard.kb_router_result.kb_context_summary.clone()),
+        retrieval_trace: Some(storyboard.kb_router_result.retrieval_trace.clone()),
+        full_kb_rows_included: storyboard
+            .kb_router_result
+            .retrieval_trace
+            .token_budget
+            .full_kb_rows_included,
     }];
 
     match export_v120_storyboard_bundle(&V120StoryboardExportRequest {
@@ -588,33 +671,46 @@ pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBu
         rows: storyboard.rows.clone(),
     }) {
         Ok(bundle) => {
-            artifacts.extend(
-                bundle
-                    .artifacts
-                    .into_iter()
-                    .map(|artifact| ExportArtifactRecord {
-                        artifact_id: format!("{}-{}", export_manifest_id, artifact.artifact_kind),
-                        artifact_kind: artifact.artifact_kind.to_string(),
-                        export_format: artifact.export_format.to_string(),
-                        ready: true,
-                        blocked_reason: None,
-                        artifact_path: Some(artifact.path.display().to_string()),
-                        content_hash: Some(artifact.content_hash),
-                        byte_size: Some(artifact.byte_size),
-                        row_count: Some(artifact.row_count),
-                        selected_total_duration_seconds: Some(
-                            storyboard.selected_total_duration_seconds,
-                        ),
-                        source_result_id: Some(storyboard.result_id.clone()),
-                        edited_rows_applied: storyboard.dirty,
-                        prompt_text_compilation_statuses: collect_compilation_statuses(
-                            &storyboard.rows,
-                        ),
-                        prompt_text_compilation_warning_codes: collect_compilation_warning_codes(
-                            &storyboard.rows,
-                        ),
-                    }),
-            );
+            artifacts.extend(bundle.artifacts.into_iter().map(|artifact| {
+                ExportArtifactRecord {
+                    artifact_id: format!("{}-{}", export_manifest_id, artifact.artifact_kind),
+                    artifact_kind: artifact.artifact_kind.to_string(),
+                    export_format: artifact.export_format.to_string(),
+                    ready: true,
+                    blocked_reason: None,
+                    artifact_path: Some(artifact.path.display().to_string()),
+                    content_hash: Some(artifact.content_hash),
+                    byte_size: Some(artifact.byte_size),
+                    row_count: Some(artifact.row_count),
+                    selected_total_duration_seconds: Some(
+                        storyboard.selected_total_duration_seconds,
+                    ),
+                    source_result_id: Some(storyboard.result_id.clone()),
+                    edited_rows_applied: storyboard.dirty,
+                    prompt_text_compilation_statuses: collect_compilation_statuses(
+                        &storyboard.rows,
+                    ),
+                    prompt_text_compilation_warning_codes: collect_compilation_warning_codes(
+                        &storyboard.rows,
+                    ),
+                    selected_sample_ids: storyboard.kb_router_result.selected_sample_ids.clone(),
+                    selected_kb_rule_ids: storyboard
+                        .kb_router_result
+                        .selected_kb_rules
+                        .iter()
+                        .map(|rule| rule.rule_id.clone())
+                        .collect(),
+                    kb_context_summary: Some(
+                        storyboard.kb_router_result.kb_context_summary.clone(),
+                    ),
+                    retrieval_trace: Some(storyboard.kb_router_result.retrieval_trace.clone()),
+                    full_kb_rows_included: storyboard
+                        .kb_router_result
+                        .retrieval_trace
+                        .token_budget
+                        .full_kb_rows_included,
+                }
+            }));
         }
         Err(error) => {
             let reason = format!("v120_export_engine_error: {error:?}");
@@ -664,6 +760,11 @@ fn blocked_export_artifacts(
         edited_rows_applied,
         prompt_text_compilation_statuses: vec![],
         prompt_text_compilation_warning_codes: vec![],
+        selected_sample_ids: vec![],
+        selected_kb_rule_ids: vec![],
+        kb_context_summary: None,
+        retrieval_trace: None,
+        full_kb_rows_included: 0,
     }];
     artifacts.extend(blocked_storyboard_export_artifacts(
         export_manifest_id,
@@ -705,10 +806,292 @@ fn blocked_storyboard_export_artifacts(
             edited_rows_applied,
             prompt_text_compilation_statuses: vec![],
             prompt_text_compilation_warning_codes: vec![],
+            selected_sample_ids: vec![],
+            selected_kb_rule_ids: vec![],
+            kb_context_summary: None,
+            retrieval_trace: None,
+            full_kb_rows_included: 0,
         })
         .collect()
 }
 
+fn run_kb_router(state: &AppState, request: KbRouterRuntimeRequest) -> KbRouterRuntimeResponse {
+    let story_keywords = derive_story_keywords(&request.synopsis_text, &request.scene_type);
+    let query = format!(
+        "{} {} {} {} {}",
+        request.scene_type,
+        request.synopsis_text,
+        story_keywords.join(" "),
+        request.shot_intent.as_deref().unwrap_or_default(),
+        request.structure_type.as_deref().unwrap_or_default()
+    )
+    .to_lowercase();
+    let (top_k_samples, top_k_rules) = router_top_k(&request);
+    let mut selected_sample_ids = Vec::new();
+    let mut selection_reasons = Vec::new();
+    let mut excluded_candidates = Vec::new();
+
+    for record in &state.kb_golden_sample_runtime.golden_sample_library.records {
+        if record.is_reserve() {
+            excluded_candidates.push(KbRouterExcludedCandidate {
+                sample_id: record.sample_id.clone(),
+                reason_code: "reserve_gate".to_string(),
+            });
+            continue;
+        }
+        if !record.is_positive_fewshot_candidate() {
+            excluded_candidates.push(KbRouterExcludedCandidate {
+                sample_id: record.sample_id.clone(),
+                reason_code: "usable_for_fewshot_no".to_string(),
+            });
+            continue;
+        }
+        if validators::contains_placeholder_marker(&record.source_fields.prompt_body) {
+            excluded_candidates.push(KbRouterExcludedCandidate {
+                sample_id: record.sample_id.clone(),
+                reason_code: "placeholder_present".to_string(),
+            });
+            continue;
+        }
+
+        let scene_match = record
+            .source_fields
+            .scene_category
+            .eq_ignore_ascii_case(&request.scene_type)
+            || query.contains(&record.source_fields.scene_category.to_lowercase())
+            || query.contains(&record.source_fields.scene_tag.to_lowercase())
+            || story_keywords.iter().any(|keyword| {
+                record
+                    .source_fields
+                    .sample_title
+                    .to_lowercase()
+                    .contains(keyword)
+            });
+        if scene_match && selected_sample_ids.len() < top_k_samples as usize {
+            selected_sample_ids.push(record.sample_id.clone());
+            selection_reasons.push(KbRouterSelectionReason {
+                sample_id: record.sample_id.clone(),
+                reason_code: "scene_match".to_string(),
+            });
+        }
+    }
+
+    if selected_sample_ids.is_empty() {
+        for record in state
+            .kb_golden_sample_runtime
+            .golden_sample_library
+            .records
+            .iter()
+            .filter(|record| record.is_official() && record.is_positive_fewshot_candidate())
+            .take(top_k_samples as usize)
+        {
+            selected_sample_ids.push(record.sample_id.clone());
+            selection_reasons.push(KbRouterSelectionReason {
+                sample_id: record.sample_id.clone(),
+                reason_code: "scene_match".to_string(),
+            });
+        }
+    }
+
+    let selected_kb_rules = build_router_selected_rules(state, &request, top_k_rules);
+    let kb_context_summary = build_kb_context_summary(
+        state,
+        &request,
+        &story_keywords,
+        &selected_sample_ids,
+        &selected_kb_rules,
+        &excluded_candidates,
+    );
+    let content_cache_key = stable_hash_hex(&format!(
+        "{}\n{}\n{}\n{}\n{}\n{}",
+        state.kb_runtime.snapshot.seed_format,
+        request.scene_type,
+        request.duration_seconds,
+        request.task_type.as_str(),
+        request.shot_intent.as_deref().unwrap_or_default(),
+        stable_hash_hex(&request.synopsis_text)
+    ));
+
+    KbRouterRuntimeResponse {
+        selected_sample_ids,
+        selected_kb_rules,
+        kb_context_summary,
+        retrieval_trace: KbRouterRetrievalTrace {
+            kb_version: state.kb_runtime.snapshot.seed_format.clone(),
+            snapshot_id: state.kb_runtime.snapshot.snapshot_id.clone(),
+            snapshot_checksum: state.kb_runtime.snapshot.snapshot_hash.clone(),
+            content_cache_key,
+            task_type: request.task_type.as_str().to_string(),
+            top_k_samples,
+            top_k_rules,
+            duration_seconds: request.duration_seconds,
+            story_keywords,
+            selection_reasons,
+            excluded_candidates,
+            token_budget: KbRouterTokenBudget {
+                kb_context_summary_target: "800-1500 Chinese characters".to_string(),
+                full_kb_rows_included: 0,
+            },
+        },
+    }
+}
+
+fn router_top_k(request: &KbRouterRuntimeRequest) -> (u8, u8) {
+    match request.task_type {
+        KbRouterTaskType::ExpandScript => (2, 6),
+        KbRouterTaskType::GenerateStoryboard => {
+            if request.duration_seconds >= 45 {
+                (5, 12)
+            } else {
+                (3, 8)
+            }
+        }
+        KbRouterTaskType::RepairStoryboard => (2, 10),
+        KbRouterTaskType::CompileSeedancePromptText => (1, 6),
+    }
+}
+
+fn derive_story_keywords(synopsis_text: &str, scene_type: &str) -> Vec<String> {
+    let mut keywords = synopsis_text
+        .split(|character: char| {
+            character.is_whitespace()
+                || matches!(character, ',' | '.' | ';' | ':' | '，' | '。' | '；' | '：')
+        })
+        .map(str::trim)
+        .filter(|token| token.len() >= 2)
+        .map(|token| token.to_lowercase())
+        .collect::<Vec<_>>();
+    keywords.push(scene_type.to_lowercase());
+    keywords.sort();
+    keywords.dedup();
+    keywords.truncate(8);
+    keywords
+}
+
+fn build_router_selected_rules(
+    state: &AppState,
+    request: &KbRouterRuntimeRequest,
+    top_k_rules: u8,
+) -> Vec<KbRouterSelectedRule> {
+    let mut rules = state
+        .kb_golden_sample_runtime
+        .field_coverage_rules
+        .records
+        .iter()
+        .map(|rule| KbRouterSelectedRule {
+            rule_id: rule.rule_id.clone(),
+            family: match rule.core.as_str() {
+                "continuity_negative_core" => "continuity".to_string(),
+                "scene_performance_core" => "routing".to_string(),
+                "camera_directing_core" => "prompt_text".to_string(),
+                other => other.to_string(),
+            },
+            summary: format!(
+                "规则 {} 仅保留压缩摘要，覆盖 {} 行，用于 {} 的本地约束，不展开原始 prompt_body 或 teaching_note。",
+                rule.core,
+                rule.row_count,
+                request.task_type.as_str()
+            ),
+            applies_to: vec![request.task_type.as_str().to_string()],
+        })
+        .collect::<Vec<_>>();
+
+    rules.push(KbRouterSelectedRule {
+        rule_id: "reserve_gate".to_string(),
+        family: "reserve_gate".to_string(),
+        summary:
+            "reserve 与 usable_for_fewshot=No 仅作为规则证据或负向约束，不进入 positive few-shot。"
+                .to_string(),
+        applies_to: vec![request.task_type.as_str().to_string()],
+    });
+    rules.push(KbRouterSelectedRule {
+        rule_id: "duration_guard".to_string(),
+        family: "duration".to_string(),
+        summary: "总时长必须守恒，且模型侧 full_kb_rows_included 永远保持 0。".to_string(),
+        applies_to: vec![request.task_type.as_str().to_string()],
+    });
+    rules.truncate(top_k_rules as usize);
+    rules
+}
+
+fn build_kb_context_summary(
+    state: &AppState,
+    request: &KbRouterRuntimeRequest,
+    story_keywords: &[String],
+    selected_sample_ids: &[String],
+    selected_kb_rules: &[KbRouterSelectedRule],
+    excluded_candidates: &[KbRouterExcludedCandidate],
+) -> String {
+    let sample_summaries = selected_sample_ids
+        .iter()
+        .filter_map(|sample_id| {
+            state
+                .kb_golden_sample_runtime
+                .golden_sample_library
+                .records
+                .iter()
+                .find(|record| &record.sample_id == sample_id)
+                .map(|record| {
+                    format!(
+                        "样本 {}：scene_category={}，sample_type={}，scene_scale_hint={}，只保留结构 lesson 与时长/连续性约束，不暴露 prompt_body、teaching_note、source_register。",
+                        record.sample_id,
+                        record.source_fields.scene_category,
+                        record.source_fields.sample_type,
+                        derive_scene_scale(&record.source_fields.technical_profile),
+                    )
+                })
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let rule_summaries = selected_kb_rules
+        .iter()
+        .map(|rule| format!("{}：{}", rule.rule_id, rule.summary))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let excluded_summary = excluded_candidates
+        .iter()
+        .take(5)
+        .map(|candidate| format!("{}=>{}", candidate.sample_id, candidate.reason_code))
+        .collect::<Vec<_>>()
+        .join("；");
+
+    let mut summary = format!(
+        "这是 Hope 本地 KB Router 的压缩摘要。任务={}，scene_type={}，duration_seconds={}，story_keywords={}。正向样本仅从 official 且 usable_for_fewshot=Yes 中选取，当前 selected_sample_ids={}。{} {} 排除候选摘要：{}。本摘要只保留场景结构、连续性、时长和 prompt_text 编译约束，不输出完整 prompt_body、不输出完整 teaching_note、不输出 source_register/provenance/overlay JSON，也不输出真实导演名、IP 名或品牌名。reserve 与 usable_for_fewshot=No 仅保留为规则证据或负向约束，不能作为 positive few-shot。full_kb_rows_included 固定为 0，禁止把 152 行整包送入上下文。导出与 trace 只记录 selected_sample_ids、压缩规则摘要、kb_context_summary 与 retrieval_trace。",
+        request.task_type.as_str(),
+        request.scene_type,
+        request.duration_seconds,
+        story_keywords.join("、"),
+        selected_sample_ids.join("、"),
+        sample_summaries,
+        rule_summaries,
+        excluded_summary
+    );
+
+    while summary.chars().count() < 820 {
+        summary.push_str(" 本地摘要继续强调：只保留与当前任务直接相关的结构化规则和样本 lesson，不复制原始 23 字段整行，不复制 prompt_body，不复制 teaching_note，不复制 provenance。");
+    }
+    summary.chars().take(1450).collect()
+}
+
+fn select_golden_sample_records_from_router<'a>(
+    state: &'a AppState,
+    router_result: &KbRouterRuntimeResponse,
+) -> Vec<&'a GoldenSampleLibraryRecord> {
+    router_result
+        .selected_sample_ids
+        .iter()
+        .filter_map(|sample_id| {
+            state
+                .kb_golden_sample_runtime
+                .golden_sample_library
+                .records
+                .iter()
+                .find(|record| &record.sample_id == sample_id)
+        })
+        .collect()
+}
+
+#[cfg(test)]
 fn select_golden_sample_records<'a>(
     state: &'a AppState,
     script_text: &str,
@@ -825,6 +1208,7 @@ fn build_prompt_text_compilation_request(
     record: &GoldenSampleLibraryRecord,
     scene_projection: &ScenePerformanceProjection,
     duration_seconds: u16,
+    kb_router_result: &KbRouterRuntimeResponse,
 ) -> PromptTextCompilationRequest {
     let scene_type = record.source_fields.scene_category.clone();
     let scene_label = record
@@ -833,13 +1217,6 @@ fn build_prompt_text_compilation_request(
         .first()
         .cloned()
         .unwrap_or_else(|| record.source_fields.scene_tag.clone());
-    let kb_context_summary = format!(
-        "sample_id={}; scene_category={}; style_cluster={}; sample_type={}",
-        record.sample_id,
-        record.source_fields.scene_category,
-        record.source_fields.style_cluster,
-        record.source_fields.sample_type
-    );
 
     PromptTextCompilationRequest {
         row: PromptTextCompilationRow {
@@ -853,8 +1230,12 @@ fn build_prompt_text_compilation_request(
         },
         scene_type,
         scene_label,
-        kb_context_summary,
-        selected_kb_rules: vec![],
+        kb_context_summary: kb_router_result.kb_context_summary.clone(),
+        selected_kb_rules: kb_router_result
+            .selected_kb_rules
+            .iter()
+            .map(|rule| format!("{}:{}", rule.rule_id, rule.summary))
+            .collect(),
         continuity_negative_core: record.source_fields.continuity_negative_core.clone(),
         target_profile: "seedance2.0".to_string(),
     }
@@ -864,7 +1245,9 @@ fn compile_seedance_prompt_text(
     state: &AppState,
     mut request: PromptTextCompilationRequest,
 ) -> PromptTextCompilationResponse {
-    request.selected_kb_rules = select_prompt_compilation_rules(state, &request);
+    if request.selected_kb_rules.is_empty() {
+        request.selected_kb_rules = select_prompt_compilation_rules(state, &request);
+    }
     let provider = default_text_model_provider();
     let generation_request = build_text_generation_request(
         TextGenerationTask::CompileSeedancePromptText,
@@ -1124,6 +1507,42 @@ fn non_blank_string(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+fn empty_kb_router_response(
+    request: &KbRouterRuntimeRequest,
+    kb_runtime: &project_store::KbRuntimeHandle,
+) -> KbRouterRuntimeResponse {
+    KbRouterRuntimeResponse {
+        selected_sample_ids: vec![],
+        selected_kb_rules: vec![],
+        kb_context_summary: String::new(),
+        retrieval_trace: KbRouterRetrievalTrace {
+            kb_version: kb_runtime.snapshot.seed_format.clone(),
+            snapshot_id: kb_runtime.snapshot.snapshot_id.clone(),
+            snapshot_checksum: kb_runtime.snapshot.snapshot_hash.clone(),
+            content_cache_key: stable_hash_hex(&format!(
+                "{}\n{}\n{}\n{}\n{}\n{}",
+                request.scene_type,
+                request.synopsis_text,
+                request.duration_seconds,
+                request.task_type.as_str(),
+                request.shot_intent.as_deref().unwrap_or_default(),
+                request.structure_type.as_deref().unwrap_or_default()
+            )),
+            task_type: request.task_type.as_str().to_string(),
+            top_k_samples: 0,
+            top_k_rules: 0,
+            duration_seconds: request.duration_seconds,
+            story_keywords: derive_story_keywords(&request.synopsis_text, &request.scene_type),
+            selection_reasons: vec![],
+            excluded_candidates: vec![],
+            token_budget: KbRouterTokenBudget {
+                kb_context_summary_target: "800-1500 Chinese characters".to_string(),
+                full_kb_rows_included: 0,
+            },
+        },
+    }
+}
+
 fn now_epoch_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1141,6 +1560,18 @@ fn extract_scene_type(script_text: &str) -> String {
                 .map(ToOwned::to_owned)
         })
         .unwrap_or_default()
+}
+
+fn extract_synopsis_text(script_text: &str) -> String {
+    script_text
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("synopsis:")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| script_text.trim().to_string())
 }
 
 fn is_supported_storyboard_duration(duration_seconds: u16) -> bool {
@@ -1220,12 +1651,15 @@ fn blocked_storyboard_response(
     selected_total_duration_seconds: u16,
     blockers: Vec<ProductWarning>,
     now_ms: u64,
+    router_request: &KbRouterRuntimeRequest,
+    kb_runtime: &project_store::KbRuntimeHandle,
 ) -> GenerateStoryboardResponse {
     GenerateStoryboardResponse {
         task_id,
         result_id: String::new(),
         rows: vec![],
         selected_total_duration_seconds,
+        kb_router_result: empty_kb_router_response(router_request, kb_runtime),
         duration_plan: StoryboardDurationPlan {
             total_duration_seconds: selected_total_duration_seconds,
             row_count: 0,
@@ -1420,9 +1854,10 @@ mod tests {
         GoldenSampleSourceContext, GoldenSampleSourceFields, GoldenSampleSourceRegister,
         GoldenSampleSourceRegisterEntry, GoldenSampleSourceRegisterProvenance,
         GoldenSampleV3CoreCoverage, GoldenSampleValidatorEvidence, KbBundleManifestRecord,
-        KbBundleRecordCounts, KbGoldenSampleRuntimePackage, KbRuntimeSummary, KbSnapshotRecord,
-        PromptTemplateRecord, PromptTextCompilationStatus, SceneTaxonomyRecord,
-        TextModelProviderKind, UpdateStoryboardRowsRequest,
+        KbBundleRecordCounts, KbGoldenSampleRuntimePackage, KbRouterRuntimeRequest,
+        KbRouterTaskType, KbRuntimeSummary, KbSnapshotRecord, PromptTemplateRecord,
+        PromptTextCompilationStatus, SceneTaxonomyRecord, TextModelProviderKind,
+        UpdateStoryboardRowsRequest,
     };
     use project_store::{
         DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeHandle, StoreSkeleton,
@@ -1433,7 +1868,7 @@ mod tests {
         ValidationExportPanelState, build_prompt_text_compilation_request,
         build_storyboard_preview_plan, build_validation_export_panel_snapshot_from_fixture,
         compile_seedance_prompt_text, default_text_model_provider, expand_script, export_bundle,
-        generate_storyboard, project_scene_performance, resolve_scene_taxonomy,
+        generate_storyboard, project_scene_performance, resolve_scene_taxonomy, run_kb_router,
         save_storyboard_rows, select_golden_sample_records,
     };
     use crate::state::AppState;
@@ -1995,6 +2430,51 @@ mod tests {
     }
 
     #[test]
+    fn kb_router_runtime_keeps_top_k_summary_and_reserve_gate_bounded() {
+        let state = test_state();
+        let router_result = run_kb_router(
+            &state,
+            KbRouterRuntimeRequest {
+                scene_type: "daily_dialogue".to_string(),
+                synopsis_text: "Two leads negotiate quietly before dawn and keep continuity tight."
+                    .to_string(),
+                duration_seconds: 60,
+                task_type: KbRouterTaskType::GenerateStoryboard,
+                shot_intent: Some("dialogue".to_string()),
+                structure_type: Some("single_shot".to_string()),
+            },
+        );
+
+        assert!((3..=5).contains(&router_result.selected_sample_ids.len()));
+        assert_eq!(
+            router_result
+                .retrieval_trace
+                .token_budget
+                .full_kb_rows_included,
+            0
+        );
+        assert!(router_result.kb_context_summary.chars().count() >= 800);
+        assert!(router_result.kb_context_summary.chars().count() <= 1500);
+        assert!(
+            !router_result
+                .kb_context_summary
+                .contains("TODO: fill prompt")
+        );
+        assert!(
+            !router_result
+                .kb_context_summary
+                .contains("reserve evidence")
+        );
+        assert!(
+            router_result
+                .retrieval_trace
+                .excluded_candidates
+                .iter()
+                .any(|candidate| candidate.reason_code == "reserve_gate")
+        );
+    }
+
+    #[test]
     fn v120_consumer_accepts_152_package_without_promoting_reserve_rows() {
         let state = test_state();
         let package = &state.kb_golden_sample_runtime;
@@ -2038,10 +2518,21 @@ mod tests {
         assert_eq!(provider.provider, TextModelProviderKind::Qwen);
         assert_eq!(provider.model, "qwen-default-text");
         assert!(!provider.enabled);
+        let kb_router_result = run_kb_router(
+            &state,
+            KbRouterRuntimeRequest {
+                scene_type: "daily_dialogue".to_string(),
+                synopsis_text: "Two leads negotiate quietly before dawn.".to_string(),
+                duration_seconds: 8,
+                task_type: KbRouterTaskType::CompileSeedancePromptText,
+                shot_intent: None,
+                structure_type: None,
+            },
+        );
 
         let response = compile_seedance_prompt_text(
             &state,
-            build_prompt_text_compilation_request(record, &scene_projection, 8),
+            build_prompt_text_compilation_request(record, &scene_projection, 8, &kb_router_result),
         );
 
         assert_eq!(response.target_profile, "seedance2.0");
@@ -2113,7 +2604,16 @@ mod tests {
         );
 
         assert_eq!(state.kb_runtime.summary.golden_sample_record_count, 152);
-        assert_eq!(storyboard.rows.len(), 1);
+        assert_eq!(storyboard.rows.len(), 3);
+        assert_eq!(storyboard.kb_router_result.selected_sample_ids.len(), 3);
+        assert_eq!(
+            storyboard
+                .kb_router_result
+                .retrieval_trace
+                .token_budget
+                .full_kb_rows_included,
+            0
+        );
         assert_eq!(storyboard.rows[0].shot_id, "GS-BRIDGE-01");
         assert_eq!(
             storyboard.rows[0].prompt_text_compilation_status,
@@ -2220,8 +2720,10 @@ mod tests {
                 .expect("storyboard export artifact should be present");
             assert!(artifact.ready, "{artifact_kind} should be ready");
             assert!(artifact.blocked_reason.is_none());
-            assert_eq!(artifact.row_count, Some(1));
+            assert_eq!(artifact.row_count, Some(3));
             assert!(artifact.byte_size.unwrap_or_default() > 0);
+            assert_eq!(artifact.full_kb_rows_included, 0);
+            assert_eq!(artifact.selected_sample_ids.len(), 3);
             let path = artifact
                 .artifact_path
                 .as_deref()
@@ -2439,7 +2941,9 @@ mod tests {
         let mut edited_rows = storyboard.rows.clone();
         edited_rows[0].visual_description = "Edited bridge visual description".to_string();
         edited_rows[0].prompt_text = "Edited Seedance2.0 prompt text".to_string();
-        edited_rows[0].duration_seconds = 10;
+        edited_rows[0].duration_seconds = 4;
+        edited_rows[1].duration_seconds = 3;
+        edited_rows[2].duration_seconds = 3;
 
         let saved = save_storyboard_rows(
             &state,
@@ -2477,12 +2981,16 @@ mod tests {
             .expect("json artifact should exist");
         assert!(json_artifact.edited_rows_applied);
         assert_eq!(json_artifact.selected_total_duration_seconds, Some(10));
+        assert_eq!(json_artifact.full_kb_rows_included, 0);
+        assert_eq!(json_artifact.selected_sample_ids.len(), 3);
         assert!(
             json_artifact
                 .prompt_text_compilation_statuses
                 .iter()
                 .any(|status| status == "ReadyStub")
         );
+        assert!(json_artifact.kb_context_summary.is_some());
+        assert!(json_artifact.retrieval_trace.is_some());
 
         let json_text = fs::read_to_string(json_artifact.artifact_path.as_ref().unwrap())
             .expect("json export should be readable");
