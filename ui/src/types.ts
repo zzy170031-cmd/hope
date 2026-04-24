@@ -49,6 +49,7 @@ export interface StoryboardWorkbenchRow {
   dialogue: string;
   prompt: string;
   durationSeconds: number;
+  backendRow?: GeneratedStoryboardRow;
 }
 
 export interface ProductWarning {
@@ -70,6 +71,7 @@ export interface ModelConfigSummary {
   provider: WorkbenchModelId;
   model: string;
   enabled: boolean;
+  base_url_present: boolean;
   api_key_present: boolean;
 }
 
@@ -108,6 +110,9 @@ export interface GeneratedStoryboardRow {
   character_action: string;
   dialogue: string;
   prompt_text: string;
+  prompt_text_compilation_status?: string;
+  prompt_text_compilation_warnings?: ProductWarning[];
+  prompt_text_source_row_id?: string;
   duration_seconds: number;
   prompt_body_candidate: PromptBodyCandidate;
 }
@@ -128,15 +133,34 @@ export interface StoryboardExportStatus {
 }
 
 export interface GenerateStoryboardResponse {
+  task_id?: string | null;
   result_id: string;
   rows: GeneratedStoryboardRow[];
+  selected_total_duration_seconds?: number;
   duration_plan: StoryboardDurationPlan;
   export_status: StoryboardExportStatus;
+  busy?: boolean;
+  operation_id?: string;
+  revision?: number;
+  updated_at_ms?: number;
+  rows_hash?: string;
+  dirty?: boolean;
+  dirty_source_note?: string | null;
 }
 
 export interface ExportBundleRequest {
-  result_id: string;
+  result_id?: string | null;
+  task_id?: string | null;
   export_format: string;
+}
+
+export interface UpdateStoryboardRowsRequest {
+  result_id: string;
+  task_id?: string | null;
+  rows: GeneratedStoryboardRow[];
+  operation_id: string;
+  base_revision: number;
+  dirty_source_note?: string | null;
 }
 
 export interface ExportArtifactRecord {
@@ -149,6 +173,11 @@ export interface ExportArtifactRecord {
   content_hash?: string | null;
   byte_size?: number | null;
   row_count?: number | null;
+  selected_total_duration_seconds?: number | null;
+  source_result_id?: string | null;
+  edited_rows_applied?: boolean;
+  prompt_text_compilation_statuses?: string[];
+  prompt_text_compilation_warning_codes?: string[];
 }
 
 export interface ExportBundleResponse {

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 pub type ExpandScriptRequest = core_domain::ExpandScriptRequest;
 pub type GenerateStoryboardRequest = core_domain::GenerateStoryboardRequest;
 pub type ExportBundleRequest = core_domain::ExportBundleRequest;
+pub type UpdateStoryboardRowsRequest = core_domain::UpdateStoryboardRowsRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ProjectCreateOrSwitchRequest {
@@ -39,6 +40,7 @@ pub const STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND: &str =
 pub const VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND: &str = "validation_export_panel_snapshot";
 pub const EXPAND_SCRIPT_COMMAND: &str = "expand_script";
 pub const GENERATE_STORYBOARD_COMMAND: &str = "generate_storyboard";
+pub const UPDATE_STORYBOARD_ROWS_COMMAND: &str = "update_storyboard_rows";
 pub const EXPORT_BUNDLE_COMMAND: &str = "export_bundle";
 
 pub const IPC_COMMANDS: &[&str] = &[
@@ -48,5 +50,6 @@ pub const IPC_COMMANDS: &[&str] = &[
     VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
     EXPAND_SCRIPT_COMMAND,
     GENERATE_STORYBOARD_COMMAND,
+    UPDATE_STORYBOARD_ROWS_COMMAND,
     EXPORT_BUNDLE_COMMAND,
 ];

@@ -61,6 +61,9 @@ pub struct ExportBundle {
 pub struct V120StoryboardExportRequest {
     pub export_manifest_id: String,
     pub result_id: String,
+    pub selected_total_duration_seconds: u16,
+    pub source_result_id: String,
+    pub edited_rows_applied: bool,
     pub rows: Vec<GeneratedStoryboardRow>,
 }
 
@@ -216,20 +219,34 @@ fn write_export_files(workbook: &WorkbookManifest) -> Result<(), ExportError> {
 }
 
 fn build_v120_storyboard_workbook(request: &V120StoryboardExportRequest) -> WorkbookManifest {
-    let rows = request.rows.iter().map(v120_storyboard_row_cells).collect();
+    let rows = request
+        .rows
+        .iter()
+        .map(|row| v120_storyboard_row_cells(request, row))
+        .collect();
+    let mut columns = V120_STORYBOARD_COLUMNS.to_vec();
+    columns.push("prompt_text_compilation_status");
+    columns.push("prompt_text_compilation_warnings");
+    columns.push("prompt_text_source_row_id");
+    columns.push("selected_total_duration_seconds");
+    columns.push("source_result_id");
+    columns.push("edited_rows_applied");
     WorkbookManifest {
         workbook_machine_name: "v120_storyboard_export_bundle",
         workbook_chinese_name: "V120 Storyboard Export Bundle",
         sheets: vec![WorkbookSheetManifest {
             machine_name: V120_STORYBOARD_SHEET_MACHINE_NAME,
             chinese_name: "V120 Storyboard Rows",
-            columns: V120_STORYBOARD_COLUMNS.to_vec(),
+            columns,
             rows,
         }],
     }
 }
 
-fn v120_storyboard_row_cells(row: &GeneratedStoryboardRow) -> Vec<String> {
+fn v120_storyboard_row_cells(
+    request: &V120StoryboardExportRequest,
+    row: &GeneratedStoryboardRow,
+) -> Vec<String> {
     vec![
         row.order.to_string(),
         row.person.clone(),
@@ -240,6 +257,16 @@ fn v120_storyboard_row_cells(row: &GeneratedStoryboardRow) -> Vec<String> {
         row.dialogue.clone(),
         row.prompt_text.clone(),
         row.duration_seconds.to_string(),
+        format!("{:?}", row.prompt_text_compilation_status),
+        row.prompt_text_compilation_warnings
+            .iter()
+            .map(|warning| warning.code.as_str())
+            .collect::<Vec<_>>()
+            .join("|"),
+        row.prompt_text_source_row_id.clone(),
+        request.selected_total_duration_seconds.to_string(),
+        request.source_result_id.clone(),
+        request.edited_rows_applied.to_string(),
     ]
 }
 
@@ -378,7 +405,9 @@ fn extract_row(
     columns
         .iter()
         .map(|column| {
-            if sheet_machine_name == "prompt_package" && *column == "正文" {
+            if sheet_machine_name == "prompt_package"
+                && *column == canonical_column("prompt_package", 2)
+            {
                 return build_external_prompt_body(source, object);
             }
 
@@ -414,9 +443,11 @@ fn build_external_prompt_body(
     source: &Value,
     prompt_row: &Map<String, Value>,
 ) -> Result<String, ExportError> {
-    let prompt_package_id = required_string(prompt_row, "PromptPackage标识", "prompt_package")?;
-    let source_level = required_string(prompt_row, "来源层级", "prompt_package")?;
-    let original_body = required_string(prompt_row, "正文", "prompt_package")?;
+    let prompt_package_columns = canonical_columns("prompt_package");
+    let prompt_package_id =
+        required_string(prompt_row, prompt_package_columns[0], "prompt_package")?;
+    let source_level = required_string(prompt_row, prompt_package_columns[1], "prompt_package")?;
+    let original_body = required_string(prompt_row, prompt_package_columns[2], "prompt_package")?;
 
     let render_segment_id = extract_render_segment_id(prompt_package_id);
     let scene_summary = sanitize_natural_text(
@@ -553,14 +584,17 @@ fn build_continuity_clause(scene_summary: &str, action_anchor: &str) -> String {
 }
 
 fn find_negative_prompt_guard<'a>(source: &'a Value) -> Option<&'a str> {
+    let hard_lock_columns = canonical_columns("hard_lock");
     source
         .get("hard_lock")?
         .as_array()?
         .iter()
         .find(|row| {
-            row.get("??").and_then(serde_json::Value::as_str) == Some("negative_prompt_guard")
+            row.get(hard_lock_columns[2])
+                .and_then(serde_json::Value::as_str)
+                == Some("negative_prompt_guard")
         })?
-        .get("??")?
+        .get(hard_lock_columns[3])?
         .as_str()
 }
 
@@ -578,6 +612,22 @@ fn required_string<'a>(
         })
 }
 
+fn canonical_columns(sheet_machine_name: &'static str) -> &'static [&'static str] {
+    CANONICAL_WORKBOOK_CONTRACT
+        .sheets
+        .iter()
+        .find(|sheet| sheet.machine_name == sheet_machine_name)
+        .map(|sheet| sheet.columns)
+        .expect("canonical workbook sheet must exist")
+}
+
+fn canonical_column(sheet_machine_name: &'static str, index: usize) -> &'static str {
+    canonical_columns(sheet_machine_name)
+        .get(index)
+        .copied()
+        .expect("canonical workbook column must exist")
+}
+
 fn extract_render_segment_id(prompt_package_id: &str) -> String {
     prompt_package_id
         .split("render-segment-")
@@ -587,32 +637,37 @@ fn extract_render_segment_id(prompt_package_id: &str) -> String {
 }
 
 fn find_linked_scene_summary<'a>(source: &'a Value, render_segment_id: &str) -> Option<&'a str> {
+    let render_segment_columns = canonical_columns("render_segment");
+    let narrative_scene_columns = canonical_columns("narrative_scene");
     let narrative_scene_id = source
         .get("render_segment")?
         .as_array()?
         .iter()
         .find(|row| {
-            row.get("RenderSegment标识").and_then(Value::as_str) == Some(render_segment_id)
+            row.get(render_segment_columns[0]).and_then(Value::as_str) == Some(render_segment_id)
         })?
-        .get("叙事场景标识")?
+        .get(render_segment_columns[1])?
         .as_str()?;
 
     source
         .get("narrative_scene")?
         .as_array()?
         .iter()
-        .find(|row| row.get("叙事场景标识").and_then(Value::as_str) == Some(narrative_scene_id))?
-        .get("内容摘要")?
+        .find(|row| {
+            row.get(narrative_scene_columns[0]).and_then(Value::as_str) == Some(narrative_scene_id)
+        })?
+        .get(narrative_scene_columns[4])?
         .as_str()
 }
 
 fn find_action_anchor<'a>(source: &'a Value, render_segment_id: &str) -> Option<&'a str> {
+    let cut_columns = canonical_columns("cut");
     source
         .get("cut")?
         .as_array()?
         .iter()
-        .find(|row| row.get("RenderSegment标识").and_then(Value::as_str) == Some(render_segment_id))
-        .and_then(|row| row.get("镜头描述"))
+        .find(|row| row.get(cut_columns[1]).and_then(Value::as_str) == Some(render_segment_id))
+        .and_then(|row| row.get(cut_columns[3]))
         .and_then(Value::as_str)
 }
 
@@ -638,54 +693,77 @@ fn sanitize_natural_text(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    use core_domain::{
+        ProductWarning, PromptBodyCandidate, PromptTextCompilationStatus,
+        ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, StructureMode,
+    };
     use serde_json::json;
 
     #[test]
     fn external_prompt_body_removes_machine_identifier_and_preserves_traceability_outside_body() {
+        let narrative_scene_columns = canonical_columns("narrative_scene");
+        let render_segment_columns = canonical_columns("render_segment");
+        let cut_columns = canonical_columns("cut");
+        let hard_lock_columns = canonical_columns("hard_lock");
+        let prompt_package_columns = canonical_columns("prompt_package");
+
         let source = json!({
             "narrative_scene": [
-                {
-                    "??????": "narrative-scene-week3-001",
-                    "????": "??????????????"
-                }
+                json_object(&[
+                    (narrative_scene_columns[0], json!("narrative-scene-week3-001")),
+                    (narrative_scene_columns[4], json!("clean scene summary")),
+                ])
             ],
             "render_segment": [
-                {
-                    "RenderSegment??": "render-segment-week3-001",
-                    "??????": "narrative-scene-week3-001"
-                }
+                json_object(&[
+                    (render_segment_columns[0], json!("render-segment-week3-001")),
+                    (render_segment_columns[1], json!("narrative-scene-week3-001")),
+                ])
             ],
             "cut": [
-                {
-                    "RenderSegment??": "render-segment-week3-001",
-                    "????": "?????????????????????"
-                }
+                json_object(&[
+                    (cut_columns[1], json!("render-segment-week3-001")),
+                    (cut_columns[3], json!("actor crosses the doorway")),
+                ])
             ],
             "hard_lock": [
-                {
-                    "??": "negative_prompt_guard",
-                    "??": "???????????????"
-                }
+                json_object(&[
+                    (hard_lock_columns[2], json!("negative_prompt_guard")),
+                    (hard_lock_columns[3], json!("avoid visual drift")),
+                ])
             ]
         });
-        let prompt_row = json!({
-            "PromptPackage??": "prompt-package-render-episode-week3-001-render-segment-week3-001",
-            "????": "render_prompt",
-            "??": "???????????????????? render-segment-week3-001 ?????"
-        });
+        let prompt_row = json_object(&[
+            (
+                prompt_package_columns[0],
+                json!("prompt-package-render-episode-week3-001-render-segment-week3-001"),
+            ),
+            (prompt_package_columns[1], json!("render_prompt")),
+            (
+                prompt_package_columns[2],
+                json!("render prompt body with render-segment-week3-001 machine id"),
+            ),
+        ]);
 
         let body = build_external_prompt_body(&source, prompt_row.as_object().unwrap())
             .expect("external prompt should build");
 
         assert!(!body.contains("render-segment-week3-001"));
-        assert!(body.contains("?????"));
-        assert!(body.contains("???????"));
-        assert!(body.contains("???????"));
-        assert!(body.contains("??????"));
-        assert!(body.contains("??????"));
-        assert!(body.contains("????"));
-        assert!(body.contains("???"));
+        assert!(body.contains("clean scene summary"));
+        assert!(body.contains("actor crosses the doorway"));
+        assert!(body.contains("render prompt body with"));
+        assert!(body.contains("avoid visual drift"));
         assert!(source.to_string().contains("render-segment-week3-001"));
+    }
+
+    fn json_object(entries: &[(&str, Value)]) -> Value {
+        let mut object = Map::new();
+        for (key, value) in entries {
+            object.insert((*key).to_string(), value.clone());
+        }
+        Value::Object(object)
     }
 
     #[test]
@@ -717,6 +795,96 @@ mod tests {
                 .negative_guard_clause
                 .contains("低清晰度面部纹理")
         );
+    }
+    #[test]
+    fn export_v120_storyboard_bundle_writes_ready_structured_artifacts() {
+        let request = V120StoryboardExportRequest {
+            export_manifest_id: "storyboard-export-152".to_string(),
+            result_id: "storyboard-152".to_string(),
+            selected_total_duration_seconds: 10,
+            source_result_id: "storyboard-152".to_string(),
+            edited_rows_applied: true,
+            rows: vec![GeneratedStoryboardRow {
+                shot_id: "GS-BRIDGE-001".to_string(),
+                order: 1,
+                person: "lead_pair".to_string(),
+                shot_title: "Bridge dialogue sample".to_string(),
+                scene_scale: "MCU".to_string(),
+                visual_description: "Two leads hold a restrained dialogue beat.".to_string(),
+                character_action: "One lead answers with a quiet nod.".to_string(),
+                dialogue: "We move before dawn.".to_string(),
+                prompt_text: "鏅ご鎻愮ず璇?Seedance2.0 stub".to_string(),
+                prompt_text_compilation_status: PromptTextCompilationStatus::ReadyStub,
+                prompt_text_compilation_warnings: vec![ProductWarning {
+                    code: "seedance_prompt_text_stub".to_string(),
+                    message: "prompt_text is compiled by deterministic stub".to_string(),
+                    related_sample_id: Some("GS-BRIDGE-001".to_string()),
+                }],
+                prompt_text_source_row_id: "GS-BRIDGE-001".to_string(),
+                duration_seconds: 8,
+                prompt_body_candidate: PromptBodyCandidate {
+                    source_sample_id: "GS-BRIDGE-001".to_string(),
+                    source_prompt_body: "raw prompt body should stay out of prompt_text"
+                        .to_string(),
+                    candidate_text: Some(
+                        "raw prompt body should stay out of prompt_text".to_string(),
+                    ),
+                    blocked: false,
+                    blocker_codes: vec![],
+                },
+                scene_performance_projection: ScenePerformanceProjection {
+                    source_sample_id: "GS-BRIDGE-001".to_string(),
+                    source_sample_title: "Bridge dialogue sample".to_string(),
+                    scene_scale: "MCU".to_string(),
+                    person: "lead_pair".to_string(),
+                    visual_description: "Two leads hold a restrained dialogue beat.".to_string(),
+                    character_action: "One lead answers with a quiet nod.".to_string(),
+                    fused_source_text: "Dialogue bridge evidence".to_string(),
+                    sequence_grouping: SequenceGrouping {
+                        structure_mode: StructureMode::SingleShot,
+                        sequence_id: None,
+                        shot_order: None,
+                        sequence_field_state: SequenceFieldState::NotApplicable,
+                    },
+                },
+                external_reference_handle_candidates: vec![],
+                sequence_grouping: SequenceGrouping {
+                    structure_mode: StructureMode::SingleShot,
+                    sequence_id: None,
+                    shot_order: None,
+                    sequence_field_state: SequenceFieldState::NotApplicable,
+                },
+            }],
+        };
+
+        let bundle =
+            export_v120_storyboard_bundle(&request).expect("v120 storyboard export should succeed");
+
+        assert_eq!(bundle.workbook.sheets.len(), 1);
+        assert_eq!(bundle.workbook.sheets[0].rows.len(), 1);
+        assert_eq!(bundle.artifacts.len(), 3);
+        assert!(
+            bundle
+                .artifacts
+                .iter()
+                .all(|artifact| artifact.row_count == 1 && artifact.path.is_file())
+        );
+
+        let json_artifact = bundle
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.artifact_kind == "storyboard_json")
+            .expect("json artifact should exist");
+        let json_text =
+            fs::read_to_string(&json_artifact.path).expect("json artifact should be readable");
+
+        assert!(json_text.contains("Bridge dialogue sample"));
+        assert!(json_text.contains("ReadyStub"));
+        assert!(json_text.contains("seedance_prompt_text_stub"));
+        assert!(json_text.contains("storyboard-152"));
+        assert!(json_text.contains("true"));
+        assert!(json_text.contains("10"));
+        assert!(!json_text.contains("raw prompt body should stay out of prompt_text"));
     }
 }
 

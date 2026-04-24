@@ -7,6 +7,7 @@ use hope_app::{
         EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, ExpandScriptRequest, ExportBundleRequest,
         GENERATE_STORYBOARD_COMMAND, GenerateStoryboardRequest, PROJECT_CREATE_OR_SWITCH_COMMAND,
         ProjectCreateOrSwitchRequest, STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
+        UPDATE_STORYBOARD_ROWS_COMMAND, UpdateStoryboardRowsRequest,
         StoryboardRenderSegmentCutPreviewSnapshotRequest, VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
         ValidationExportPanelSnapshotRequest, WRITER_ENTRY_SNAPSHOT_COMMAND,
         WriterEntrySnapshotRequest,
@@ -44,6 +45,7 @@ fn run_native_host() {
             validation_export_panel_snapshot,
             expand_script,
             generate_storyboard,
+            update_storyboard_rows,
             export_bundle
         ])
         .run(tauri::generate_context!())
@@ -135,6 +137,21 @@ fn generate_storyboard(
     {
         DesktopInvokeResponse::GenerateStoryboard(response) => Ok(response),
         _ => Err("desktop invoke returned an unexpected generate_storyboard response".to_string()),
+    }
+}
+
+#[tauri::command]
+fn update_storyboard_rows(
+    request: UpdateStoryboardRowsRequest,
+) -> Result<GenerateStoryboardResponse, String> {
+    match invoke_desktop_command(
+        UPDATE_STORYBOARD_ROWS_COMMAND,
+        DesktopInvokeRequest::UpdateStoryboardRows(request),
+    )
+    .map_err(|error| error.to_string())?
+    {
+        DesktopInvokeResponse::UpdateStoryboardRows(response) => Ok(response),
+        _ => Err("desktop invoke returned an unexpected update_storyboard_rows response".to_string()),
     }
 }
 

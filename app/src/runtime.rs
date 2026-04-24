@@ -2,6 +2,7 @@ use std::{
     collections::HashSet,
     hash::{Hash, Hasher},
     io,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
@@ -17,8 +18,8 @@ use core_domain::{
     ExportBundleRequest, ExportBundleResponse, ExternalReferenceHandleCandidate,
     GenerateStoryboardRequest, GenerateStoryboardResponse, GeneratedStoryboardRow,
     GoldenSampleLibraryRecord, ModelConfigSummary, ProductWarning, PromptBodyCandidate,
-    ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, StoryboardDurationPlan,
-    StoryboardExportStatus, StructureMode,
+    PromptTextCompilationStatus, ScenePerformanceProjection, SequenceFieldState, SequenceGrouping,
+    StoryboardDurationPlan, StoryboardExportStatus, StructureMode, UpdateStoryboardRowsRequest,
 };
 use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
 use serde::Serialize;
@@ -210,6 +211,7 @@ pub fn generate_storyboard(
     state: &AppState,
     request: GenerateStoryboardRequest,
 ) -> GenerateStoryboardResponse {
+    let now_ms = now_epoch_ms();
     let script_text = request
         .expanded_script_text
         .clone()
@@ -221,12 +223,94 @@ pub fn generate_storyboard(
                 .map(|script| script.expanded_script_text)
         })
         .unwrap_or_default();
+    let scene_type = extract_scene_type(&script_text);
+    let mut blockers = Vec::new();
+
+    if script_text.trim().is_empty() {
+        blockers.push(ProductWarning {
+            code: "task_script_required".to_string(),
+            message: "请先完成脚本扩写或提供有效脚本内容，再生成分镜。".to_string(),
+            related_sample_id: None,
+        });
+    }
+    if request.task_name.trim().is_empty() {
+        blockers.push(ProductWarning {
+            code: "task_name_required".to_string(),
+            message: "请填写镜头任务名称后再生成分镜。".to_string(),
+            related_sample_id: None,
+        });
+    }
+    if !is_supported_storyboard_duration(request.selected_total_duration_seconds) {
+        blockers.push(ProductWarning {
+            code: "duration_not_supported".to_string(),
+            message: "总时长仅支持 5/10/15/30/45/60 秒。".to_string(),
+            related_sample_id: None,
+        });
+    }
+    if scene_type.trim().is_empty() {
+        blockers.push(ProductWarning {
+            code: "scene_type_required".to_string(),
+            message: "脚本中缺少有效场景类型，无法生成分镜。".to_string(),
+            related_sample_id: None,
+        });
+    } else if resolve_scene_taxonomy(state, Some(&scene_type)).is_none()
+        && !is_supported_desktop_scene_type(&scene_type)
+    {
+        blockers.push(ProductWarning {
+            code: "scene_type_invalid".to_string(),
+            message: "脚本中的场景类型无效，无法生成分镜。".to_string(),
+            related_sample_id: None,
+        });
+    }
+    if state.kb_golden_sample_runtime.is_none() {
+        blockers.push(ProductWarning {
+            code: "v120_package_missing".to_string(),
+            message: "generate_storyboard requires the V120 golden sample runtime package."
+                .to_string(),
+            related_sample_id: None,
+        });
+    }
+
+    if !blockers.is_empty() {
+        return blocked_storyboard_response(
+            None,
+            request.selected_total_duration_seconds,
+            blockers,
+            now_ms,
+        );
+    }
 
     let selected_records = select_golden_sample_records(state, &script_text, &request);
+    if selected_records.is_empty() {
+        return blocked_storyboard_response(
+            None,
+            request.selected_total_duration_seconds,
+            vec![ProductWarning {
+                code: "no_selectable_rows".to_string(),
+                message: "当前任务没有可用的官方分镜样本，无法生成分镜。".to_string(),
+                related_sample_id: None,
+            }],
+            now_ms,
+        );
+    }
+
     let row_count = selected_records.len().max(1);
-    let per_row_seconds = (request.selected_total_duration_seconds / row_count as u16).max(1);
+    let Some(row_durations) =
+        allocate_storyboard_row_durations(request.selected_total_duration_seconds, row_count)
+    else {
+        return blocked_storyboard_response(
+            None,
+            request.selected_total_duration_seconds,
+            vec![ProductWarning {
+                code: "duration_allocation_failed".to_string(),
+                message: "镜头时长分配失败，无法生成满足总时长守恒的分镜。".to_string(),
+                related_sample_id: None,
+            }],
+            now_ms,
+        );
+    };
+
     let mut rows = Vec::new();
-    let mut blockers = Vec::new();
     let mut warnings = Vec::new();
 
     for (index, record) in selected_records.iter().enumerate() {
@@ -253,6 +337,13 @@ pub fn generate_storyboard(
 
         let prompt_candidate = project_prompt_body_candidate(record);
         let scene_projection = project_scene_performance(record);
+        let prompt_compilation = compile_seedance_prompt_text(
+            record,
+            &scene_projection,
+            row_durations[index],
+            &scene_type,
+        );
+        warnings.extend(prompt_compilation.2.iter().cloned());
         if prompt_candidate.candidate_text.is_some() {
             warnings.push(ProductWarning {
                 code: "prompt_body_candidate_not_compiled".to_string(),
@@ -270,35 +361,15 @@ pub fn generate_storyboard(
             visual_description: scene_projection.visual_description.clone(),
             character_action: scene_projection.character_action.clone(),
             dialogue: String::new(),
-            prompt_text: String::new(),
-            duration_seconds: per_row_seconds,
+            prompt_text: prompt_compilation.0,
+            prompt_text_compilation_status: prompt_compilation.1,
+            prompt_text_compilation_warnings: prompt_compilation.2,
+            prompt_text_source_row_id: record.source_fields.shot_id.clone(),
+            duration_seconds: row_durations[index],
             prompt_body_candidate: prompt_candidate,
             scene_performance_projection: scene_projection.clone(),
             external_reference_handle_candidates: project_reference_handle_candidates(record),
             sequence_grouping: scene_projection.sequence_grouping,
-        });
-    }
-
-    if state.kb_golden_sample_runtime.is_none() {
-        blockers.push(ProductWarning {
-            code: "v120_package_missing".to_string(),
-            message: "generate_storyboard requires the V120 golden sample runtime package."
-                .to_string(),
-            related_sample_id: None,
-        });
-    }
-    if rows.is_empty() {
-        blockers.push(ProductWarning {
-            code: "v120_no_selectable_rows".to_string(),
-            message: "No V120 rows matched the bridge selector.".to_string(),
-            related_sample_id: None,
-        });
-    }
-    if script_text.trim().is_empty() {
-        blockers.push(ProductWarning {
-            code: "script_input_missing".to_string(),
-            message: "generate_storyboard requires script_id or expanded_script_text.".to_string(),
-            related_sample_id: None,
         });
     }
 
@@ -325,6 +396,22 @@ pub fn generate_storyboard(
         .len() as u32;
     let ready_row_count = rows.len() as u32 - blocked_row_count.min(rows.len() as u32);
     let allocated_seconds = rows.iter().map(|row| row.duration_seconds).sum::<u16>();
+    if allocated_seconds != request.selected_total_duration_seconds {
+        return blocked_storyboard_response(
+            None,
+            request.selected_total_duration_seconds,
+            vec![ProductWarning {
+                code: "duration_conservation_failed".to_string(),
+                message: "分镜总时长与任务时长不一致，已阻断生成结果。".to_string(),
+                related_sample_id: None,
+            }],
+            now_ms,
+        );
+    }
+    let task_id = format!(
+        "task-{}",
+        &stable_hash_hex(&format!("{}\n{}", request.task_name.trim(), scene_type))[..12]
+    );
     let result_id = format!(
         "storyboard-{}",
         &stable_hash_hex(&format!(
@@ -332,14 +419,21 @@ pub fn generate_storyboard(
             request.task_name, script_text, request.selected_total_duration_seconds
         ))[..12]
     );
+    let operation_id = format!(
+        "op-{}",
+        &stable_hash_hex(&format!("{result_id}\n{allocated_seconds}\n{now_ms}"))[..12]
+    );
+    let rows_hash = stable_hash_hex(&serialize_storyboard_rows(&rows));
 
     let response = GenerateStoryboardResponse {
+        task_id: Some(task_id),
         result_id,
         rows,
+        selected_total_duration_seconds: request.selected_total_duration_seconds,
         duration_plan: StoryboardDurationPlan {
             total_duration_seconds: request.selected_total_duration_seconds,
             row_count: row_count as u32,
-            per_row_seconds,
+            per_row_seconds: (allocated_seconds / row_count as u16).max(1),
             allocated_seconds,
         },
         export_status: StoryboardExportStatus {
@@ -349,26 +443,157 @@ pub fn generate_storyboard(
             ready_row_count,
             blocked_row_count,
         },
+        busy: false,
+        operation_id,
+        revision: 1,
+        updated_at_ms: now_ms,
+        rows_hash,
+        dirty: false,
+        dirty_source_note: None,
     };
     state.remember_storyboard(response.clone());
     response
 }
 
+pub fn save_storyboard_rows(
+    state: &AppState,
+    request: UpdateStoryboardRowsRequest,
+) -> GenerateStoryboardResponse {
+    let now_ms = now_epoch_ms();
+    let Some(mut snapshot) = state.find_storyboard(&request.result_id) else {
+        return blocked_storyboard_response(
+            request.task_id,
+            0,
+            vec![ProductWarning {
+                code: "storyboard_result_not_found".to_string(),
+                message: "未找到可编辑的分镜结果。".to_string(),
+                related_sample_id: None,
+            }],
+            now_ms,
+        );
+    };
+
+    if snapshot.revision != request.base_revision {
+        return blocked_storyboard_response(
+            snapshot.task_id.clone(),
+            snapshot.selected_total_duration_seconds,
+            vec![ProductWarning {
+                code: "storyboard_revision_conflict".to_string(),
+                message: "分镜内容已被其他操作更新，请刷新后重试。".to_string(),
+                related_sample_id: None,
+            }],
+            now_ms,
+        );
+    }
+
+    if request.rows.is_empty() {
+        return blocked_storyboard_response(
+            snapshot.task_id.clone(),
+            snapshot.selected_total_duration_seconds,
+            vec![ProductWarning {
+                code: "storyboard_rows_required".to_string(),
+                message: "保存分镜前请至少保留一条镜头。".to_string(),
+                related_sample_id: None,
+            }],
+            now_ms,
+        );
+    }
+
+    if request.rows.iter().any(|row| row.duration_seconds == 0) {
+        return blocked_storyboard_response(
+            snapshot.task_id.clone(),
+            snapshot.selected_total_duration_seconds,
+            vec![ProductWarning {
+                code: "row_duration_required".to_string(),
+                message: "每条分镜的时长都必须大于 0 秒。".to_string(),
+                related_sample_id: None,
+            }],
+            now_ms,
+        );
+    }
+
+    let total_duration = request
+        .rows
+        .iter()
+        .map(|row| row.duration_seconds)
+        .sum::<u16>();
+    if total_duration != snapshot.selected_total_duration_seconds {
+        return blocked_storyboard_response(
+            snapshot.task_id.clone(),
+            snapshot.selected_total_duration_seconds,
+            vec![ProductWarning {
+                code: "duration_conservation_failed".to_string(),
+                message: "编辑后的镜头总时长必须与任务总时长保持一致。".to_string(),
+                related_sample_id: None,
+            }],
+            now_ms,
+        );
+    }
+
+    snapshot.rows = request.rows;
+    snapshot.duration_plan.row_count = snapshot.rows.len() as u32;
+    snapshot.duration_plan.allocated_seconds = total_duration;
+    snapshot.duration_plan.per_row_seconds = if snapshot.rows.is_empty() {
+        0
+    } else {
+        (total_duration / snapshot.rows.len() as u16).max(1)
+    };
+    snapshot.export_status.warnings = snapshot
+        .rows
+        .iter()
+        .flat_map(|row| row.prompt_text_compilation_warnings.clone())
+        .collect();
+    snapshot.export_status.status = if snapshot.export_status.warnings.is_empty() {
+        BridgeCallStatus::Ready
+    } else {
+        BridgeCallStatus::WarningOnly
+    };
+    snapshot.export_status.ready_row_count = snapshot.rows.len() as u32;
+    snapshot.export_status.blocked_row_count = 0;
+    snapshot.task_id = request.task_id.or(snapshot.task_id.clone());
+    snapshot.revision += 1;
+    snapshot.updated_at_ms = now_ms;
+    snapshot.operation_id = request.operation_id;
+    snapshot.rows_hash = stable_hash_hex(&serialize_storyboard_rows(&snapshot.rows));
+    snapshot.dirty = true;
+    snapshot.dirty_source_note = request
+        .dirty_source_note
+        .or_else(|| Some("storyboard_rows_edited".to_string()));
+
+    state.remember_storyboard(snapshot.clone());
+    snapshot
+}
+
 pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBundleResponse {
     let export_manifest_id = format!(
         "export-manifest-{}",
-        &stable_hash_hex(&format!("{}\n{}", request.result_id, request.export_format))[..12]
+        &stable_hash_hex(&format!(
+            "{}\n{}\n{}",
+            request.result_id.as_deref().unwrap_or_default(),
+            request.task_id.as_deref().unwrap_or_default(),
+            request.export_format
+        ))[..12]
     );
 
-    let Some(storyboard) = state.find_storyboard(&request.result_id) else {
+    let storyboard = request
+        .result_id
+        .as_deref()
+        .and_then(|result_id| state.find_storyboard(result_id))
+        .or_else(|| {
+            request
+                .task_id
+                .as_deref()
+                .and_then(|task_id| state.find_storyboard_by_task_id(task_id))
+        });
+
+    let Some(storyboard) = storyboard else {
         return ExportBundleResponse {
             export_manifest_id: export_manifest_id.clone(),
             export_status: StoryboardExportStatus {
                 status: BridgeCallStatus::Blocked,
                 blockers: vec![ProductWarning {
                     code: "storyboard_result_not_found".to_string(),
-                    message: "export_bundle requires a previously generated storyboard result_id."
-                        .to_string(),
+                    message: "导出前请先生成或恢复有效分镜结果。".to_string(),
                     related_sample_id: None,
                 }],
                 warnings: vec![],
@@ -379,6 +604,9 @@ pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBu
                 &export_manifest_id,
                 &request.export_format,
                 "storyboard_result_not_found",
+                None,
+                None,
+                false,
             ),
         };
     };
@@ -391,15 +619,25 @@ pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBu
         ready: true,
         blocked_reason: None,
         artifact_path: None,
-        content_hash: None,
+        content_hash: Some(stable_hash_hex(&serialize_storyboard_rows(
+            &storyboard.rows,
+        ))),
         byte_size: None,
         row_count: Some(storyboard.rows.len() as u32),
+        selected_total_duration_seconds: Some(storyboard.selected_total_duration_seconds),
+        source_result_id: Some(storyboard.result_id.clone()),
+        edited_rows_applied: storyboard.dirty,
+        prompt_text_compilation_statuses: collect_compilation_statuses(&storyboard.rows),
+        prompt_text_compilation_warning_codes: collect_compilation_warning_codes(&storyboard.rows),
     }];
 
     match export_v120_storyboard_bundle(&V120StoryboardExportRequest {
         export_manifest_id: export_manifest_id.clone(),
-        result_id: request.result_id,
-        rows: storyboard.rows,
+        result_id: storyboard.result_id.clone(),
+        selected_total_duration_seconds: storyboard.selected_total_duration_seconds,
+        source_result_id: storyboard.result_id.clone(),
+        edited_rows_applied: storyboard.dirty,
+        rows: storyboard.rows.clone(),
     }) {
         Ok(bundle) => {
             artifacts.extend(
@@ -416,6 +654,17 @@ pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBu
                         content_hash: Some(artifact.content_hash),
                         byte_size: Some(artifact.byte_size),
                         row_count: Some(artifact.row_count),
+                        selected_total_duration_seconds: Some(
+                            storyboard.selected_total_duration_seconds,
+                        ),
+                        source_result_id: Some(storyboard.result_id.clone()),
+                        edited_rows_applied: storyboard.dirty,
+                        prompt_text_compilation_statuses: collect_compilation_statuses(
+                            &storyboard.rows,
+                        ),
+                        prompt_text_compilation_warning_codes: collect_compilation_warning_codes(
+                            &storyboard.rows,
+                        ),
                     }),
             );
         }
@@ -430,6 +679,9 @@ pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBu
             artifacts.extend(blocked_storyboard_export_artifacts(
                 &export_manifest_id,
                 "v120_export_artifact_generation_failed",
+                Some(storyboard.selected_total_duration_seconds),
+                Some(storyboard.result_id.clone()),
+                storyboard.dirty,
             ));
         }
     }
@@ -445,6 +697,9 @@ fn blocked_export_artifacts(
     export_manifest_id: &str,
     requested_format: &str,
     blocked_reason: &str,
+    selected_total_duration_seconds: Option<u16>,
+    source_result_id: Option<String>,
+    edited_rows_applied: bool,
 ) -> Vec<ExportArtifactRecord> {
     let mut artifacts = vec![ExportArtifactRecord {
         artifact_id: format!("{}-bridge-manifest", export_manifest_id),
@@ -456,10 +711,18 @@ fn blocked_export_artifacts(
         content_hash: None,
         byte_size: None,
         row_count: None,
+        selected_total_duration_seconds,
+        source_result_id: source_result_id.clone(),
+        edited_rows_applied,
+        prompt_text_compilation_statuses: vec![],
+        prompt_text_compilation_warning_codes: vec![],
     }];
     artifacts.extend(blocked_storyboard_export_artifacts(
         export_manifest_id,
         blocked_reason,
+        selected_total_duration_seconds,
+        source_result_id,
+        edited_rows_applied,
     ));
     artifacts
 }
@@ -467,6 +730,9 @@ fn blocked_export_artifacts(
 fn blocked_storyboard_export_artifacts(
     export_manifest_id: &str,
     blocked_reason: &str,
+    selected_total_duration_seconds: Option<u16>,
+    source_result_id: Option<String>,
+    edited_rows_applied: bool,
 ) -> Vec<ExportArtifactRecord> {
     ["storyboard_json", "storyboard_csv", "excel_workbook"]
         .into_iter()
@@ -486,6 +752,11 @@ fn blocked_storyboard_export_artifacts(
             content_hash: None,
             byte_size: None,
             row_count: None,
+            selected_total_duration_seconds,
+            source_result_id: source_result_id.clone(),
+            edited_rows_applied,
+            prompt_text_compilation_statuses: vec![],
+            prompt_text_compilation_warning_codes: vec![],
         })
         .collect()
 }
@@ -493,13 +764,14 @@ fn blocked_storyboard_export_artifacts(
 fn model_config_hash_input(model_config: Option<&ModelConfigSummary>) -> String {
     match model_config {
         Some(config) => format!(
-            "{}\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}",
             config.provider.trim(),
             config.model.trim(),
             config.enabled,
+            config.base_url_present,
             config.api_key_present
         ),
-        None => "qwen\nqwen-plus\nfalse\nfalse".to_string(),
+        None => "qwen\nqwen-plus\nfalse\nfalse\nfalse".to_string(),
     }
 }
 
@@ -719,6 +991,224 @@ fn derive_scene_scale(technical_profile: &str) -> String {
 fn non_blank_string(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn now_epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+fn extract_scene_type(script_text: &str) -> String {
+    script_text
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("scene_type:")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_default()
+}
+
+fn is_supported_storyboard_duration(duration_seconds: u16) -> bool {
+    matches!(duration_seconds, 5 | 10 | 15 | 30 | 45 | 60)
+}
+
+fn is_supported_desktop_scene_type(scene_type: &str) -> bool {
+    matches!(
+        scene_type,
+        "hot_blood_battle"
+            | "ensemble_performance"
+            | "emotional_dialogue"
+            | "encounter_performance"
+            | "field_chase"
+            | "spectacle_showcase"
+            | "daily_healing"
+            | "guoman_hot_blood_combat"
+            | "guoman_ensemble_performance"
+            | "ink_wuxia_combat"
+            | "eastern_spectacle"
+            | "xianxia_action"
+            | "urban_fantasy"
+            | "chinese_war_formation"
+            | "weapon_highlight"
+            | "council_strategy"
+            | "siege_defense"
+            | "slg_sandbox_view"
+            | "slg_march_encirclement"
+            | "slg_city_growth"
+            | "slg_battle_report"
+    )
+}
+
+fn allocate_storyboard_row_durations(
+    total_duration_seconds: u16,
+    row_count: usize,
+) -> Option<Vec<u16>> {
+    if row_count == 0 || !is_supported_storyboard_duration(total_duration_seconds) {
+        return None;
+    }
+
+    let base = total_duration_seconds / row_count as u16;
+    if base == 0 {
+        return None;
+    }
+
+    let mut durations = vec![base; row_count];
+    let mut remainder = total_duration_seconds % row_count as u16;
+    let mut index = 0usize;
+    while remainder > 0 {
+        durations[index] += 1;
+        remainder -= 1;
+        index = (index + 1) % row_count;
+    }
+
+    (durations.iter().copied().sum::<u16>() == total_duration_seconds).then_some(durations)
+}
+
+fn compile_seedance_prompt_text(
+    record: &GoldenSampleLibraryRecord,
+    scene_projection: &ScenePerformanceProjection,
+    duration_seconds: u16,
+    scene_type: &str,
+) -> (String, PromptTextCompilationStatus, Vec<ProductWarning>) {
+    let scene_label = record
+        .classification
+        .scene_tags
+        .first()
+        .cloned()
+        .unwrap_or_else(|| record.source_fields.scene_tag.clone());
+    let mut sections = vec![
+        format!("场景类型：{}", scene_type),
+        format!("场景标签：{}", scene_label),
+        format!("镜头标题：{}", record.source_fields.sample_title),
+        format!("景别：{}", scene_projection.scene_scale),
+        format!("画面描述：{}", scene_projection.visual_description),
+        format!("角色动作：{}", scene_projection.character_action),
+        format!("时长：{}秒", duration_seconds),
+        format!(
+            "KB上下文：sample_id={}; scene_category={}; style_cluster={}",
+            record.sample_id,
+            record.source_fields.scene_category,
+            record.source_fields.style_cluster
+        ),
+    ];
+
+    if !record.source_fields.continuity_negative_core.trim().is_empty() {
+        sections.push(format!(
+            "连续性约束：{}",
+            record.source_fields.continuity_negative_core.trim()
+        ));
+    }
+    sections.push("目标适配：Seedance2.0 文本提示词".to_string());
+
+    let warnings = vec![
+        ProductWarning {
+            code: "text_model_live_call_closed".to_string(),
+            message: "Text generation stays deterministic in MVP; live provider calls remain gated."
+                .to_string(),
+            related_sample_id: Some(record.sample_id.clone()),
+        },
+        ProductWarning {
+            code: "seedance_video_generation_closed".to_string(),
+            message:
+                "Seedance2.0 is a prompt_text adaptation target in MVP; in-app video generation remains gated."
+                    .to_string(),
+            related_sample_id: Some(record.sample_id.clone()),
+        },
+        ProductWarning {
+            code: "prompt_body_candidate_not_promoted".to_string(),
+            message:
+                "Prompt compilation uses structured storyboard fields; raw prompt_body does not become final prompt_text."
+                    .to_string(),
+            related_sample_id: Some(record.sample_id.clone()),
+        },
+    ];
+
+    (
+        sections.join("；"),
+        PromptTextCompilationStatus::ReadyStub,
+        warnings,
+    )
+}
+
+fn serialize_storyboard_rows(rows: &[GeneratedStoryboardRow]) -> String {
+    rows.iter()
+        .map(|row| {
+            format!(
+                "{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}",
+                row.shot_id,
+                row.order,
+                row.person,
+                row.shot_title,
+                row.visual_description,
+                row.character_action,
+                row.dialogue,
+                row.prompt_text,
+                row.prompt_text_compilation_status,
+                row.prompt_text_source_row_id,
+                row.duration_seconds,
+                row.prompt_text_compilation_warnings
+                    .iter()
+                    .map(|warning| warning.code.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn collect_compilation_statuses(rows: &[GeneratedStoryboardRow]) -> Vec<String> {
+    rows.iter()
+        .map(|row| format!("{:?}", row.prompt_text_compilation_status))
+        .collect()
+}
+
+fn collect_compilation_warning_codes(rows: &[GeneratedStoryboardRow]) -> Vec<String> {
+    rows.iter()
+        .flat_map(|row| {
+            row.prompt_text_compilation_warnings
+                .iter()
+                .map(|warning| warning.code.clone())
+        })
+        .collect()
+}
+
+fn blocked_storyboard_response(
+    task_id: Option<String>,
+    selected_total_duration_seconds: u16,
+    blockers: Vec<ProductWarning>,
+    now_ms: u64,
+) -> GenerateStoryboardResponse {
+    GenerateStoryboardResponse {
+        task_id,
+        result_id: String::new(),
+        rows: vec![],
+        selected_total_duration_seconds,
+        duration_plan: StoryboardDurationPlan {
+            total_duration_seconds: selected_total_duration_seconds,
+            row_count: 0,
+            per_row_seconds: 0,
+            allocated_seconds: 0,
+        },
+        export_status: StoryboardExportStatus {
+            status: BridgeCallStatus::Blocked,
+            blocked_row_count: 0,
+            ready_row_count: 0,
+            warnings: vec![],
+            blockers,
+        },
+        busy: false,
+        operation_id: String::new(),
+        revision: 0,
+        updated_at_ms: now_ms,
+        rows_hash: String::new(),
+        dirty: false,
+        dirty_source_note: None,
+    }
 }
 
 fn stable_hash_hex<T: Hash>(value: &T) -> String {

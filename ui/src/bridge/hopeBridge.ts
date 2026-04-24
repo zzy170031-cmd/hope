@@ -15,6 +15,7 @@ import type {
   ProjectCreateOrSwitchRequest,
   ProjectSummary,
   StoryboardRenderSegmentCutPreviewSnapshotRequest,
+  UpdateStoryboardRowsRequest,
   ValidationExportPanelSnapshot,
   ValidationExportPanelSnapshotRequest,
   ValidationRepairRecommendation,
@@ -36,6 +37,7 @@ export const HOPE_TAURI_COMMANDS = {
   validationExportPanelSnapshot: "validation_export_panel_snapshot",
   expandScript: "expand_script",
   generateStoryboard: "generate_storyboard",
+  updateStoryboardRows: "update_storyboard_rows",
   exportBundle: "export_bundle",
 } as const;
 
@@ -48,6 +50,7 @@ type HopeCommandPayload =
   | ValidationExportPanelSnapshotRequest
   | ExpandScriptRequest
   | GenerateStoryboardRequest
+  | UpdateStoryboardRowsRequest
   | ExportBundleRequest
   | undefined;
 
@@ -80,6 +83,7 @@ const PHASE1_REAL_COMMANDS = new Set<HopeCommandName>([
   HOPE_TAURI_COMMANDS.validationExportPanelSnapshot,
   HOPE_TAURI_COMMANDS.expandScript,
   HOPE_TAURI_COMMANDS.generateStoryboard,
+  HOPE_TAURI_COMMANDS.updateStoryboardRows,
   HOPE_TAURI_COMMANDS.exportBundle,
 ]);
 
@@ -487,6 +491,15 @@ function normalizeGeneratedStoryboardRow(raw: unknown): GeneratedStoryboardRow {
     character_action: String(row.character_action ?? row.characterAction ?? ""),
     dialogue: String(row.dialogue ?? ""),
     prompt_text: String(row.prompt_text ?? row.promptText ?? ""),
+    prompt_text_compilation_status: String(
+      row.prompt_text_compilation_status ?? row.promptTextCompilationStatus ?? "",
+    ),
+    prompt_text_compilation_warnings: normalizeWarningList(
+      row.prompt_text_compilation_warnings ?? row.promptTextCompilationWarnings,
+    ),
+    prompt_text_source_row_id: String(
+      row.prompt_text_source_row_id ?? row.promptTextSourceRowId ?? "",
+    ),
     duration_seconds: Number(row.duration_seconds ?? row.durationSeconds ?? 0),
     prompt_body_candidate: {
       source_sample_id: String(
@@ -528,10 +541,14 @@ function normalizeGenerateStoryboardResponse(raw: unknown): GenerateStoryboardRe
   );
 
   return {
+    task_id: (response.task_id ?? response.taskId ?? null) as string | null,
     result_id: String(response.result_id ?? response.resultId ?? ""),
     rows: Array.isArray(response.rows)
       ? response.rows.map((item) => normalizeGeneratedStoryboardRow(item))
       : [],
+    selected_total_duration_seconds: Number(
+      response.selected_total_duration_seconds ?? response.selectedTotalDurationSeconds ?? 0,
+    ),
     duration_plan: {
       total_duration_seconds: Number(
         durationPlan.total_duration_seconds ?? durationPlan.totalDurationSeconds ?? 0,
@@ -543,6 +560,15 @@ function normalizeGenerateStoryboardResponse(raw: unknown): GenerateStoryboardRe
     export_status: normalizeStoryboardExportStatus(
       response.export_status ?? response.exportStatus ?? {},
     ),
+    busy: Boolean(response.busy),
+    operation_id: String(response.operation_id ?? response.operationId ?? ""),
+    revision: Number(response.revision ?? 0),
+    updated_at_ms: Number(response.updated_at_ms ?? response.updatedAtMs ?? 0),
+    rows_hash: String(response.rows_hash ?? response.rowsHash ?? ""),
+    dirty: Boolean(response.dirty),
+    dirty_source_note: (response.dirty_source_note ?? response.dirtySourceNote ?? null) as
+      | string
+      | null,
   };
 }
 
@@ -558,6 +584,27 @@ function normalizeExportArtifact(raw: unknown): ExportArtifactRecord {
     content_hash: (artifact.content_hash ?? artifact.contentHash ?? null) as string | null,
     byte_size: (artifact.byte_size ?? artifact.byteSize ?? null) as number | null,
     row_count: (artifact.row_count ?? artifact.rowCount ?? null) as number | null,
+    selected_total_duration_seconds: (artifact.selected_total_duration_seconds ??
+      artifact.selectedTotalDurationSeconds ??
+      null) as number | null,
+    source_result_id: (artifact.source_result_id ?? artifact.sourceResultId ?? null) as
+      | string
+      | null,
+    edited_rows_applied: Boolean(
+      artifact.edited_rows_applied ?? artifact.editedRowsApplied,
+    ),
+    prompt_text_compilation_statuses: Array.isArray(artifact.prompt_text_compilation_statuses)
+      ? artifact.prompt_text_compilation_statuses.map(String)
+      : Array.isArray(artifact.promptTextCompilationStatuses)
+        ? artifact.promptTextCompilationStatuses.map(String)
+        : [],
+    prompt_text_compilation_warning_codes: Array.isArray(
+      artifact.prompt_text_compilation_warning_codes,
+    )
+      ? artifact.prompt_text_compilation_warning_codes.map(String)
+      : Array.isArray(artifact.promptTextCompilationWarningCodes)
+        ? artifact.promptTextCompilationWarningCodes.map(String)
+        : [],
   };
 }
 
@@ -591,6 +638,7 @@ function fallbackForCommand<T>(command: HopeCommandName, payload?: HopeCommandPa
       } as T;
     case HOPE_TAURI_COMMANDS.expandScript:
     case HOPE_TAURI_COMMANDS.generateStoryboard:
+    case HOPE_TAURI_COMMANDS.updateStoryboardRows:
     case HOPE_TAURI_COMMANDS.exportBundle:
       throw new Error(`${command} requires the desktop bridge.`);
     default:
@@ -683,6 +731,14 @@ export async function expandScript(request: ExpandScriptRequest) {
 export async function generateStoryboard(request: GenerateStoryboardRequest) {
   const raw = await invokeHopeCommand<unknown>(
     HOPE_TAURI_COMMANDS.generateStoryboard,
+    request,
+  );
+  return normalizeGenerateStoryboardResponse(raw);
+}
+
+export async function updateStoryboardRows(request: UpdateStoryboardRowsRequest) {
+  const raw = await invokeHopeCommand<unknown>(
+    HOPE_TAURI_COMMANDS.updateStoryboardRows,
     request,
   );
   return normalizeGenerateStoryboardResponse(raw);

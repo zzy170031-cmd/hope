@@ -30,6 +30,19 @@ pub struct ModelResponse {
     pub raw_response: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TextModelProviderKind {
+    Qwen,
+    Doubao,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PromptTextCompilationStatus {
+    ReadyStub,
+    Blocked,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ValidationSummary {
     pub subject_id: String,
@@ -166,6 +179,8 @@ pub struct ModelConfigSummary {
     pub provider: String,
     pub model: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub base_url_present: bool,
     pub api_key_present: bool,
 }
 
@@ -198,6 +213,12 @@ pub struct GeneratedStoryboardRow {
     pub character_action: String,
     pub dialogue: String,
     pub prompt_text: String,
+    #[serde(default = "default_prompt_text_compilation_status")]
+    pub prompt_text_compilation_status: PromptTextCompilationStatus,
+    #[serde(default)]
+    pub prompt_text_compilation_warnings: Vec<ProductWarning>,
+    #[serde(default)]
+    pub prompt_text_source_row_id: String,
     pub duration_seconds: u16,
     pub prompt_body_candidate: PromptBodyCandidate,
     pub scene_performance_projection: ScenePerformanceProjection,
@@ -224,16 +245,47 @@ pub struct StoryboardExportStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GenerateStoryboardResponse {
+    #[serde(default)]
+    pub task_id: Option<String>,
     pub result_id: String,
     pub rows: Vec<GeneratedStoryboardRow>,
+    #[serde(default)]
+    pub selected_total_duration_seconds: u16,
     pub duration_plan: StoryboardDurationPlan,
     pub export_status: StoryboardExportStatus,
+    #[serde(default)]
+    pub busy: bool,
+    #[serde(default)]
+    pub operation_id: String,
+    #[serde(default)]
+    pub revision: u32,
+    #[serde(default)]
+    pub updated_at_ms: u64,
+    #[serde(default)]
+    pub rows_hash: String,
+    #[serde(default)]
+    pub dirty: bool,
+    #[serde(default)]
+    pub dirty_source_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExportBundleRequest {
-    pub result_id: String,
+    #[serde(default)]
+    pub result_id: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
     pub export_format: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateStoryboardRowsRequest {
+    pub result_id: String,
+    pub task_id: Option<String>,
+    pub rows: Vec<GeneratedStoryboardRow>,
+    pub operation_id: String,
+    pub base_revision: u32,
+    pub dirty_source_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -247,6 +299,16 @@ pub struct ExportArtifactRecord {
     pub content_hash: Option<String>,
     pub byte_size: Option<u64>,
     pub row_count: Option<u32>,
+    #[serde(default)]
+    pub selected_total_duration_seconds: Option<u16>,
+    #[serde(default)]
+    pub source_result_id: Option<String>,
+    #[serde(default)]
+    pub edited_rows_applied: bool,
+    #[serde(default)]
+    pub prompt_text_compilation_statuses: Vec<String>,
+    #[serde(default)]
+    pub prompt_text_compilation_warning_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -254,4 +316,8 @@ pub struct ExportBundleResponse {
     pub export_manifest_id: String,
     pub export_status: StoryboardExportStatus,
     pub artifacts: Vec<ExportArtifactRecord>,
+}
+
+fn default_prompt_text_compilation_status() -> PromptTextCompilationStatus {
+    PromptTextCompilationStatus::Blocked
 }

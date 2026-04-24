@@ -164,6 +164,7 @@ pub struct AppState {
     pub validation_feedback_readonly: ValidationFeedbackReadonlyState,
     bridge_scripts: Arc<Mutex<HashMap<String, ExpandScriptResponse>>>,
     bridge_storyboards: Arc<Mutex<HashMap<String, GenerateStoryboardResponse>>>,
+    storyboard_tasks: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl AppState {
@@ -206,6 +207,7 @@ impl AppState {
             validation_feedback_readonly,
             bridge_scripts: Arc::new(Mutex::new(HashMap::new())),
             bridge_storyboards: Arc::new(Mutex::new(HashMap::new())),
+            storyboard_tasks: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -295,6 +297,12 @@ impl AppState {
     }
 
     pub fn remember_storyboard(&self, storyboard: GenerateStoryboardResponse) {
+        if let Some(task_id) = storyboard.task_id.clone() {
+            self.storyboard_tasks
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(task_id, storyboard.result_id.clone());
+        }
         self.bridge_storyboards
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -307,6 +315,17 @@ impl AppState {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(result_id)
             .cloned()
+    }
+
+    pub fn find_storyboard_by_task_id(&self, task_id: &str) -> Option<GenerateStoryboardResponse> {
+        let result_id = self
+            .storyboard_tasks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(task_id)
+            .cloned()?;
+
+        self.find_storyboard(&result_id)
     }
 }
 

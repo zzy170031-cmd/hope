@@ -5,6 +5,7 @@ use crate::{
         EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, ExpandScriptRequest, ExportBundleRequest,
         GENERATE_STORYBOARD_COMMAND, GenerateStoryboardRequest, PROJECT_CREATE_OR_SWITCH_COMMAND,
         ProjectCreateOrSwitchRequest, STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
+        UPDATE_STORYBOARD_ROWS_COMMAND, UpdateStoryboardRowsRequest,
         StoryboardRenderSegmentCutPreviewSnapshotRequest, VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
         ValidationExportPanelSnapshotRequest, WRITER_ENTRY_SNAPSHOT_COMMAND,
         WriterEntrySnapshotRequest,
@@ -15,7 +16,7 @@ use crate::{
         build_project_create_or_switch_snapshot,
         build_storyboard_rendersegment_cut_preview_snapshot,
         build_validation_export_panel_snapshot, build_writer_entry_snapshot, expand_script,
-        export_bundle, generate_storyboard,
+        export_bundle, generate_storyboard, save_storyboard_rows,
     },
     state::AppState,
 };
@@ -27,6 +28,7 @@ pub const DESKTOP_INVOKE_COMMANDS: &[&str] = &[
     VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
     EXPAND_SCRIPT_COMMAND,
     GENERATE_STORYBOARD_COMMAND,
+    UPDATE_STORYBOARD_ROWS_COMMAND,
     EXPORT_BUNDLE_COMMAND,
 ];
 
@@ -38,6 +40,7 @@ pub enum DesktopInvokeRequest {
     ValidationExportPanelSnapshot(ValidationExportPanelSnapshotRequest),
     ExpandScript(ExpandScriptRequest),
     GenerateStoryboard(GenerateStoryboardRequest),
+    UpdateStoryboardRows(UpdateStoryboardRowsRequest),
     ExportBundle(ExportBundleRequest),
 }
 
@@ -49,6 +52,7 @@ pub enum DesktopInvokeResponse {
     ValidationExportPanelSnapshot(ValidationExportPanelSnapshot),
     ExpandScript(core_domain::ExpandScriptResponse),
     GenerateStoryboard(core_domain::GenerateStoryboardResponse),
+    UpdateStoryboardRows(core_domain::GenerateStoryboardResponse),
     ExportBundle(core_domain::ExportBundleResponse),
 }
 
@@ -105,6 +109,10 @@ fn command_accepts_request(command: &str, request: &DesktopInvokeRequest) -> boo
                 GENERATE_STORYBOARD_COMMAND,
                 DesktopInvokeRequest::GenerateStoryboard(_)
             )
+            | (
+                UPDATE_STORYBOARD_ROWS_COMMAND,
+                DesktopInvokeRequest::UpdateStoryboardRows(_)
+            )
             | (EXPORT_BUNDLE_COMMAND, DesktopInvokeRequest::ExportBundle(_))
     )
 }
@@ -148,6 +156,11 @@ fn invoke_desktop_command_with_state(
         (GENERATE_STORYBOARD_COMMAND, DesktopInvokeRequest::GenerateStoryboard(request)) => Ok(
             DesktopInvokeResponse::GenerateStoryboard(generate_storyboard(state, request)),
         ),
+        (UPDATE_STORYBOARD_ROWS_COMMAND, DesktopInvokeRequest::UpdateStoryboardRows(request)) => {
+            Ok(DesktopInvokeResponse::UpdateStoryboardRows(
+                save_storyboard_rows(state, request),
+            ))
+        }
         (EXPORT_BUNDLE_COMMAND, DesktopInvokeRequest::ExportBundle(request)) => Ok(
             DesktopInvokeResponse::ExportBundle(export_bundle(state, request)),
         ),
@@ -190,7 +203,7 @@ mod tests {
     use core_domain::{
         ExpandScriptRequest, ExportBundleRequest, FailurePatternRecord, GenerateStoryboardRequest,
         KbRuntimeSummary, KbSnapshotRecord, ModelConfigSummary, PromptTemplateRecord,
-        SceneTaxonomyRecord,
+        SceneTaxonomyRecord, UpdateStoryboardRowsRequest,
     };
     use project_store::{
         DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeHandle, StoreSkeleton,
@@ -199,7 +212,8 @@ mod tests {
     use crate::ipc::{
         EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, GENERATE_STORYBOARD_COMMAND,
         ProjectCreateOrSwitchRequest, StoryboardRenderSegmentCutPreviewSnapshotRequest,
-        ValidationExportPanelSnapshotRequest, WriterEntrySnapshotRequest,
+        UPDATE_STORYBOARD_ROWS_COMMAND, ValidationExportPanelSnapshotRequest,
+        WriterEntrySnapshotRequest,
     };
 
     use super::{
@@ -222,6 +236,7 @@ mod tests {
                 VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
                 EXPAND_SCRIPT_COMMAND,
                 GENERATE_STORYBOARD_COMMAND,
+                UPDATE_STORYBOARD_ROWS_COMMAND,
                 EXPORT_BUNDLE_COMMAND,
             ]
         );
@@ -368,6 +383,7 @@ mod tests {
                     provider: "qwen".to_string(),
                     model: "qwen-plus".to_string(),
                     enabled: true,
+                    base_url_present: true,
                     api_key_present: true,
                 }),
                 synopsis_text: "主公在沙盘上观察敌军行军轨迹，调度两翼完成合围。".to_string(),
@@ -423,16 +439,17 @@ mod tests {
                     provider: "doubao".to_string(),
                     model: "doubao-seed-reserved".to_string(),
                     enabled: true,
+                    base_url_present: true,
                     api_key_present: false,
                 }),
             }),
         )
         .expect("generate_storyboard bridge command should succeed");
 
-        let result_id = match storyboard {
+        let (result_id, task_id, mut rows, base_revision) = match storyboard {
             DesktopInvokeResponse::GenerateStoryboard(response) => {
                 assert!(!response.rows.is_empty());
-                assert!(response.rows.iter().all(|row| row.prompt_text.is_empty()));
+                assert!(response.rows.iter().all(|row| !row.prompt_text.is_empty()));
                 assert!(
                     response
                         .export_status
@@ -446,16 +463,51 @@ mod tests {
                     response.rows.len(),
                     response.export_status.status
                 );
-                response.result_id
+                (
+                    response.result_id,
+                    response.task_id,
+                    response.rows,
+                    response.revision,
+                )
             }
             _ => panic!("generate_storyboard should return storyboard response"),
         };
+
+        rows[0].prompt_text = "desktop smoke edited prompt_text".to_string();
+        let updated = invoke_desktop_command_with_state(
+            &state,
+            UPDATE_STORYBOARD_ROWS_COMMAND,
+            DesktopInvokeRequest::UpdateStoryboardRows(UpdateStoryboardRowsRequest {
+                result_id: result_id.clone(),
+                task_id: task_id.clone(),
+                rows: rows.clone(),
+                operation_id: "desktop-smoke-update-rows".to_string(),
+                base_revision,
+                dirty_source_note: Some("desktop_smoke_row_edit".to_string()),
+            }),
+        )
+        .expect("update_storyboard_rows bridge command should succeed");
+
+        match updated {
+            DesktopInvokeResponse::UpdateStoryboardRows(response) => {
+                assert_eq!(response.result_id, result_id);
+                assert!(response.dirty);
+                assert!(response.revision > base_revision);
+                assert_eq!(response.rows[0].prompt_text, "desktop smoke edited prompt_text");
+                println!(
+                    "update_storyboard_rows smoke: result_id={} revision={} rows_hash={}",
+                    response.result_id, response.revision, response.rows_hash
+                );
+            }
+            _ => panic!("update_storyboard_rows should return storyboard response"),
+        }
 
         let export = invoke_desktop_command_with_state(
             &state,
             EXPORT_BUNDLE_COMMAND,
             DesktopInvokeRequest::ExportBundle(ExportBundleRequest {
-                result_id,
+                result_id: Some(result_id.clone()),
+                task_id,
                 export_format: "storyboard_words".to_string(),
             }),
         )
@@ -476,6 +528,14 @@ mod tests {
                     ready_artifact.artifact_path.as_deref().unwrap_or_default(),
                     ready_artifact.content_hash.as_deref().unwrap_or_default(),
                     ready_artifact.row_count.unwrap_or_default()
+                );
+                assert_eq!(ready_artifact.source_result_id.as_deref(), Some(result_id.as_str()));
+                assert_eq!(ready_artifact.edited_rows_applied, true);
+                assert!(
+                    ready_artifact
+                        .prompt_text_compilation_statuses
+                        .iter()
+                        .any(|status| status == "ReadyStub")
                 );
             }
             _ => panic!("export_bundle should return export response"),
