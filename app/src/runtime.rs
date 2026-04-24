@@ -1,4 +1,8 @@
-use std::{collections::HashSet, io};
+use std::{
+    collections::HashSet,
+    hash::{Hash, Hasher},
+    io,
+};
 
 use crate::{
     ipc::{
@@ -8,11 +12,20 @@ use crate::{
     state::{AppState, SnapshotBootstrapReadonlyState, ValidationFeedbackReadonlyState},
 };
 
+use core_domain::{
+    BridgeCallStatus, ExpandScriptRequest, ExpandScriptResponse, ExportArtifactRecord,
+    ExportBundleRequest, ExportBundleResponse, ExternalReferenceHandleCandidate,
+    GenerateStoryboardRequest, GenerateStoryboardResponse, GeneratedStoryboardRow,
+    GoldenSampleLibraryRecord, ProductWarning, PromptBodyCandidate, ScenePerformanceProjection,
+    SequenceFieldState, SequenceGrouping, StoryboardDurationPlan, StoryboardExportStatus,
+    StructureMode,
+};
+use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
 use serde::Serialize;
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
 use validators::{
     RepairRecommendation, Week3SharedFixture, generate_week3_repair_recommendations,
-    generate_week3_validation_report,
+    generate_week3_validation_report, project_v120_evidence_aware_findings,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -111,6 +124,539 @@ pub struct ValidationRepairRecommendationItem {
     pub repair_scope: String,
     pub validator_hint: String,
     pub prompt_template_names: Vec<String>,
+}
+
+pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandScriptResponse {
+    let script_hash = stable_hash_hex(&format!(
+        "{}\n{}",
+        request.scene_type.trim(),
+        request.synopsis_text.trim()
+    ));
+    let script_id = format!("script-{}", &script_hash[..12]);
+
+    let mut warnings = vec![ProductWarning {
+        code: "qwen_live_generation_closed".to_string(),
+        message:
+            "Expanded script is a deterministic bridge envelope; live Qwen expansion remains gated."
+                .to_string(),
+        related_sample_id: None,
+    }];
+
+    let source_package = if let Some(package) = state.kb_golden_sample_runtime.as_ref() {
+        if !package.manifest.seed_import_format.contains("v0.2") {
+            warnings.push(ProductWarning {
+                code: "v120_package_not_confirmed".to_string(),
+                message:
+                    "Loaded KB package does not advertise the accepted v0.2 seed import format."
+                        .to_string(),
+                related_sample_id: None,
+            });
+        }
+        package.manifest.snapshot_name.clone()
+    } else {
+        warnings.push(ProductWarning {
+            code: "v120_package_missing".to_string(),
+            message: "V120 golden sample runtime package is not available to the desktop bridge."
+                .to_string(),
+            related_sample_id: None,
+        });
+        "missing_v120_runtime_package".to_string()
+    };
+
+    let response = ExpandScriptResponse {
+        script_id,
+        expanded_script_text: format!(
+            "scene_type: {}\nsynopsis: {}\nsource_package: {}",
+            request.scene_type.trim(),
+            request.synopsis_text.trim(),
+            source_package
+        ),
+        script_hash,
+        warnings,
+    };
+    state.remember_script(response.clone());
+    response
+}
+
+pub fn generate_storyboard(
+    state: &AppState,
+    request: GenerateStoryboardRequest,
+) -> GenerateStoryboardResponse {
+    let script_text = request
+        .expanded_script_text
+        .clone()
+        .or_else(|| {
+            request
+                .script_id
+                .as_deref()
+                .and_then(|script_id| state.find_script(script_id))
+                .map(|script| script.expanded_script_text)
+        })
+        .unwrap_or_default();
+
+    let selected_records = select_golden_sample_records(state, &script_text, &request);
+    let row_count = selected_records.len().max(1);
+    let per_row_seconds = (request.selected_total_duration_seconds / row_count as u16).max(1);
+    let mut rows = Vec::new();
+    let mut blockers = Vec::new();
+    let mut warnings = Vec::new();
+
+    for (index, record) in selected_records.iter().enumerate() {
+        let failure_mapping = state.kb_golden_sample_runtime.as_ref().and_then(|package| {
+            package
+                .failure_mapping
+                .records
+                .iter()
+                .find(|mapping| mapping.sample_id == record.sample_id)
+        });
+        let evidence = project_v120_evidence_aware_findings(record, failure_mapping);
+        blockers.extend(
+            evidence
+                .blockers
+                .into_iter()
+                .map(product_warning_from_evidence),
+        );
+        warnings.extend(
+            evidence
+                .warnings
+                .into_iter()
+                .map(product_warning_from_evidence),
+        );
+
+        let prompt_candidate = project_prompt_body_candidate(record);
+        let scene_projection = project_scene_performance(record);
+        if prompt_candidate.candidate_text.is_some() {
+            warnings.push(ProductWarning {
+                code: "prompt_body_candidate_not_compiled".to_string(),
+                message: "V120 prompt_body is held as candidate evidence and is not compiled into runtime prompt_text.".to_string(),
+                related_sample_id: Some(record.sample_id.clone()),
+            });
+        }
+
+        rows.push(GeneratedStoryboardRow {
+            shot_id: record.source_fields.shot_id.clone(),
+            order: (index + 1) as u32,
+            person: scene_projection.person.clone(),
+            shot_title: record.source_fields.sample_title.clone(),
+            scene_scale: scene_projection.scene_scale.clone(),
+            visual_description: scene_projection.visual_description.clone(),
+            character_action: scene_projection.character_action.clone(),
+            dialogue: String::new(),
+            prompt_text: String::new(),
+            duration_seconds: per_row_seconds,
+            prompt_body_candidate: prompt_candidate,
+            scene_performance_projection: scene_projection.clone(),
+            external_reference_handle_candidates: project_reference_handle_candidates(record),
+            sequence_grouping: scene_projection.sequence_grouping,
+        });
+    }
+
+    if state.kb_golden_sample_runtime.is_none() {
+        blockers.push(ProductWarning {
+            code: "v120_package_missing".to_string(),
+            message: "generate_storyboard requires the V120 golden sample runtime package."
+                .to_string(),
+            related_sample_id: None,
+        });
+    }
+    if rows.is_empty() {
+        blockers.push(ProductWarning {
+            code: "v120_no_selectable_rows".to_string(),
+            message: "No V120 rows matched the bridge selector.".to_string(),
+            related_sample_id: None,
+        });
+    }
+    if script_text.trim().is_empty() {
+        blockers.push(ProductWarning {
+            code: "script_input_missing".to_string(),
+            message: "generate_storyboard requires script_id or expanded_script_text.".to_string(),
+            related_sample_id: None,
+        });
+    }
+
+    warnings.push(ProductWarning {
+        code: "model_generation_closed".to_string(),
+        message:
+            "Rows are V120 bridge projections; live model-generated storyboard text remains gated."
+                .to_string(),
+        related_sample_id: None,
+    });
+
+    let status = if !blockers.is_empty() {
+        BridgeCallStatus::Blocked
+    } else if !warnings.is_empty() {
+        BridgeCallStatus::WarningOnly
+    } else {
+        BridgeCallStatus::Ready
+    };
+    let blocked_row_count = blockers
+        .iter()
+        .filter_map(|item| item.related_sample_id.as_deref())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len() as u32;
+    let ready_row_count = rows.len() as u32 - blocked_row_count.min(rows.len() as u32);
+    let allocated_seconds = rows.iter().map(|row| row.duration_seconds).sum::<u16>();
+    let result_id = format!(
+        "storyboard-{}",
+        &stable_hash_hex(&format!(
+            "{}\n{}\n{}",
+            request.task_name, script_text, request.selected_total_duration_seconds
+        ))[..12]
+    );
+
+    let response = GenerateStoryboardResponse {
+        result_id,
+        rows,
+        duration_plan: StoryboardDurationPlan {
+            total_duration_seconds: request.selected_total_duration_seconds,
+            row_count: row_count as u32,
+            per_row_seconds,
+            allocated_seconds,
+        },
+        export_status: StoryboardExportStatus {
+            status,
+            blockers,
+            warnings,
+            ready_row_count,
+            blocked_row_count,
+        },
+    };
+    state.remember_storyboard(response.clone());
+    response
+}
+
+pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBundleResponse {
+    let export_manifest_id = format!(
+        "export-manifest-{}",
+        &stable_hash_hex(&format!("{}\n{}", request.result_id, request.export_format))[..12]
+    );
+
+    let Some(storyboard) = state.find_storyboard(&request.result_id) else {
+        return ExportBundleResponse {
+            export_manifest_id: export_manifest_id.clone(),
+            export_status: StoryboardExportStatus {
+                status: BridgeCallStatus::Blocked,
+                blockers: vec![ProductWarning {
+                    code: "storyboard_result_not_found".to_string(),
+                    message: "export_bundle requires a previously generated storyboard result_id."
+                        .to_string(),
+                    related_sample_id: None,
+                }],
+                warnings: vec![],
+                ready_row_count: 0,
+                blocked_row_count: 0,
+            },
+            artifacts: blocked_export_artifacts(
+                &export_manifest_id,
+                &request.export_format,
+                "storyboard_result_not_found",
+            ),
+        };
+    };
+
+    let mut export_status = storyboard.export_status.clone();
+    let mut artifacts = vec![ExportArtifactRecord {
+        artifact_id: format!("{}-bridge-manifest", export_manifest_id),
+        artifact_kind: "v120_bridge_manifest".to_string(),
+        export_format: request.export_format.clone(),
+        ready: true,
+        blocked_reason: None,
+        artifact_path: None,
+        content_hash: None,
+        byte_size: None,
+        row_count: Some(storyboard.rows.len() as u32),
+    }];
+
+    match export_v120_storyboard_bundle(&V120StoryboardExportRequest {
+        export_manifest_id: export_manifest_id.clone(),
+        result_id: request.result_id,
+        rows: storyboard.rows,
+    }) {
+        Ok(bundle) => {
+            artifacts.extend(
+                bundle
+                    .artifacts
+                    .into_iter()
+                    .map(|artifact| ExportArtifactRecord {
+                        artifact_id: format!("{}-{}", export_manifest_id, artifact.artifact_kind),
+                        artifact_kind: artifact.artifact_kind.to_string(),
+                        export_format: artifact.export_format.to_string(),
+                        ready: true,
+                        blocked_reason: None,
+                        artifact_path: Some(artifact.path.display().to_string()),
+                        content_hash: Some(artifact.content_hash),
+                        byte_size: Some(artifact.byte_size),
+                        row_count: Some(artifact.row_count),
+                    }),
+            );
+        }
+        Err(error) => {
+            let reason = format!("v120_export_engine_error: {error:?}");
+            export_status.status = BridgeCallStatus::Blocked;
+            export_status.blockers.push(ProductWarning {
+                code: "v120_export_artifact_generation_failed".to_string(),
+                message: reason.clone(),
+                related_sample_id: None,
+            });
+            artifacts.extend(blocked_storyboard_export_artifacts(
+                &export_manifest_id,
+                "v120_export_artifact_generation_failed",
+            ));
+        }
+    }
+
+    ExportBundleResponse {
+        export_manifest_id,
+        export_status,
+        artifacts,
+    }
+}
+
+fn blocked_export_artifacts(
+    export_manifest_id: &str,
+    requested_format: &str,
+    blocked_reason: &str,
+) -> Vec<ExportArtifactRecord> {
+    let mut artifacts = vec![ExportArtifactRecord {
+        artifact_id: format!("{}-bridge-manifest", export_manifest_id),
+        artifact_kind: "v120_bridge_manifest".to_string(),
+        export_format: requested_format.to_string(),
+        ready: false,
+        blocked_reason: Some(blocked_reason.to_string()),
+        artifact_path: None,
+        content_hash: None,
+        byte_size: None,
+        row_count: None,
+    }];
+    artifacts.extend(blocked_storyboard_export_artifacts(
+        export_manifest_id,
+        blocked_reason,
+    ));
+    artifacts
+}
+
+fn blocked_storyboard_export_artifacts(
+    export_manifest_id: &str,
+    blocked_reason: &str,
+) -> Vec<ExportArtifactRecord> {
+    ["storyboard_json", "storyboard_csv", "excel_workbook"]
+        .into_iter()
+        .map(|artifact_kind| ExportArtifactRecord {
+            artifact_id: format!("{}-{}", export_manifest_id, artifact_kind),
+            artifact_kind: artifact_kind.to_string(),
+            export_format: match artifact_kind {
+                "storyboard_json" => "json",
+                "storyboard_csv" => "csv",
+                "excel_workbook" => "xlsx",
+                _ => "unknown",
+            }
+            .to_string(),
+            ready: false,
+            blocked_reason: Some(blocked_reason.to_string()),
+            artifact_path: None,
+            content_hash: None,
+            byte_size: None,
+            row_count: None,
+        })
+        .collect()
+}
+
+fn select_golden_sample_records<'a>(
+    state: &'a AppState,
+    script_text: &str,
+    request: &GenerateStoryboardRequest,
+) -> Vec<&'a GoldenSampleLibraryRecord> {
+    let query = format!(
+        "{} {} {}",
+        request.task_name,
+        script_text,
+        request.expanded_script_text.as_deref().unwrap_or_default()
+    )
+    .to_lowercase();
+    let target_rows = ((request.selected_total_duration_seconds / 8).max(1) as usize).clamp(1, 8);
+
+    let Some(package) = state.kb_golden_sample_runtime.as_ref() else {
+        return Vec::new();
+    };
+
+    let records = &package.golden_sample_library.records;
+    let mut selected = records
+        .iter()
+        .filter(|record| record.classification.library_status == "official")
+        .filter(|record| {
+            let fields = &record.source_fields;
+            query.contains(&fields.scene_category.to_lowercase())
+                || query.contains(&fields.scene_tag.to_lowercase())
+                || query.contains(&fields.style_cluster.to_lowercase())
+        })
+        .take(target_rows)
+        .collect::<Vec<_>>();
+
+    if selected.is_empty() {
+        selected = records
+            .iter()
+            .filter(|record| record.classification.library_status == "official")
+            .take(target_rows)
+            .collect();
+    }
+
+    selected
+}
+
+fn product_warning_from_evidence(item: validators::EvidenceAwareValidationItem) -> ProductWarning {
+    ProductWarning {
+        code: item.code,
+        message: item.message,
+        related_sample_id: item.source_sample_id,
+    }
+}
+
+fn project_prompt_body_candidate(record: &GoldenSampleLibraryRecord) -> PromptBodyCandidate {
+    let blocked = validators::contains_placeholder_marker(&record.source_fields.prompt_body)
+        || record.validator_evidence.has_placeholder_signal;
+    PromptBodyCandidate {
+        source_sample_id: record.sample_id.clone(),
+        source_prompt_body: record.source_fields.prompt_body.clone(),
+        candidate_text: (!blocked).then(|| record.source_fields.prompt_body.clone()),
+        blocked,
+        blocker_codes: blocked
+            .then(|| vec!["prompt_body_blocked_by_placeholder".to_string()])
+            .unwrap_or_default(),
+    }
+}
+
+fn project_scene_performance(record: &GoldenSampleLibraryRecord) -> ScenePerformanceProjection {
+    ScenePerformanceProjection {
+        source_sample_id: record.sample_id.clone(),
+        source_sample_title: record.source_fields.sample_title.clone(),
+        scene_scale: derive_scene_scale(&record.source_fields.technical_profile),
+        person: "not_specified_by_v120_bridge".to_string(),
+        visual_description: record.source_fields.scene_performance_core.clone(),
+        character_action: "fused_scene_performance_core_preserved".to_string(),
+        fused_source_text: record.source_fields.scene_performance_core.clone(),
+        sequence_grouping: project_sequence_grouping(record),
+    }
+}
+
+fn project_sequence_grouping(record: &GoldenSampleLibraryRecord) -> SequenceGrouping {
+    let structure_mode = StructureMode::from_sample_type(&record.source_fields.sample_type);
+    match structure_mode {
+        StructureMode::SingleShot => SequenceGrouping {
+            structure_mode,
+            sequence_id: None,
+            shot_order: None,
+            sequence_field_state: SequenceFieldState::NotApplicable,
+        },
+        StructureMode::SequenceShot => {
+            let sequence_id = non_blank_string(&record.source_fields.sequence_id);
+            let shot_order = record.source_fields.shot_order.trim().parse::<u32>().ok();
+            SequenceGrouping {
+                structure_mode,
+                sequence_id,
+                shot_order,
+                sequence_field_state: if shot_order.is_some() {
+                    SequenceFieldState::Present
+                } else {
+                    SequenceFieldState::Missing
+                },
+            }
+        }
+    }
+}
+
+fn project_reference_handle_candidates(
+    record: &GoldenSampleLibraryRecord,
+) -> Vec<ExternalReferenceHandleCandidate> {
+    extract_reference_tokens(&record.source_fields.reference_bundle)
+        .into_iter()
+        .map(
+            |(reference_name, reference_kind, strength)| ExternalReferenceHandleCandidate {
+                source_sample_id: record.sample_id.clone(),
+                reference_name,
+                reference_kind,
+                strength,
+            },
+        )
+        .collect()
+}
+
+fn extract_reference_tokens(value: &str) -> Vec<(String, String, Option<String>)> {
+    let chars = value.chars().collect::<Vec<_>>();
+    let mut tokens = Vec::new();
+    for (index, character) in chars.iter().enumerate() {
+        if *character != '(' {
+            continue;
+        }
+        let mut start = index;
+        while start > 0 {
+            let previous = chars[start - 1];
+            if previous.is_ascii_alphanumeric() || previous == '_' || previous == '-' {
+                start -= 1;
+            } else {
+                break;
+            }
+        }
+        if start == index {
+            continue;
+        }
+        let reference_name = chars[start..index].iter().collect::<String>();
+        if start > 0 && matches!(chars[start - 1], '/' | '\\' | ':') {
+            continue;
+        }
+        if looks_like_path_or_url(&reference_name) {
+            continue;
+        }
+        let Some(end_offset) = chars[index + 1..].iter().position(|item| *item == ')') else {
+            continue;
+        };
+        let args = chars[index + 1..index + 1 + end_offset]
+            .iter()
+            .collect::<String>();
+        let mut parts = args.split(',').map(str::trim);
+        let reference_kind = parts.next().unwrap_or("name").to_string();
+        let lower_reference_kind = reference_kind.to_ascii_lowercase();
+        if matches!(
+            lower_reference_kind.as_str(),
+            "path" | "url" | "uri" | "media" | "asset" | "file"
+        ) {
+            continue;
+        }
+        let strength = parts
+            .next()
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        tokens.push((reference_name, reference_kind, strength));
+    }
+    tokens
+}
+
+fn looks_like_path_or_url(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.starts_with("http")
+        || lower.contains("://")
+        || lower.contains('\\')
+        || lower.contains('/')
+        || lower.contains(':')
+}
+
+fn derive_scene_scale(technical_profile: &str) -> String {
+    for token in ["MCU", "CU", "LS", "MS", "WS"] {
+        if technical_profile.contains(token) {
+            return token.to_string();
+        }
+    }
+    "source_technical_profile".to_string()
+}
+
+fn non_blank_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn stable_hash_hex<T: Hash>(value: &T) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 pub fn build_project_create_or_switch_snapshot(
@@ -686,6 +1232,9 @@ mod tests {
                 has_scene_taxonomy: true,
                 has_failure_patterns: true,
                 has_repair_template_mapping: true,
+                has_golden_sample_v120_package: false,
+                golden_sample_record_count: 0,
+                golden_sample_source_count: 0,
             },
         };
         let kb_knowledge = KbKnowledgeBundle {

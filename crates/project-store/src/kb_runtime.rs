@@ -2,9 +2,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use core_domain::{
-    FailurePatternRecord, KbRuntimeSummary, KbSnapshotRecord, PromptTemplateRecord,
-    RepairTemplateLink,
+use core_domain::kb::{
+    FailurePatternRecord, GoldenSampleFailureMappingAsset, GoldenSampleFieldCoverageRuleAsset,
+    GoldenSampleLibraryAsset, GoldenSampleRepairMappingAsset, GoldenSampleSourceRegister,
+    KbBundleManifestRecord, KbGoldenSampleRuntimePackage, KbRuntimeSummary, KbSnapshotRecord,
+    PromptTemplateRecord, RepairTemplateLink,
 };
 use serde::Deserialize;
 
@@ -21,6 +23,21 @@ pub const HOPE_KB_MIRROR_TABLES: &[&str] = &[
     "prompt_template",
     "failure_pattern",
     "seed_import_batch",
+    "golden_sample_library",
+    "golden_sample_field_coverage_rule",
+    "golden_sample_failure_mapping",
+    "golden_sample_repair_mapping",
+    "golden_sample_source",
+    "golden_sample_provenance",
+];
+
+pub const GOLDEN_SAMPLE_V120_PACKAGE_FILES: &[&str] = &[
+    "manifest.json",
+    "golden_sample_library.json",
+    "golden_sample_field_coverage_rules.json",
+    "golden_sample_failure_mapping.json",
+    "golden_sample_repair_mapping.json",
+    "source_register.json",
 ];
 
 pub const SCENE_TAXONOMY_COLUMNS: &[&str] = &[
@@ -106,6 +123,10 @@ impl KbRuntimeHandle {
     pub fn prompt_template_columns(&self) -> &'static [&'static str] {
         PROMPT_TEMPLATE_COLUMNS
     }
+
+    pub fn supports_golden_sample_v120_package(&self) -> bool {
+        self.summary.has_golden_sample_v120_package
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,10 +169,11 @@ pub fn load_kb_runtime(snapshot_path: PathBuf) -> Result<KbRuntimeHandle, KbRunt
     let snapshot = KbSnapshotRecord {
         snapshot_id: snapshot_id.clone(),
         snapshot_hash: "runtime-unverified".to_string(),
-        seed_format: "hope-kb-sqlite-snapshot-v0.1".to_string(),
+        seed_format: "hope-kb-sqlite-snapshot-v0.1+golden-sample-v0.2".to_string(),
         source_name: "hope-kb".to_string(),
         created_at_timestamp,
     };
+    let v120_summary = summarize_optional_golden_sample_v120_package(&snapshot_path);
 
     let summary = KbRuntimeSummary {
         snapshot_id,
@@ -163,6 +185,14 @@ pub fn load_kb_runtime(snapshot_path: PathBuf) -> Result<KbRuntimeHandle, KbRunt
         has_scene_taxonomy: true,
         has_failure_patterns: true,
         has_repair_template_mapping: true,
+        has_golden_sample_v120_package: v120_summary.is_some(),
+        golden_sample_record_count: v120_summary
+            .as_ref()
+            .map(|summary| summary.golden_sample_record_count)
+            .unwrap_or_default(),
+        golden_sample_source_count: v120_summary
+            .map(|summary| summary.golden_sample_source_count)
+            .unwrap_or_default(),
     };
 
     Ok(KbRuntimeHandle { snapshot, summary })
@@ -177,6 +207,44 @@ pub fn load_kb_knowledge_bundle(
         scene_taxonomies: load_scene_taxonomies(&seed_root)?,
         failure_patterns: load_failure_patterns(&seed_root)?,
         prompt_templates: load_prompt_templates(&seed_root)?,
+    })
+}
+
+pub fn load_kb_golden_sample_runtime_package(
+    runtime: &KbRuntimeHandle,
+) -> Result<KbGoldenSampleRuntimePackage, KbRuntimeError> {
+    let seed_root =
+        derive_versioned_seed_bundle_root(Path::new(&runtime.summary.snapshot_path), "v0.2")?;
+
+    let manifest: KbBundleManifestRecord = load_seed_json(&seed_root.join("manifest.json"))?;
+    let golden_sample_library: GoldenSampleLibraryAsset =
+        load_seed_json(&seed_root.join("golden_sample_library.json"))?;
+    let field_coverage_rules: GoldenSampleFieldCoverageRuleAsset =
+        load_seed_json(&seed_root.join("golden_sample_field_coverage_rules.json"))?;
+    let failure_mapping: GoldenSampleFailureMappingAsset =
+        load_seed_json(&seed_root.join("golden_sample_failure_mapping.json"))?;
+    let repair_mapping: GoldenSampleRepairMappingAsset =
+        load_seed_json(&seed_root.join("golden_sample_repair_mapping.json"))?;
+    let source_register: GoldenSampleSourceRegister =
+        load_seed_json(&seed_root.join("source_register.json"))?;
+
+    validate_golden_sample_package_counts(
+        &seed_root,
+        &manifest,
+        &golden_sample_library,
+        &field_coverage_rules,
+        &failure_mapping,
+        &repair_mapping,
+        &source_register,
+    )?;
+
+    Ok(KbGoldenSampleRuntimePackage {
+        manifest,
+        golden_sample_library,
+        field_coverage_rules,
+        failure_mapping,
+        repair_mapping,
+        source_register,
     })
 }
 
@@ -203,16 +271,113 @@ pub fn bind_failure_repair_links(
 }
 
 fn derive_seed_bundle_root(snapshot_path: &Path) -> Result<PathBuf, KbRuntimeError> {
+    derive_versioned_seed_bundle_root(snapshot_path, "v0.1")
+}
+
+fn derive_versioned_seed_bundle_root(
+    snapshot_path: &Path,
+    version: &str,
+) -> Result<PathBuf, KbRuntimeError> {
     let Some(repo_root) = snapshot_path.parent().and_then(|path| path.parent()) else {
         return Err(KbRuntimeError::SeedBundlePathMissing {
             path: snapshot_path.to_path_buf(),
         });
     };
-    let seed_root = repo_root.join("seed").join("v0.1");
+    let seed_root = repo_root.join("seed").join(version);
     if !seed_root.is_dir() {
         return Err(KbRuntimeError::SeedBundlePathMissing { path: seed_root });
     }
     Ok(seed_root)
+}
+
+struct GoldenSampleV120Summary {
+    golden_sample_record_count: usize,
+    golden_sample_source_count: usize,
+}
+
+fn summarize_optional_golden_sample_v120_package(
+    snapshot_path: &Path,
+) -> Option<GoldenSampleV120Summary> {
+    let seed_root = derive_versioned_seed_bundle_root(snapshot_path, "v0.2").ok()?;
+    if GOLDEN_SAMPLE_V120_PACKAGE_FILES
+        .iter()
+        .any(|file| !seed_root.join(file).is_file())
+    {
+        return None;
+    }
+
+    let manifest: KbBundleManifestRecord = load_seed_json(&seed_root.join("manifest.json")).ok()?;
+    Some(GoldenSampleV120Summary {
+        golden_sample_record_count: manifest.record_counts.golden_sample_library,
+        golden_sample_source_count: manifest.record_counts.golden_sample_sources,
+    })
+}
+
+fn validate_golden_sample_package_counts(
+    seed_root: &Path,
+    manifest: &KbBundleManifestRecord,
+    golden_sample_library: &GoldenSampleLibraryAsset,
+    field_coverage_rules: &GoldenSampleFieldCoverageRuleAsset,
+    failure_mapping: &GoldenSampleFailureMappingAsset,
+    repair_mapping: &GoldenSampleRepairMappingAsset,
+    source_register: &GoldenSampleSourceRegister,
+) -> Result<(), KbRuntimeError> {
+    let expected = &manifest.record_counts;
+    let actuals = [
+        (
+            "golden_sample_library",
+            expected.golden_sample_library,
+            golden_sample_library.records.len(),
+        ),
+        (
+            "golden_sample_field_coverage_rules",
+            expected.golden_sample_field_coverage_rules,
+            field_coverage_rules.records.len(),
+        ),
+        (
+            "golden_sample_failure_mapping",
+            expected.golden_sample_failure_mapping,
+            failure_mapping.records.len(),
+        ),
+        (
+            "golden_sample_repair_mapping",
+            expected.golden_sample_repair_mapping,
+            repair_mapping.records.len(),
+        ),
+        (
+            "golden_sample_sources",
+            expected.golden_sample_sources,
+            source_register.sources.len(),
+        ),
+        (
+            "golden_sample_provenance_entries",
+            expected.golden_sample_provenance_entries,
+            source_register.provenance_entries.len(),
+        ),
+    ];
+
+    for (label, expected, actual) in actuals {
+        if expected != actual {
+            return Err(KbRuntimeError::SeedBundleInvalid {
+                path: seed_root.join("manifest.json"),
+                message: format!(
+                    "{} record count mismatch: expected {}, got {}",
+                    label, expected, actual
+                ),
+            });
+        }
+    }
+
+    if manifest.snapshot_version != "v0.2"
+        || manifest.seed_import_format != "hope-kb-golden-sample-seed-bundle-v0.2"
+    {
+        return Err(KbRuntimeError::SeedBundleInvalid {
+            path: seed_root.join("manifest.json"),
+            message: "manifest is not a V120/v0.2 golden sample package".to_string(),
+        });
+    }
+
+    Ok(())
 }
 
 fn load_scene_taxonomies(

@@ -1,8 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
 import { Shell } from "./components/Shell";
 import logoUrl from "./assets/hope-desktop-logo.png";
+import {
+  expandScript as invokeExpandScript,
+  exportBundle as invokeExportBundle,
+  generateStoryboard as invokeGenerateStoryboard,
+} from "./bridge/hopeBridge";
 import { ROUTES, resolveRoute } from "./routes";
-import type { SceneFusionOption, StoryboardWorkbenchRow, ViewId, WorkbenchModelId } from "./types";
+import type {
+  ExpandScriptResponse,
+  ExportArtifactRecord,
+  ExportBundleResponse,
+  GenerateStoryboardResponse,
+  GeneratedStoryboardRow,
+  ProductWarning,
+  SceneFusionOption,
+  StoryboardExportStatus,
+  StoryboardWorkbenchRow,
+  ViewId,
+  WorkbenchModelId,
+} from "./types";
 
 type HeaderPanel = "none" | "docs" | "api";
 
@@ -71,24 +88,23 @@ export function App() {
   const [selectedModel, setSelectedModel] = useState<WorkbenchModelId>("gpt_4o");
   const [selectedScene, setSelectedScene] = useState<SceneFusionOption>(DEFAULT_SCENE);
   const [synopsis, setSynopsis] = useState(DEFAULT_SYNOPSIS);
-  const [expandedScript, setExpandedScript] = useState(() => buildExpandedScript(DEFAULT_SYNOPSIS, DEFAULT_SCENE));
+  const [expandedScript, setExpandedScript] = useState("");
+  const [expandedScriptResult, setExpandedScriptResult] = useState<ExpandScriptResponse | null>(null);
   const [taskName, setTaskName] = useState(DEFAULT_TASK_NAME);
-  const [taskSourceScript, setTaskSourceScript] = useState(() => buildExpandedScript(DEFAULT_SYNOPSIS, DEFAULT_SCENE));
+  const [taskSourceScript, setTaskSourceScript] = useState("");
+  const [taskScriptId, setTaskScriptId] = useState<string | null>(null);
   const [durationSeconds, setDurationSeconds] = useState(15);
-  const [rows, setRows] = useState<StoryboardWorkbenchRow[]>(() =>
-    buildStoryboardRows({
-      taskName: DEFAULT_TASK_NAME,
-      scene: DEFAULT_SCENE,
-      sourceScript: buildExpandedScript(DEFAULT_SYNOPSIS, DEFAULT_SCENE),
-      durationSeconds: 15,
-      rowCount: 10,
-    }),
-  );
+  const [rows, setRows] = useState<StoryboardWorkbenchRow[]>([]);
+  const [storyboardResult, setStoryboardResult] = useState<GenerateStoryboardResponse | null>(null);
+  const [lastExportResult, setLastExportResult] = useState<ExportBundleResponse | null>(null);
+  const [bridgeBusy, setBridgeBusy] = useState<
+    "expand" | "generate" | "export_words" | "export_script" | null
+  >(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [jumpPage, setJumpPage] = useState("1");
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const [taskSerial, setTaskSerial] = useState(1);
-  const [exportMessage, setExportMessage] = useState("当前结果来自桌面工作台本地生成。");
+  const [exportMessage, setExportMessage] = useState("等待主线 bridge 返回结果。");
 
   const editingRow = useMemo(
     () => rows.find((row) => row.id === editingRowId) ?? null,
@@ -113,10 +129,23 @@ export function App() {
   const canGenerate = taskName.trim().length > 0 && (taskSourceScript.trim().length > 0 || expandedScript.trim().length > 0 || synopsis.trim().length > 0);
   const pageTokens = useMemo(() => buildPageTokens(pageCount, currentPage), [pageCount, currentPage]);
 
-  const handleExpandScript = () => {
-    const nextScript = buildExpandedScript(synopsis, selectedScene);
-    setExpandedScript(nextScript);
-    setExportMessage("扩写脚本已更新，可导入任务继续生成分镜。");
+  const handleExpandScript = async () => {
+    setBridgeBusy("expand");
+    try {
+      const response = await invokeExpandScript({
+        scene_type: selectedScene,
+        synopsis_text: synopsis,
+      });
+      setExpandedScriptResult(response);
+      setExpandedScript(response.expanded_script_text);
+      setTaskScriptId(null);
+      setLastExportResult(null);
+      setExportMessage(`expand_script 完成：${response.script_id}`);
+    } catch (error) {
+      setExportMessage(`expand_script 失败：${formatError(error)}`);
+    } finally {
+      setBridgeBusy(null);
+    }
   };
 
   const handleNewTask = () => {
@@ -124,6 +153,9 @@ export function App() {
     setTaskSerial(nextSerial);
     setTaskName(`第 ${nextSerial} 个任务`);
     setTaskSourceScript("");
+    setTaskScriptId(null);
+    setStoryboardResult(null);
+    setLastExportResult(null);
     setRows([]);
     setCurrentPage(1);
     setEditingRowId(null);
@@ -136,31 +168,50 @@ export function App() {
     }
 
     setTaskSourceScript(expandedScript.trim());
-    setExportMessage("扩写脚本已导入当前任务，可以开始生成。");
+    setTaskScriptId(expandedScriptResult?.script_id ?? null);
+    setLastExportResult(null);
+    setExportMessage(
+      expandedScriptResult?.script_id
+        ? `已导入扩写脚本：${expandedScriptResult.script_id}`
+        : "已导入扩写脚本正文。",
+    );
   };
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (!canGenerate) {
       return;
     }
 
     const source = taskSourceScript.trim() || expandedScript.trim() || synopsis.trim();
-    const nextRows = buildStoryboardRows({
-      taskName,
-      scene: selectedScene,
-      sourceScript: source,
-      durationSeconds,
-      rowCount: 10,
-    });
-
-    setRows(nextRows);
-    setCurrentPage(1);
-    setEditingRowId(null);
-    setExportMessage(`已生成 ${nextRows.length} 条桌面工作台分镜结果。`);
+    setBridgeBusy("generate");
+    try {
+      const response = await invokeGenerateStoryboard({
+        task_name: taskName,
+        script_id: taskScriptId,
+        expanded_script_text: taskScriptId ? null : source,
+        selected_total_duration_seconds: durationSeconds,
+      });
+      const nextRows = response.rows.map(mapGeneratedStoryboardRow);
+      setStoryboardResult(response);
+      setLastExportResult(null);
+      setRows(nextRows);
+      setCurrentPage(1);
+      setEditingRowId(null);
+      setExportMessage(
+        `generate_storyboard 完成：${response.result_id} / ${nextRows.length} rows / ${response.export_status.status}`,
+      );
+    } catch (error) {
+      setExportMessage(`generate_storyboard 失败：${formatError(error)}`);
+    } finally {
+      setBridgeBusy(null);
+    }
   };
 
   const handleClear = () => {
     setTaskSourceScript("");
+    setTaskScriptId(null);
+    setStoryboardResult(null);
+    setLastExportResult(null);
     setRows([]);
     setCurrentPage(1);
     setEditingRowId(null);
@@ -214,28 +265,46 @@ export function App() {
     setCurrentPage(clampPage(parsed, pageCount));
   };
 
-  const handleExportWords = () => {
-    if (!rows.length) {
+  const handleExportWords = async () => {
+    if (!storyboardResult || !rows.length) {
       setExportMessage("当前没有可导出的分镜词。");
       return;
     }
 
-    const csv = buildStoryboardCsv(rows);
-    triggerDownload(`${toSafeFileName(taskName)}-分镜词.csv`, csv, "text/csv;charset=utf-8");
-    setExportMessage(`已导出 ${rows.length} 条分镜词。`);
+    setBridgeBusy("export_words");
+    try {
+      const response = await invokeExportBundle({
+        result_id: storyboardResult.result_id,
+        export_format: "storyboard_words",
+      });
+      setLastExportResult(response);
+      setExportMessage(formatExportBundleMessage(response));
+    } catch (error) {
+      setExportMessage(`export_bundle 失败：${formatError(error)}`);
+    } finally {
+      setBridgeBusy(null);
+    }
   };
 
-  const handleExportScript = () => {
-    const text = buildFullScriptExport({
-      synopsis,
-      expandedScript,
-      taskName,
-      taskSourceScript,
-      rows,
-    });
+  const handleExportScript = async () => {
+    if (!storyboardResult || !rows.length) {
+      setExportMessage("当前没有可导出的完整脚本结果。");
+      return;
+    }
 
-    triggerDownload(`${toSafeFileName(taskName)}-完整脚本.txt`, text, "text/plain;charset=utf-8");
-    setExportMessage("已导出完整脚本。");
+    setBridgeBusy("export_script");
+    try {
+      const response = await invokeExportBundle({
+        result_id: storyboardResult.result_id,
+        export_format: "full_script",
+      });
+      setLastExportResult(response);
+      setExportMessage(formatExportBundleMessage(response));
+    } catch (error) {
+      setExportMessage(`export_bundle 失败：${formatError(error)}`);
+    } finally {
+      setBridgeBusy(null);
+    }
   };
 
   return (
@@ -314,10 +383,26 @@ export function App() {
                 onChange={(event) => setSynopsis(event.target.value)}
                 placeholder="请输入故事梗概"
               />
-              <button type="button" className="action-button action-button--dark" onClick={handleExpandScript}>
+              <button
+                type="button"
+                className="action-button action-button--dark"
+                onClick={handleExpandScript}
+                disabled={bridgeBusy === "expand"}
+              >
                 扩写脚本
               </button>
             </div>
+            {expandedScriptResult || expandedScript ? (
+              <div className="bridge-status bridge-status--script">
+                <div className="bridge-status__meta">
+                  <strong>script_id</strong>
+                  <span>{expandedScriptResult?.script_id ?? "expanded_script_text"}</span>
+                  <strong>warnings</strong>
+                  <span>{formatWarnings(expandedScriptResult?.warnings ?? [])}</span>
+                </div>
+                <pre>{expandedScript || "等待 expanded_script_text"}</pre>
+              </div>
+            ) : null}
           </section>
 
           <section className="panel-section panel-section--task">
@@ -342,7 +427,7 @@ export function App() {
                 type="button"
                 className="action-button action-button--light"
                 onClick={handleImportScript}
-                disabled={!canImportScript}
+                disabled={!canImportScript || bridgeBusy !== null}
               >
                 导入扩写脚本
               </button>
@@ -361,18 +446,38 @@ export function App() {
                 </select>
               </label>
 
-              <button type="button" className="action-button action-button--light" onClick={handleClear}>
+              <button
+                type="button"
+                className="action-button action-button--light"
+                onClick={handleClear}
+                disabled={bridgeBusy !== null}
+              >
                 清空
               </button>
               <button
                 type="button"
                 className="action-button action-button--dark"
                 onClick={handleGenerate}
-                disabled={!canGenerate}
+                disabled={!canGenerate || bridgeBusy === "generate"}
               >
                 开始生成
               </button>
             </div>
+
+            {storyboardResult ? (
+              <div className="bridge-status bridge-status--compact">
+                <div className="bridge-status__meta">
+                  <strong>result_id</strong>
+                  <span>{storyboardResult.result_id}</span>
+                  <strong>export_status</strong>
+                  <span>{storyboardResult.export_status.status}</span>
+                  <strong>blockers</strong>
+                  <span>{formatWarnings(storyboardResult.export_status.blockers)}</span>
+                  <strong>warnings</strong>
+                  <span>{formatWarnings(storyboardResult.export_status.warnings)}</span>
+                </div>
+              </div>
+            ) : null}
 
             <div className="table-wrapper">
               <table className="storyboard-table">
@@ -489,11 +594,28 @@ export function App() {
 
           <section className="export-row">
             <div className="export-message">{exportMessage.trim()}</div>
+            {lastExportResult ? (
+              <div className="export-artifacts">
+                {lastExportResult.artifacts.map((artifact) => (
+                  <span key={artifact.artifact_id}>{formatArtifact(artifact)}</span>
+                ))}
+              </div>
+            ) : null}
             <div className="export-actions">
-              <button type="button" className="action-button action-button--light" onClick={handleExportWords}>
+              <button
+                type="button"
+                className="action-button action-button--light"
+                onClick={handleExportWords}
+                disabled={!storyboardResult || bridgeBusy !== null}
+              >
                 导出分镜词
               </button>
-              <button type="button" className="action-button action-button--dark" onClick={handleExportScript}>
+              <button
+                type="button"
+                className="action-button action-button--dark"
+                onClick={handleExportScript}
+                disabled={!storyboardResult || bridgeBusy !== null}
+              >
                 导出完整脚本
               </button>
             </div>
@@ -559,159 +681,47 @@ export function App() {
   );
 }
 
-function buildExpandedScript(synopsis: string, scene: SceneFusionOption) {
-  const cleanSynopsis = synopsis.trim() || DEFAULT_SYNOPSIS;
-
-  return [
-    `${cleanSynopsis}`,
-    `镜头重点围绕「${scene}」展开，先建立空间关系，再推进角色冲突。`,
-    "中段加入动作变化和情绪升级，让主角与对手的目标更明确。",
-    "结尾给出力量反转或节奏收束，为下一页分镜保留明确出口。",
-  ].join("\n");
+function mapGeneratedStoryboardRow(row: GeneratedStoryboardRow): StoryboardWorkbenchRow {
+  return {
+    id: row.shot_id || createRowId(),
+    order: row.order,
+    person: row.person || "not_specified",
+    shot: row.shot_title || row.shot_id,
+    sceneScale: row.scene_scale || "source",
+    visualDescription: row.visual_description,
+    characterAction: row.character_action,
+    dialogue: row.dialogue || "（无）",
+    prompt: row.prompt_text || "prompt_text gated",
+    durationSeconds: row.duration_seconds,
+  };
 }
 
-function buildStoryboardRows({
-  taskName,
-  scene,
-  sourceScript,
-  durationSeconds,
-  rowCount,
-}: {
-  taskName: string;
-  scene: SceneFusionOption;
-  sourceScript: string;
-  durationSeconds: number;
-  rowCount: number;
-}) {
-  const segments = sourceScript
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const safeSegments = segments.length ? segments : [DEFAULT_SYNOPSIS];
-  const sceneScales = ["全景", "中景", "近景", "特写", "中景"];
-  const people = ["主角", "敌人", "主角", "主角", "敌人"];
-  const baseDuration = Math.max(1, Math.floor(durationSeconds / rowCount));
-  const remainder = Math.max(0, durationSeconds - baseDuration * rowCount);
-  const promptBase = {
-    热血战斗: "dynamic anime fight, ruined city, energy burst",
-    悬疑追踪: "mystery alley, tense shadows, cinematic tracking",
-    都市奇幻: "urban fantasy, glowing sigils, dramatic skyline",
-    校园日常: "school corridor, bright daylight, youth drama",
-    治愈成长: "soft light, emotional close-up, warm frame",
-  } satisfies Record<SceneFusionOption, string>;
+function formatWarnings(warnings: ProductWarning[]) {
+  if (!warnings.length) {
+    return "无";
+  }
 
-  return Array.from({ length: rowCount }, (_, index) => {
-    const segment = safeSegments[index % safeSegments.length];
-    const person = people[index % people.length];
-    const sceneScale = sceneScales[index % sceneScales.length];
-    const shotNumber = index + 1;
-
-    return {
-      id: createRowId(),
-      order: shotNumber,
-      person,
-      shot: `镜头${shotNumber}`,
-      sceneScale,
-      visualDescription: buildVisualDescription(segment, person, sceneScale),
-      characterAction: person === "主角"
-        ? buildHeroAction(shotNumber, taskName)
-        : buildEnemyAction(shotNumber),
-      dialogue: person === "主角"
-        ? shotNumber % 2 === 0
-          ? "主角：这一次，我不会退后。"
-          : "（无）"
-        : shotNumber % 2 === 0
-          ? "敌人：你以为这样就能结束吗？"
-          : "敌人：不可能！",
-      prompt: `${promptBase[scene]}, shot ${shotNumber}, ${sceneScale.toLowerCase()}`,
-      durationSeconds: baseDuration + (index < remainder ? 1 : 0),
-    } satisfies StoryboardWorkbenchRow;
-  });
+  const codes = warnings.slice(0, 3).map((warning) => warning.code).join(", ");
+  return warnings.length > 3 ? `${codes} +${warnings.length - 3}` : codes;
 }
 
-function buildVisualDescription(segment: string, person: string, sceneScale: string) {
-  const clean = segment
-    .replace(/。/g, "")
-    .replace(/，/g, " ")
-    .trim()
-    .slice(0, 20);
-
-  return `${clean || "废墟街区对峙"}，${person}处于${sceneScale}构图。`;
+function formatError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
-function buildHeroAction(shotNumber: number, taskName: string) {
-  const actions = [
-    "主角抬头观察四周。",
-    "主角蓄力前冲。",
-    "主角稳住呼吸准备反击。",
-    "主角释放力量完成压制。",
-    `主角继续推进 ${taskName} 的关键动作。`,
-  ];
-
-  return actions[(shotNumber - 1) % actions.length];
+function formatExportBundleMessage(response: ExportBundleResponse) {
+  const readyArtifacts = response.artifacts.filter((artifact) => artifact.ready);
+  const readyWithPath = readyArtifacts.filter((artifact) => artifact.artifact_path);
+  const prefix = readyWithPath.length ? "导出已生成" : "export_bundle 返回";
+  return `${prefix}：${response.export_manifest_id} / ${readyArtifacts.length}/${response.artifacts.length} ready / ${response.export_status.status}`;
 }
 
-function buildEnemyAction(shotNumber: number) {
-  const actions = [
-    "敌人冷笑并摆出架势。",
-    "敌人挥臂逼近主角。",
-    "敌人被压制后短暂后退。",
-    "敌人试图重新集结力量。",
-    "敌人制造下一次冲击。",
-  ];
-
-  return actions[(shotNumber - 1) % actions.length];
-}
-
-function buildStoryboardCsv(rows: StoryboardWorkbenchRow[]) {
-  const header = ["序号", "人物", "镜头", "景别", "画面描述", "角色动作", "对白/旁白", "分镜提示词", "时长(秒)"];
-  const records = rows.map((row) => [
-    row.order,
-    row.person,
-    row.shot,
-    row.sceneScale,
-    row.visualDescription,
-    row.characterAction,
-    row.dialogue,
-    row.prompt,
-    row.durationSeconds,
-  ]);
-
-  return [header, ...records]
-    .map((record) => record.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(","))
-    .join("\n");
-}
-
-function buildFullScriptExport({
-  synopsis,
-  expandedScript,
-  taskName,
-  taskSourceScript,
-  rows,
-}: {
-  synopsis: string;
-  expandedScript: string;
-  taskName: string;
-  taskSourceScript: string;
-  rows: StoryboardWorkbenchRow[];
-}) {
-  return [
-    `任务名称：${taskName}`,
-    "",
-    "【故事梗概】",
-    synopsis.trim() || "暂无",
-    "",
-    "【扩写脚本】",
-    expandedScript.trim() || "暂无",
-    "",
-    "【导入脚本】",
-    taskSourceScript.trim() || "暂无",
-    "",
-    "【分镜结果】",
-    ...rows.map(
-      (row) => `${row.order}. ${row.person} / ${row.shot} / ${row.sceneScale}\n画面描述：${row.visualDescription}\n角色动作：${row.characterAction}\n对白/旁白：${row.dialogue}\n分镜提示词：${row.prompt}\n时长：${row.durationSeconds} 秒`,
-    ),
-  ].join("\n");
+function formatArtifact(artifact: ExportArtifactRecord) {
+  const ready = artifact.ready ? "ready" : `blocked:${artifact.blocked_reason ?? "unknown"}`;
+  const path = artifact.artifact_path ? ` path=${artifact.artifact_path}` : "";
+  const hash = artifact.content_hash ? ` hash=${artifact.content_hash}` : "";
+  const rows = artifact.row_count != null ? ` rows=${artifact.row_count}` : "";
+  return `${artifact.artifact_kind} ${ready}${path}${hash}${rows}`;
 }
 
 function buildPageTokens(pageCount: number, currentPage: number) {
@@ -752,18 +762,4 @@ function renumberRows(rows: StoryboardWorkbenchRow[]) {
 
 function createRowId() {
   return `row-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function toSafeFileName(value: string) {
-  return (value.trim() || "hope-workbench").replace(/[\\/:*?"<>|]/g, "-");
-}
-
-function triggerDownload(filename: string, content: string, mimeType: string) {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
 }

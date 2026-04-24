@@ -314,6 +314,40 @@ textarea {
   line-height: 1.45;
 }
 
+.bridge-status {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(93, 214, 220, 0.34);
+  border-radius: var(--radius-sm);
+  background: rgba(93, 214, 220, 0.06);
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.bridge-status__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+}
+
+.bridge-status__meta strong {
+  color: var(--navy);
+}
+
+.bridge-status pre {
+  max-height: 84px;
+  margin: 6px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: inherit;
+  line-height: 1.4;
+}
+
+.bridge-status--compact {
+  margin-top: 8px;
+}
+
 .task-row {
   grid-template-columns: minmax(0, 1fr) minmax(168px, 0.24fr);
 }
@@ -549,6 +583,7 @@ textarea {
   display: flex;
   justify-content: flex-end;
   align-items: center;
+  gap: 12px;
   margin-top: auto;
   margin: clamp(12px, 1.2vh, 18px) clamp(18px, 1.5vw, 28px) clamp(14px, 1.4vh, 20px);
   padding: 10px 12px;
@@ -558,7 +593,28 @@ textarea {
 }
 
 .export-message {
-  display: none;
+  display: block;
+  flex: 1;
+  min-width: 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.export-artifacts {
+  display: flex;
+  flex: 1.4;
+  min-width: 0;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.export-artifacts span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .export-actions {

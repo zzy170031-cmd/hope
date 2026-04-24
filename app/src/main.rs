@@ -1,10 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use core_domain::{ExpandScriptResponse, ExportBundleResponse, GenerateStoryboardResponse};
 use hope_app::{
     desktop_bridge::{DesktopInvokeRequest, DesktopInvokeResponse, invoke_desktop_command},
     ipc::{
-        PROJECT_CREATE_OR_SWITCH_COMMAND, ProjectCreateOrSwitchRequest,
-        STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
+        EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, ExpandScriptRequest, ExportBundleRequest,
+        GENERATE_STORYBOARD_COMMAND, GenerateStoryboardRequest, PROJECT_CREATE_OR_SWITCH_COMMAND,
+        ProjectCreateOrSwitchRequest, STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
         StoryboardRenderSegmentCutPreviewSnapshotRequest, VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
         ValidationExportPanelSnapshotRequest, WRITER_ENTRY_SNAPSHOT_COMMAND,
         WriterEntrySnapshotRequest,
@@ -39,7 +41,10 @@ fn run_native_host() {
             project_create_or_switch,
             writer_entry_snapshot,
             storyboard_rendersegment_cut_preview_snapshot,
-            validation_export_panel_snapshot
+            validation_export_panel_snapshot,
+            expand_script,
+            generate_storyboard,
+            export_bundle
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Hope desktop native host");
@@ -102,5 +107,46 @@ fn validation_export_panel_snapshot(
     {
         DesktopInvokeResponse::ValidationExportPanelSnapshot(snapshot) => Ok(snapshot),
         _ => Err("desktop invoke returned an unexpected validation/export response".to_string()),
+    }
+}
+
+#[tauri::command]
+fn expand_script(request: ExpandScriptRequest) -> Result<ExpandScriptResponse, String> {
+    match invoke_desktop_command(
+        EXPAND_SCRIPT_COMMAND,
+        DesktopInvokeRequest::ExpandScript(request),
+    )
+    .map_err(|error| error.to_string())?
+    {
+        DesktopInvokeResponse::ExpandScript(response) => Ok(response),
+        _ => Err("desktop invoke returned an unexpected expand_script response".to_string()),
+    }
+}
+
+#[tauri::command]
+fn generate_storyboard(
+    request: GenerateStoryboardRequest,
+) -> Result<GenerateStoryboardResponse, String> {
+    match invoke_desktop_command(
+        GENERATE_STORYBOARD_COMMAND,
+        DesktopInvokeRequest::GenerateStoryboard(request),
+    )
+    .map_err(|error| error.to_string())?
+    {
+        DesktopInvokeResponse::GenerateStoryboard(response) => Ok(response),
+        _ => Err("desktop invoke returned an unexpected generate_storyboard response".to_string()),
+    }
+}
+
+#[tauri::command]
+fn export_bundle(request: ExportBundleRequest) -> Result<ExportBundleResponse, String> {
+    match invoke_desktop_command(
+        EXPORT_BUNDLE_COMMAND,
+        DesktopInvokeRequest::ExportBundle(request),
+    )
+    .map_err(|error| error.to_string())?
+    {
+        DesktopInvokeResponse::ExportBundle(response) => Ok(response),
+        _ => Err("desktop invoke returned an unexpected export_bundle response".to_string()),
     }
 }

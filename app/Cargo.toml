@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 core-domain = { path = "../crates/core-domain" }
+export-engine = { path = "../crates/export-engine" }
 project-store = { path = "../crates/project-store" }
 serde = { version = "1", features = ["derive"] }
 storyboard-pipeline = { path = "../crates/storyboard-pipeline" }

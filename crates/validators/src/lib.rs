@@ -7,8 +7,9 @@ pub mod shared_fixture;
 pub mod week3;
 
 pub use contract::{
-    ValidationDecision, ValidationEnvelope, ValidationFinding, ValidationReport,
-    ValidationReportRow, ValidationSeverity, contains_placeholder_marker,
+    EvidenceAwareValidationItem, EvidenceAwareValidationProjection, ValidationDecision,
+    ValidationEnvelope, ValidationFinding, ValidationReport, ValidationReportRow,
+    ValidationSeverity, contains_placeholder_marker, project_v120_evidence_aware_findings,
 };
 pub use repair::{RepairRecommendation, derive_repair_recommendations};
 pub use rules::{

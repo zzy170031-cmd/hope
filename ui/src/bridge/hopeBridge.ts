@@ -1,8 +1,17 @@
 import type {
   AppShellReadonlyStatus,
   BridgeMode,
+  ExpandScriptRequest,
+  ExpandScriptResponse,
+  ExportBundleRequest,
+  ExportBundleResponse,
+  ExportArtifactRecord,
   ExportValidationItem,
+  GenerateStoryboardRequest,
+  GenerateStoryboardResponse,
+  GeneratedStoryboardRow,
   PreviewItem,
+  ProductWarning,
   ProjectCreateOrSwitchRequest,
   ProjectSummary,
   StoryboardRenderSegmentCutPreviewSnapshotRequest,
@@ -25,6 +34,9 @@ export const HOPE_TAURI_COMMANDS = {
   storyboardRenderSegmentCutPreviewSnapshot:
     "storyboard_rendersegment_cut_preview_snapshot",
   validationExportPanelSnapshot: "validation_export_panel_snapshot",
+  expandScript: "expand_script",
+  generateStoryboard: "generate_storyboard",
+  exportBundle: "export_bundle",
 } as const;
 
 type HopeCommandName = (typeof HOPE_TAURI_COMMANDS)[keyof typeof HOPE_TAURI_COMMANDS];
@@ -34,6 +46,9 @@ type HopeCommandPayload =
   | WriterEntrySnapshotRequest
   | StoryboardRenderSegmentCutPreviewSnapshotRequest
   | ValidationExportPanelSnapshotRequest
+  | ExpandScriptRequest
+  | GenerateStoryboardRequest
+  | ExportBundleRequest
   | undefined;
 
 type DesktopInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -63,6 +78,9 @@ const PHASE1_REAL_COMMANDS = new Set<HopeCommandName>([
   HOPE_TAURI_COMMANDS.writerEntrySnapshot,
   HOPE_TAURI_COMMANDS.storyboardRenderSegmentCutPreviewSnapshot,
   HOPE_TAURI_COMMANDS.validationExportPanelSnapshot,
+  HOPE_TAURI_COMMANDS.expandScript,
+  HOPE_TAURI_COMMANDS.generateStoryboard,
+  HOPE_TAURI_COMMANDS.exportBundle,
 ]);
 
 function delay(ms: number) {
@@ -425,6 +443,137 @@ function normalizeValidationExportSnapshot(raw: unknown): ValidationExportPanelS
   };
 }
 
+function normalizeProductWarning(raw: unknown): ProductWarning {
+  const warning = readObject(raw, "product warning");
+  return {
+    code: String(warning.code ?? ""),
+    message: String(warning.message ?? ""),
+    related_sample_id: (warning.related_sample_id ?? warning.relatedSampleId ?? null) as
+      | string
+      | null,
+  };
+}
+
+function normalizeWarningList(raw: unknown): ProductWarning[] {
+  return Array.isArray(raw) ? raw.map((item) => normalizeProductWarning(item)) : [];
+}
+
+function normalizeExpandScriptResponse(raw: unknown): ExpandScriptResponse {
+  const response = readObject(raw, "expand_script response");
+  return {
+    script_id: String(response.script_id ?? response.scriptId ?? ""),
+    expanded_script_text: String(
+      response.expanded_script_text ?? response.expandedScriptText ?? "",
+    ),
+    script_hash: String(response.script_hash ?? response.scriptHash ?? ""),
+    warnings: normalizeWarningList(response.warnings),
+  };
+}
+
+function normalizeGeneratedStoryboardRow(raw: unknown): GeneratedStoryboardRow {
+  const row = readObject(raw, "generated storyboard row");
+  const promptBodyCandidate = readObject(
+    row.prompt_body_candidate ?? row.promptBodyCandidate ?? {},
+    "prompt body candidate",
+  );
+
+  return {
+    shot_id: String(row.shot_id ?? row.shotId ?? ""),
+    order: Number(row.order ?? 0),
+    person: String(row.person ?? ""),
+    shot_title: String(row.shot_title ?? row.shotTitle ?? ""),
+    scene_scale: String(row.scene_scale ?? row.sceneScale ?? ""),
+    visual_description: String(row.visual_description ?? row.visualDescription ?? ""),
+    character_action: String(row.character_action ?? row.characterAction ?? ""),
+    dialogue: String(row.dialogue ?? ""),
+    prompt_text: String(row.prompt_text ?? row.promptText ?? ""),
+    duration_seconds: Number(row.duration_seconds ?? row.durationSeconds ?? 0),
+    prompt_body_candidate: {
+      source_sample_id: String(
+        promptBodyCandidate.source_sample_id ?? promptBodyCandidate.sourceSampleId ?? "",
+      ),
+      source_prompt_body: String(
+        promptBodyCandidate.source_prompt_body ?? promptBodyCandidate.sourcePromptBody ?? "",
+      ),
+      candidate_text:
+        (promptBodyCandidate.candidate_text ?? promptBodyCandidate.candidateText ?? null) as
+          | string
+          | null,
+      blocked: Boolean(promptBodyCandidate.blocked),
+      blocker_codes: Array.isArray(promptBodyCandidate.blocker_codes)
+        ? promptBodyCandidate.blocker_codes.map(String)
+        : Array.isArray(promptBodyCandidate.blockerCodes)
+          ? promptBodyCandidate.blockerCodes.map(String)
+          : [],
+    },
+  };
+}
+
+function normalizeStoryboardExportStatus(raw: unknown) {
+  const status = readObject(raw, "storyboard export status");
+  return {
+    status: String(status.status ?? "Blocked") as GenerateStoryboardResponse["export_status"]["status"],
+    blockers: normalizeWarningList(status.blockers),
+    warnings: normalizeWarningList(status.warnings),
+    ready_row_count: Number(status.ready_row_count ?? status.readyRowCount ?? 0),
+    blocked_row_count: Number(status.blocked_row_count ?? status.blockedRowCount ?? 0),
+  };
+}
+
+function normalizeGenerateStoryboardResponse(raw: unknown): GenerateStoryboardResponse {
+  const response = readObject(raw, "generate_storyboard response");
+  const durationPlan = readObject(
+    response.duration_plan ?? response.durationPlan ?? {},
+    "storyboard duration plan",
+  );
+
+  return {
+    result_id: String(response.result_id ?? response.resultId ?? ""),
+    rows: Array.isArray(response.rows)
+      ? response.rows.map((item) => normalizeGeneratedStoryboardRow(item))
+      : [],
+    duration_plan: {
+      total_duration_seconds: Number(
+        durationPlan.total_duration_seconds ?? durationPlan.totalDurationSeconds ?? 0,
+      ),
+      row_count: Number(durationPlan.row_count ?? durationPlan.rowCount ?? 0),
+      per_row_seconds: Number(durationPlan.per_row_seconds ?? durationPlan.perRowSeconds ?? 0),
+      allocated_seconds: Number(durationPlan.allocated_seconds ?? durationPlan.allocatedSeconds ?? 0),
+    },
+    export_status: normalizeStoryboardExportStatus(
+      response.export_status ?? response.exportStatus ?? {},
+    ),
+  };
+}
+
+function normalizeExportArtifact(raw: unknown): ExportArtifactRecord {
+  const artifact = readObject(raw, "export artifact");
+  return {
+    artifact_id: String(artifact.artifact_id ?? artifact.artifactId ?? ""),
+    artifact_kind: String(artifact.artifact_kind ?? artifact.artifactKind ?? ""),
+    export_format: String(artifact.export_format ?? artifact.exportFormat ?? ""),
+    ready: Boolean(artifact.ready),
+    blocked_reason: (artifact.blocked_reason ?? artifact.blockedReason ?? null) as string | null,
+    artifact_path: (artifact.artifact_path ?? artifact.artifactPath ?? null) as string | null,
+    content_hash: (artifact.content_hash ?? artifact.contentHash ?? null) as string | null,
+    byte_size: (artifact.byte_size ?? artifact.byteSize ?? null) as number | null,
+    row_count: (artifact.row_count ?? artifact.rowCount ?? null) as number | null,
+  };
+}
+
+function normalizeExportBundleResponse(raw: unknown): ExportBundleResponse {
+  const response = readObject(raw, "export_bundle response");
+  return {
+    export_manifest_id: String(response.export_manifest_id ?? response.exportManifestId ?? ""),
+    export_status: normalizeStoryboardExportStatus(
+      response.export_status ?? response.exportStatus ?? {},
+    ),
+    artifacts: Array.isArray(response.artifacts)
+      ? response.artifacts.map((item) => normalizeExportArtifact(item))
+      : [],
+  };
+}
+
 function fallbackForCommand<T>(command: HopeCommandName, payload?: HopeCommandPayload): T {
   switch (command) {
     case HOPE_TAURI_COMMANDS.projectCreateOrSwitch:
@@ -440,6 +589,10 @@ function fallbackForCommand<T>(command: HopeCommandName, payload?: HopeCommandPa
           (payload as ValidationExportPanelSnapshotRequest | undefined)?.project_id ??
           MOCK_EXPORT_VALIDATION_SNAPSHOT.projectId,
       } as T;
+    case HOPE_TAURI_COMMANDS.expandScript:
+    case HOPE_TAURI_COMMANDS.generateStoryboard:
+    case HOPE_TAURI_COMMANDS.exportBundle:
+      throw new Error(`${command} requires the desktop bridge.`);
     default:
       throw new Error(`Unmapped Hope UI command: ${command}`);
   }
@@ -520,4 +673,22 @@ export async function loadExportValidationSnapshot(project_id = DEFAULT_PROJECT_
     { project_id },
   );
   return normalizeValidationExportSnapshot(raw);
+}
+
+export async function expandScript(request: ExpandScriptRequest) {
+  const raw = await invokeHopeCommand<unknown>(HOPE_TAURI_COMMANDS.expandScript, request);
+  return normalizeExpandScriptResponse(raw);
+}
+
+export async function generateStoryboard(request: GenerateStoryboardRequest) {
+  const raw = await invokeHopeCommand<unknown>(
+    HOPE_TAURI_COMMANDS.generateStoryboard,
+    request,
+  );
+  return normalizeGenerateStoryboardResponse(raw);
+}
+
+export async function exportBundle(request: ExportBundleRequest) {
+  const raw = await invokeHopeCommand<unknown>(HOPE_TAURI_COMMANDS.exportBundle, request);
+  return normalizeExportBundleResponse(raw);
 }

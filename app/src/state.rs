@@ -1,8 +1,14 @@
-use std::{io, path::PathBuf};
+use std::{
+    collections::HashMap,
+    io,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
+use core_domain::{ExpandScriptResponse, GenerateStoryboardResponse, KbGoldenSampleRuntimePackage};
 use project_store::{
     DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeError, KbRuntimeHandle, StoreSkeleton,
-    load_kb_knowledge_bundle, load_kb_runtime,
+    load_kb_golden_sample_runtime_package, load_kb_knowledge_bundle, load_kb_runtime,
 };
 use serde::Serialize;
 use validators::{Week3SharedFixture, load_week3_shared_fixture};
@@ -152,9 +158,12 @@ pub struct AppState {
     pub store: StoreSkeleton,
     pub kb_runtime: KbRuntimeHandle,
     pub kb_knowledge: KbKnowledgeBundle,
+    pub kb_golden_sample_runtime: Option<KbGoldenSampleRuntimePackage>,
     pub desktop_sources: DesktopSourceConfig,
     pub snapshot_bootstrap_readonly: SnapshotBootstrapReadonlyState,
     pub validation_feedback_readonly: ValidationFeedbackReadonlyState,
+    bridge_scripts: Arc<Mutex<HashMap<String, ExpandScriptResponse>>>,
+    bridge_storyboards: Arc<Mutex<HashMap<String, GenerateStoryboardResponse>>>,
 }
 
 impl AppState {
@@ -167,6 +176,7 @@ impl AppState {
             store,
             kb_runtime,
             kb_knowledge,
+            None,
             DesktopSourceConfig::new(
                 PathBuf::from(DEFAULT_HOPE_DB_PATH),
                 PathBuf::from(DEFAULT_DESKTOP_SHARED_FIXTURE_PATH),
@@ -178,6 +188,7 @@ impl AppState {
         store: StoreSkeleton,
         kb_runtime: KbRuntimeHandle,
         kb_knowledge: KbKnowledgeBundle,
+        kb_golden_sample_runtime: Option<KbGoldenSampleRuntimePackage>,
         desktop_sources: DesktopSourceConfig,
     ) -> Self {
         let snapshot_bootstrap_readonly =
@@ -189,10 +200,31 @@ impl AppState {
             store,
             kb_runtime,
             kb_knowledge,
+            kb_golden_sample_runtime,
             desktop_sources,
             snapshot_bootstrap_readonly,
             validation_feedback_readonly,
+            bridge_scripts: Arc::new(Mutex::new(HashMap::new())),
+            bridge_storyboards: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn new_with_golden_sample_runtime(
+        store: StoreSkeleton,
+        kb_runtime: KbRuntimeHandle,
+        kb_knowledge: KbKnowledgeBundle,
+        kb_golden_sample_runtime: KbGoldenSampleRuntimePackage,
+    ) -> Self {
+        Self::new_with_sources(
+            store,
+            kb_runtime,
+            kb_knowledge,
+            Some(kb_golden_sample_runtime),
+            DesktopSourceConfig::new(
+                PathBuf::from(DEFAULT_HOPE_DB_PATH),
+                PathBuf::from(DEFAULT_DESKTOP_SHARED_FIXTURE_PATH),
+            ),
+        )
     }
 
     pub fn load_desktop_runtime() -> io::Result<Self> {
@@ -224,11 +256,13 @@ impl AppState {
         ));
         let kb_runtime = load_kb_runtime(hope_kb_snapshot_path).map_err(map_kb_runtime_error)?;
         let kb_knowledge = load_kb_knowledge_bundle(&kb_runtime).map_err(map_kb_runtime_error)?;
+        let kb_golden_sample_runtime = load_kb_golden_sample_runtime_package(&kb_runtime).ok();
 
         Ok(Self::new_with_sources(
             store,
             kb_runtime,
             kb_knowledge,
+            kb_golden_sample_runtime,
             DesktopSourceConfig::new(hope_db_path, shared_fixture_path),
         ))
     }
@@ -243,6 +277,36 @@ impl AppState {
 
     pub fn validation_feedback_readonly_state(&self) -> &ValidationFeedbackReadonlyState {
         &self.validation_feedback_readonly
+    }
+
+    pub fn remember_script(&self, script: ExpandScriptResponse) {
+        self.bridge_scripts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(script.script_id.clone(), script);
+    }
+
+    pub fn find_script(&self, script_id: &str) -> Option<ExpandScriptResponse> {
+        self.bridge_scripts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(script_id)
+            .cloned()
+    }
+
+    pub fn remember_storyboard(&self, storyboard: GenerateStoryboardResponse) {
+        self.bridge_storyboards
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(storyboard.result_id.clone(), storyboard);
+    }
+
+    pub fn find_storyboard(&self, result_id: &str) -> Option<GenerateStoryboardResponse> {
+        self.bridge_storyboards
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(result_id)
+            .cloned()
     }
 }
 
@@ -349,7 +413,7 @@ mod tests {
         );
         assert_eq!(
             readonly_state.snapshot_identity.seed_format,
-            "hope-kb-sqlite-snapshot-v0.1"
+            "hope-kb-sqlite-snapshot-v0.1+golden-sample-v0.2"
         );
         assert_eq!(readonly_state.snapshot_identity.source_name, "hope-kb");
         assert!(readonly_state.snapshot_identity.created_at_timestamp >= 0);

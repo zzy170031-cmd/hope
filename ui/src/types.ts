@@ -35,6 +35,101 @@ export interface StoryboardWorkbenchRow {
   durationSeconds: number;
 }
 
+export interface ProductWarning {
+  code: string;
+  message: string;
+  related_sample_id?: string | null;
+  relatedSampleId?: string | null;
+}
+
+export interface ExpandScriptRequest {
+  scene_type: string;
+  synopsis_text: string;
+}
+
+export interface ExpandScriptResponse {
+  script_id: string;
+  expanded_script_text: string;
+  script_hash: string;
+  warnings: ProductWarning[];
+}
+
+export interface GenerateStoryboardRequest {
+  task_name: string;
+  script_id?: string | null;
+  expanded_script_text?: string | null;
+  selected_total_duration_seconds: number;
+}
+
+export type BridgeCallStatus = "Ready" | "WarningOnly" | "Blocked" | "Gated";
+
+export interface PromptBodyCandidate {
+  source_sample_id: string;
+  source_prompt_body: string;
+  candidate_text?: string | null;
+  blocked: boolean;
+  blocker_codes: string[];
+}
+
+export interface GeneratedStoryboardRow {
+  shot_id: string;
+  order: number;
+  person: string;
+  shot_title: string;
+  scene_scale: string;
+  visual_description: string;
+  character_action: string;
+  dialogue: string;
+  prompt_text: string;
+  duration_seconds: number;
+  prompt_body_candidate: PromptBodyCandidate;
+}
+
+export interface StoryboardDurationPlan {
+  total_duration_seconds: number;
+  row_count: number;
+  per_row_seconds: number;
+  allocated_seconds: number;
+}
+
+export interface StoryboardExportStatus {
+  status: BridgeCallStatus;
+  blockers: ProductWarning[];
+  warnings: ProductWarning[];
+  ready_row_count: number;
+  blocked_row_count: number;
+}
+
+export interface GenerateStoryboardResponse {
+  result_id: string;
+  rows: GeneratedStoryboardRow[];
+  duration_plan: StoryboardDurationPlan;
+  export_status: StoryboardExportStatus;
+}
+
+export interface ExportBundleRequest {
+  result_id: string;
+  export_format: string;
+}
+
+export interface ExportArtifactRecord {
+  artifact_id: string;
+  artifact_kind: string;
+  export_format: string;
+  ready: boolean;
+  blocked_reason?: string | null;
+  artifact_path?: string | null;
+  content_hash?: string | null;
+  byte_size?: number | null;
+  row_count?: number | null;
+}
+
+export interface ExportBundleResponse {
+  export_manifest_id: string;
+  export_status: StoryboardExportStatus;
+  artifacts: ExportArtifactRecord[];
+}
+
 export type StoryboardReadinessStatus =
   | "Draft"
   | "Needs Detail"
