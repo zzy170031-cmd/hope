@@ -1,6 +1,7 @@
+use std::env;
 use std::hash::{Hash, Hasher};
 use std::io;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::state::AppState;
 
@@ -18,6 +19,9 @@ use core_domain::{
     TextModelProviderKind, UpdateStoryboardRowsRequest,
 };
 use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
+use reqwest::blocking::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
 use validators::{
     RepairRecommendation, WEEK3_SHARED_FIXTURE_PATH, Week3SharedFixture,
@@ -81,6 +85,51 @@ pub struct ValidationRepairRecommendationItem {
     pub prompt_template_names: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct LiveStoryboardRowPatch {
+    #[serde(default)]
+    shot_title: String,
+    #[serde(default)]
+    person: String,
+    #[serde(default)]
+    scene_scale: String,
+    #[serde(default)]
+    visual_description: String,
+    #[serde(default)]
+    character_action: String,
+    #[serde(default)]
+    dialogue: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct LiveStoryboardRowsEnvelope {
+    rows: Vec<LiveStoryboardRowPatch>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QwenChatCompletionResponse {
+    choices: Vec<QwenChoice>,
+    #[serde(default)]
+    usage: Option<QwenUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QwenChoice {
+    message: QwenMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct QwenMessage {
+    #[serde(default)]
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct QwenUsage {
+    #[serde(default)]
+    total_tokens: Option<u32>,
+}
+
 pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandScriptResponse {
     let mut blockers = Vec::new();
     let normalized_scene_type = normalize_scene_type(&request.scene_type);
@@ -134,13 +183,25 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
     ));
     let script_id = format!("script-{}", &script_hash[..12]);
 
-    let mut warnings = vec![ProductWarning {
-        code: "qwen_live_generation_closed".to_string(),
-        message:
-            "Expanded script is a deterministic bridge envelope; live Qwen expansion remains gated."
-                .to_string(),
-        related_sample_id: None,
-    }];
+    let kb_router_result = run_kb_router(state, router_request);
+    let provider = default_text_model_provider();
+    let generation_request = build_text_generation_request(
+        TextGenerationTask::ExpandScript,
+        Some(normalized_scene_type.clone()),
+        request.synopsis_text.trim().to_string(),
+        None,
+        kb_router_result.kb_context_summary.clone(),
+        kb_router_result.selected_sample_ids.clone(),
+        kb_router_result
+            .selected_kb_rules
+            .iter()
+            .map(|rule| format!("{}:{}", rule.rule_id, rule.summary))
+            .collect(),
+        TextGenerationOutputSchema::PlainText,
+        Some(700),
+    );
+    let generated_script = run_text_generation(&provider, &generation_request);
+    let mut warnings = generated_script.warnings.clone();
     if !state
         .kb_golden_sample_runtime
         .manifest
@@ -154,20 +215,59 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
             related_sample_id: None,
         });
     }
+    let expanded_script_text = if generated_script.warnings.is_empty() {
+        match validate_generated_script_text(&generated_script.text) {
+            Some(text) => text.to_string(),
+            None => {
+                warnings.push(ProductWarning {
+                    code: "text_model_validator_failed".to_string(),
+                    message:
+                        "The live expanded script was empty or contained forbidden real-name style content, so Hope rejected it."
+                            .to_string(),
+                    related_sample_id: None,
+                });
+                warnings.push(ProductWarning {
+                    code: "text_model_live_expand_fallback".to_string(),
+                    message:
+                        "Expanded script fell back to the deterministic bridge envelope because the live result was missing or failed validation."
+                            .to_string(),
+                    related_sample_id: None,
+                });
+                deterministic_expanded_script_text(
+                    &normalized_scene_type,
+                    request.synopsis_text.trim(),
+                    &state.kb_golden_sample_runtime.manifest.snapshot_name,
+                )
+            }
+        }
+    } else {
+        warnings.push(ProductWarning {
+            code: "text_model_live_expand_fallback".to_string(),
+            message:
+                "Expanded script stayed on the deterministic bridge envelope because live Qwen was unavailable or not configured."
+                    .to_string(),
+            related_sample_id: None,
+        });
+        deterministic_expanded_script_text(
+            &normalized_scene_type,
+            request.synopsis_text.trim(),
+            &state.kb_golden_sample_runtime.manifest.snapshot_name,
+        )
+    };
+    let status = if warnings.is_empty() {
+        BridgeCallStatus::Ready
+    } else {
+        BridgeCallStatus::WarningOnly
+    };
 
     let response = ExpandScriptResponse {
-        status: BridgeCallStatus::WarningOnly,
+        status,
         script_id,
-        expanded_script_text: format!(
-            "scene_type: {}\nsynopsis: {}\nsource_package: {}",
-            normalized_scene_type,
-            request.synopsis_text.trim(),
-            state.kb_golden_sample_runtime.manifest.snapshot_name
-        ),
+        expanded_script_text,
         script_hash,
         blockers: vec![],
         warnings,
-        kb_router_result: run_kb_router(state, router_request),
+        kb_router_result,
     };
     state.remember_script(response.clone());
     response
@@ -288,6 +388,36 @@ pub fn generate_storyboard(
                 );
             }
         };
+    let provider = default_text_model_provider();
+    let generation_request = build_text_generation_request(
+        TextGenerationTask::GenerateStoryboard,
+        Some(normalized_scene_type.clone()),
+        script_text.clone(),
+        Some(StoryboardDurationPlan {
+            total_duration_seconds: request.selected_total_duration_seconds,
+            row_count: row_count as u32,
+            per_row_seconds: (request.selected_total_duration_seconds / row_count as u16).max(1),
+            allocated_seconds: request.selected_total_duration_seconds,
+        }),
+        kb_router_result.kb_context_summary.clone(),
+        kb_router_result.selected_sample_ids.clone(),
+        kb_router_result
+            .selected_kb_rules
+            .iter()
+            .map(|rule| format!("{}:{}", rule.rule_id, rule.summary))
+            .collect(),
+        TextGenerationOutputSchema::StoryboardRowsJson,
+        Some(1200),
+    );
+    let live_generation = run_text_generation(&provider, &generation_request);
+    warnings.extend(live_generation.warnings.clone());
+    let live_row_patches = match extract_live_storyboard_row_patches(&live_generation) {
+        Ok(patches) => patches,
+        Err(warning) => {
+            warnings.push(warning);
+            Vec::new()
+        }
+    };
 
     for (index, record) in selected_records.iter().enumerate() {
         let failure_mapping = state
@@ -349,15 +479,65 @@ pub fn generate_storyboard(
             external_reference_handle_candidates: project_reference_handle_candidates(record),
             sequence_grouping: scene_projection.sequence_grouping,
         });
+
+        if let Some(patch) = live_row_patches.get(index) {
+            let row = rows
+                .last_mut()
+                .expect("storyboard row must exist immediately after push");
+            apply_live_storyboard_patch(row, patch);
+        }
     }
 
-    warnings.push(ProductWarning {
-        code: "model_generation_closed".to_string(),
-        message:
-            "Rows are V120 bridge projections; live model-generated storyboard text remains gated."
-                .to_string(),
-        related_sample_id: None,
-    });
+    let validator_findings =
+        validate_storyboard_rows(&rows, request.selected_total_duration_seconds);
+    if !validator_findings.is_empty() {
+        warnings.extend(validator_findings.iter().cloned());
+        if live_generation.provider == TextModelProviderKind::Qwen && provider.enabled {
+            warnings.push(ProductWarning {
+                code: "text_model_live_storyboard_fallback".to_string(),
+                message:
+                    "Live storyboard content failed local validation, so Hope kept the deterministic bridge rows."
+                        .to_string(),
+                related_sample_id: None,
+            });
+            rows.clear();
+            for (index, record) in selected_records.iter().enumerate() {
+                let prompt_candidate = project_prompt_body_candidate(record);
+                let scene_projection = project_scene_performance(record);
+                let prompt_compilation = compile_seedance_prompt_text(
+                    state,
+                    build_prompt_text_compilation_request(
+                        record,
+                        &scene_projection,
+                        row_durations[index],
+                        &kb_router_result,
+                    ),
+                );
+                warnings.extend(prompt_compilation.warnings.iter().cloned());
+                rows.push(GeneratedStoryboardRow {
+                    shot_id: record.source_fields.shot_id.clone(),
+                    order: (index + 1) as u32,
+                    person: scene_projection.person.clone(),
+                    shot_title: record.source_fields.sample_title.clone(),
+                    scene_scale: scene_projection.scene_scale.clone(),
+                    visual_description: scene_projection.visual_description.clone(),
+                    character_action: scene_projection.character_action.clone(),
+                    dialogue: String::new(),
+                    prompt_text: prompt_compilation.prompt_text.clone(),
+                    prompt_text_compilation_status: prompt_compilation.compilation_status,
+                    prompt_text_compilation_warnings: prompt_compilation.warnings.clone(),
+                    prompt_text_source_row_id: prompt_compilation.source_row_id.clone(),
+                    duration_seconds: row_durations[index],
+                    prompt_body_candidate: prompt_candidate,
+                    scene_performance_projection: scene_projection.clone(),
+                    external_reference_handle_candidates: project_reference_handle_candidates(
+                        record,
+                    ),
+                    sequence_grouping: scene_projection.sequence_grouping,
+                });
+            }
+        }
+    }
 
     let status = if !blockers.is_empty() {
         BridgeCallStatus::Blocked
@@ -1141,12 +1321,31 @@ fn product_warning_from_evidence(item: validators::EvidenceAwareValidationItem) 
 }
 
 fn default_text_model_provider() -> TextModelProvider {
+    let provider = match env::var("HOPE_TEXT_MODEL_PROVIDER")
+        .unwrap_or_else(|_| "qwen".to_string())
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "doubao" => TextModelProviderKind::Doubao,
+        "custom" => TextModelProviderKind::Custom,
+        _ => TextModelProviderKind::Qwen,
+    };
     TextModelProvider {
-        provider: TextModelProviderKind::Qwen,
-        model: "qwen-default-text".to_string(),
-        base_url: None,
-        api_key_ref: "env:HOPE_TEXT_MODEL_API_KEY".to_string(),
-        enabled: false,
+        provider,
+        model: env::var("HOPE_TEXT_MODEL_MODEL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "qwen-default-text".to_string()),
+        base_url: env::var("HOPE_TEXT_MODEL_BASE_URL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        api_key_ref: env::var("HOPE_TEXT_MODEL_API_KEY_REF")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "env:HOPE_TEXT_MODEL_API_KEY".to_string()),
+        enabled: parse_bool_env("HOPE_TEXT_MODEL_ENABLED"),
     }
 }
 
@@ -1157,6 +1356,7 @@ fn build_text_generation_request(
     duration_plan: Option<StoryboardDurationPlan>,
     kb_context_summary: String,
     selected_sample_ids: Vec<String>,
+    selected_kb_rules: Vec<String>,
     output_schema: TextGenerationOutputSchema,
     max_tokens: Option<u32>,
 ) -> TextGenerationRequest {
@@ -1167,22 +1367,94 @@ fn build_text_generation_request(
         duration_plan,
         kb_context_summary,
         selected_sample_ids,
+        selected_kb_rules,
         output_schema,
         temperature: Some(0.2),
         max_tokens,
     }
 }
 
-fn run_text_generation_stub(
+fn run_text_generation(
     provider: &TextModelProvider,
     request: &TextGenerationRequest,
 ) -> TextGenerationResponse {
+    if !provider.enabled {
+        return run_text_generation_stub(
+            provider,
+            request,
+            ProductWarning {
+                code: "text_model_live_call_closed".to_string(),
+                message: format!(
+                    "Text generation stays deterministic until the {} provider is enabled in runtime config.",
+                    provider_kind_label(provider.provider)
+                ),
+                related_sample_id: request.selected_sample_ids.first().cloned(),
+            },
+        );
+    }
+    if provider.provider != TextModelProviderKind::Qwen {
+        return run_text_generation_stub(
+            provider,
+            request,
+            ProductWarning {
+                code: "text_model_provider_not_supported".to_string(),
+                message:
+                    "Only the Qwen live text provider is wired in this MVP; other providers stay stubbed."
+                        .to_string(),
+                related_sample_id: request.selected_sample_ids.first().cloned(),
+            },
+        );
+    }
+    let Some(api_key) = resolve_provider_api_key(provider) else {
+        return run_text_generation_stub(
+            provider,
+            request,
+            ProductWarning {
+                code: "text_model_api_key_missing".to_string(),
+                message:
+                    "Qwen live text generation is enabled but the configured API key reference could not be resolved."
+                        .to_string(),
+                related_sample_id: request.selected_sample_ids.first().cloned(),
+            },
+        );
+    };
+    let Some(endpoint) = resolve_qwen_endpoint(provider) else {
+        return run_text_generation_stub(
+            provider,
+            request,
+            ProductWarning {
+                code: "text_model_base_url_missing".to_string(),
+                message:
+                    "Qwen live text generation needs a configurable base_url or endpoint before Hope can call it."
+                        .to_string(),
+                related_sample_id: request.selected_sample_ids.first().cloned(),
+            },
+        );
+    };
+    match run_qwen_text_generation_with_transport(
+        provider,
+        request,
+        &endpoint,
+        &api_key,
+        qwen_http_transport,
+    ) {
+        Ok(response) => response,
+        Err(warning) => run_text_generation_stub(provider, request, warning),
+    }
+}
+
+fn run_text_generation_stub(
+    provider: &TextModelProvider,
+    request: &TextGenerationRequest,
+    warning: ProductWarning,
+) -> TextGenerationResponse {
     let scene_type = request.scene_type.as_deref().unwrap_or("unspecified_scene");
     let text = format!(
-        "task={:?}\nscene_type={}\nselected_samples={}\nkb_context={}",
+        "task={:?}\nscene_type={}\nselected_samples={}\nselected_kb_rules={}\nkb_context={}",
         request.task_type,
         scene_type,
         request.selected_sample_ids.join(","),
+        request.selected_kb_rules.join(" | "),
         request.kb_context_summary
     );
 
@@ -1191,17 +1463,313 @@ fn run_text_generation_stub(
         structured_json: None,
         usage_tokens: None,
         latency_ms: Some(0),
-        warnings: vec![ProductWarning {
-            code: "text_model_live_call_closed".to_string(),
-            message: format!(
-                "Text generation stays deterministic in MVP; live {:?} provider calls remain gated.",
-                provider.provider
-            ),
-            related_sample_id: request.selected_sample_ids.first().cloned(),
-        }],
+        warnings: vec![warning],
         provider: provider.provider,
         model: provider.model.clone(),
     }
+}
+
+fn run_qwen_text_generation_with_transport<F>(
+    provider: &TextModelProvider,
+    request: &TextGenerationRequest,
+    endpoint: &str,
+    api_key: &str,
+    transport: F,
+) -> Result<TextGenerationResponse, ProductWarning>
+where
+    F: Fn(&str, &str, &Value) -> Result<(Value, u64), ProductWarning>,
+{
+    let payload = build_qwen_request_payload(provider, request);
+    let started = Instant::now();
+    let (body, transport_latency_ms) = transport(endpoint, api_key, &payload)?;
+    let response: QwenChatCompletionResponse = serde_json::from_value(body).map_err(|_| ProductWarning {
+        code: "text_model_response_invalid".to_string(),
+        message: "Qwen returned a payload that Hope could not parse into the expected response shape.".to_string(),
+        related_sample_id: request.selected_sample_ids.first().cloned(),
+    })?;
+    let content = response
+        .choices
+        .first()
+        .map(|choice| choice.message.content.trim())
+        .filter(|content| !content.is_empty())
+        .ok_or_else(|| ProductWarning {
+            code: "text_model_response_invalid".to_string(),
+            message:
+                "Qwen returned an empty text body, so Hope kept the local deterministic fallback."
+                    .to_string(),
+            related_sample_id: request.selected_sample_ids.first().cloned(),
+        })?;
+    let structured_json = match request.output_schema {
+        TextGenerationOutputSchema::StoryboardRowsJson
+        | TextGenerationOutputSchema::RepairPlanJson => serde_json::from_str::<Value>(content).ok(),
+        _ => None,
+    };
+
+    Ok(TextGenerationResponse {
+        text: content.to_string(),
+        structured_json,
+        usage_tokens: response.usage.and_then(|usage| usage.total_tokens),
+        latency_ms: Some(transport_latency_ms.max(started.elapsed().as_millis() as u64)),
+        warnings: vec![],
+        provider: provider.provider,
+        model: provider.model.clone(),
+    })
+}
+
+fn build_qwen_request_payload(
+    provider: &TextModelProvider,
+    request: &TextGenerationRequest,
+) -> Value {
+    let scene_type = request.scene_type.as_deref().unwrap_or("unspecified_scene");
+    let duration_seconds = request
+        .duration_plan
+        .as_ref()
+        .map(|plan| plan.total_duration_seconds)
+        .unwrap_or_default();
+    let output_schema = match request.output_schema {
+        TextGenerationOutputSchema::PlainText => "plain_text",
+        TextGenerationOutputSchema::StoryboardRowsJson => "storyboard_rows_json",
+        TextGenerationOutputSchema::RepairPlanJson => "repair_plan_json",
+        TextGenerationOutputSchema::SeedancePromptText => "seedance_prompt_text",
+    };
+    let system_prompt = "You are Hope's controlled text-generation layer. Use only the compressed KB context you receive. Never invent real director names, IP names, brand names, or external asset bindings. Do not expand to full KB rows.";
+    let user_prompt = format!(
+        "task_type={:?}\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema={}\nconstraints=keep total duration conserved; do not emit full KB; do not emit raw prompt_body as final prompt_text; do not use real director/IP/brand names.",
+        request.task_type,
+        scene_type,
+        duration_seconds,
+        request.story_input,
+        request.kb_context_summary,
+        request.selected_sample_ids.join(","),
+        request.selected_kb_rules.join(" | "),
+        output_schema,
+    );
+
+    let mut payload = json!({
+        "model": provider.model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": request.temperature.unwrap_or(0.2),
+        "max_tokens": request.max_tokens.unwrap_or(800)
+    });
+    if matches!(
+        request.output_schema,
+        TextGenerationOutputSchema::StoryboardRowsJson | TextGenerationOutputSchema::RepairPlanJson
+    ) {
+        payload["response_format"] = json!({ "type": "json_object" });
+    }
+    payload
+}
+
+fn qwen_http_transport(
+    endpoint: &str,
+    api_key: &str,
+    payload: &Value,
+) -> Result<(Value, u64), ProductWarning> {
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|_| ProductWarning {
+            code: "text_model_network_error".to_string(),
+            message: "Hope could not initialize the Qwen HTTP client for this runtime session."
+                .to_string(),
+            related_sample_id: None,
+        })?;
+    let started = Instant::now();
+    let response = client
+        .post(endpoint)
+        .bearer_auth(api_key)
+        .json(payload)
+        .send()
+        .map_err(|_| ProductWarning {
+            code: "text_model_network_error".to_string(),
+            message: "Hope could not reach the configured Qwen endpoint, so it kept the local deterministic fallback.".to_string(),
+            related_sample_id: None,
+        })?;
+    let status = response.status();
+    let body: Value = response.json().map_err(|_| ProductWarning {
+        code: "text_model_response_invalid".to_string(),
+        message: "Qwen returned a non-JSON body that Hope could not interpret.".to_string(),
+        related_sample_id: None,
+    })?;
+    if !status.is_success() {
+        return Err(ProductWarning {
+            code: "text_model_network_error".to_string(),
+            message: format!(
+                "Qwen endpoint returned HTTP {}, so Hope kept the local deterministic fallback.",
+                status.as_u16()
+            ),
+            related_sample_id: None,
+        });
+    }
+    Ok((body, started.elapsed().as_millis() as u64))
+}
+
+fn resolve_provider_api_key(provider: &TextModelProvider) -> Option<String> {
+    provider
+        .api_key_ref
+        .strip_prefix("env:")
+        .and_then(|name| env::var(name).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn resolve_qwen_endpoint(provider: &TextModelProvider) -> Option<String> {
+    let base = provider.base_url.as_deref()?.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return None;
+    }
+    if base.ends_with("/chat/completions") {
+        Some(base.to_string())
+    } else {
+        Some(format!("{base}/chat/completions"))
+    }
+}
+
+fn parse_bool_env(name: &str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn provider_kind_label(kind: TextModelProviderKind) -> &'static str {
+    match kind {
+        TextModelProviderKind::Qwen => "qwen",
+        TextModelProviderKind::Doubao => "doubao",
+        TextModelProviderKind::Custom => "custom",
+    }
+}
+
+fn validate_generated_script_text(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || contains_forbidden_generation_terms(trimmed) {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn extract_live_storyboard_row_patches(
+    generation_response: &TextGenerationResponse,
+) -> Result<Vec<LiveStoryboardRowPatch>, ProductWarning> {
+    let Some(structured_json) = generation_response.structured_json.as_ref() else {
+        return Ok(Vec::new());
+    };
+    if let Ok(envelope) =
+        serde_json::from_value::<LiveStoryboardRowsEnvelope>(structured_json.clone())
+    {
+        return Ok(envelope.rows);
+    }
+    if let Ok(rows) = serde_json::from_value::<Vec<LiveStoryboardRowPatch>>(structured_json.clone())
+    {
+        return Ok(rows);
+    }
+    Err(ProductWarning {
+        code: "text_model_response_invalid".to_string(),
+        message:
+            "Qwen storyboard output was not valid row JSON, so Hope kept the deterministic bridge rows."
+                .to_string(),
+        related_sample_id: None,
+    })
+}
+
+fn apply_live_storyboard_patch(row: &mut GeneratedStoryboardRow, patch: &LiveStoryboardRowPatch) {
+    if let Some(value) = non_blank_string(&patch.shot_title) {
+        row.shot_title = value;
+    }
+    if let Some(value) = non_blank_string(&patch.person) {
+        row.person = value;
+    }
+    if let Some(value) = non_blank_string(&patch.scene_scale) {
+        row.scene_scale = value;
+    }
+    if let Some(value) = non_blank_string(&patch.visual_description) {
+        row.visual_description = value;
+    }
+    if let Some(value) = non_blank_string(&patch.character_action) {
+        row.character_action = value;
+    }
+    if let Some(value) = non_blank_string(&patch.dialogue) {
+        row.dialogue = value;
+    }
+}
+
+fn validate_storyboard_rows(
+    rows: &[GeneratedStoryboardRow],
+    expected_duration_seconds: u16,
+) -> Vec<ProductWarning> {
+    let mut findings = Vec::new();
+    if rows.iter().map(|row| row.duration_seconds).sum::<u16>() != expected_duration_seconds {
+        findings.push(ProductWarning {
+            code: "duration_conservation_failed".to_string(),
+            message: "Storyboard row durations no longer match the requested total duration."
+                .to_string(),
+            related_sample_id: None,
+        });
+    }
+    for row in rows {
+        for (field_name, field_value) in [
+            ("shot_title", row.shot_title.as_str()),
+            ("scene_scale", row.scene_scale.as_str()),
+            ("visual_description", row.visual_description.as_str()),
+            ("character_action", row.character_action.as_str()),
+        ] {
+            if field_value.trim().is_empty() {
+                findings.push(ProductWarning {
+                    code: "text_model_validator_failed".to_string(),
+                    message: format!(
+                        "Storyboard row {} is missing required field {} after live generation.",
+                        row.shot_id, field_name
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
+            if contains_forbidden_generation_terms(field_value) {
+                findings.push(ProductWarning {
+                    code: "text_model_validator_failed".to_string(),
+                    message: format!(
+                        "Storyboard row {} includes forbidden real-name or brand-like content in {}.",
+                        row.shot_id, field_name
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
+        }
+    }
+    findings
+}
+
+fn contains_forbidden_generation_terms(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    [
+        "director_style_ref",
+        "christopher nolan",
+        "marvel",
+        "disney",
+        "nike",
+        "harry potter",
+    ]
+    .iter()
+    .any(|term| lower.contains(term))
+}
+
+fn deterministic_expanded_script_text(
+    normalized_scene_type: &str,
+    synopsis_text: &str,
+    snapshot_name: &str,
+) -> String {
+    format!(
+        "scene_type: {}\nsynopsis: {}\nsource_package: {}",
+        normalized_scene_type, synopsis_text, snapshot_name
+    )
 }
 
 fn build_prompt_text_compilation_request(
@@ -1267,10 +1835,17 @@ fn compile_seedance_prompt_text(
         }),
         request.kb_context_summary.clone(),
         vec![request.row.shot_id.clone()],
+        request.selected_kb_rules.clone(),
         TextGenerationOutputSchema::SeedancePromptText,
         Some(220),
     );
-    let stub_response = run_text_generation_stub(&provider, &generation_request);
+    let stub_response = run_text_generation(
+        &TextModelProvider {
+            enabled: false,
+            ..provider.clone()
+        },
+        &generation_request,
+    );
 
     let mut prompt_sections = vec![
         format!("场景类型：{}", request.scene_type),
@@ -1838,6 +2413,7 @@ fn map_repair_recommendation(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::env;
     use std::fs;
 
     use core_domain::{
@@ -1856,20 +2432,24 @@ mod tests {
         GoldenSampleV3CoreCoverage, GoldenSampleValidatorEvidence, KbBundleManifestRecord,
         KbBundleRecordCounts, KbGoldenSampleRuntimePackage, KbRouterRuntimeRequest,
         KbRouterTaskType, KbRuntimeSummary, KbSnapshotRecord, PromptTemplateRecord,
-        PromptTextCompilationStatus, SceneTaxonomyRecord, TextModelProviderKind,
+        PromptTextCompilationStatus, SceneTaxonomyRecord, StoryboardDurationPlan,
+        TextGenerationOutputSchema, TextGenerationTask, TextModelProviderKind,
         UpdateStoryboardRowsRequest,
     };
     use project_store::{
         DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeHandle, StoreSkeleton,
     };
+    use serde_json::json;
 
     use super::{
         StoryboardPreviewPlanRequest, ValidationExportPanelSnapshotRequest,
         ValidationExportPanelState, build_prompt_text_compilation_request,
-        build_storyboard_preview_plan, build_validation_export_panel_snapshot_from_fixture,
-        compile_seedance_prompt_text, default_text_model_provider, expand_script, export_bundle,
-        generate_storyboard, project_scene_performance, resolve_scene_taxonomy, run_kb_router,
-        save_storyboard_rows, select_golden_sample_records,
+        build_qwen_request_payload, build_storyboard_preview_plan, build_text_generation_request,
+        build_validation_export_panel_snapshot_from_fixture, compile_seedance_prompt_text,
+        default_text_model_provider, expand_script, export_bundle, generate_storyboard,
+        project_scene_performance, resolve_scene_taxonomy, run_kb_router,
+        run_qwen_text_generation_with_transport, save_storyboard_rows,
+        select_golden_sample_records,
     };
     use crate::state::AppState;
     use validators::{WEEK3_SHARED_FIXTURE_PATH, load_week3_shared_fixture};
@@ -1985,6 +2565,35 @@ mod tests {
         };
 
         AppState::new(store, kb_runtime, kb_knowledge, golden_sample_package)
+    }
+
+    #[derive(Debug)]
+    struct EnvGuard {
+        name: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(name: &'static str, value: &str) -> Self {
+            let original = env::var(name).ok();
+            unsafe { env::set_var(name, value) };
+            Self { name, original }
+        }
+
+        fn unset(name: &'static str) -> Self {
+            let original = env::var(name).ok();
+            unsafe { env::remove_var(name) };
+            Self { name, original }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(value) => unsafe { env::set_var(self.name, value) },
+                None => unsafe { env::remove_var(self.name) },
+            }
+        }
     }
 
     fn test_golden_sample_package() -> KbGoldenSampleRuntimePackage {
@@ -2510,6 +3119,7 @@ mod tests {
 
     #[test]
     fn text_model_and_prompt_compilation_boundaries_stay_stubbed_and_qwen_first() {
+        let _enabled = EnvGuard::set("HOPE_TEXT_MODEL_ENABLED", "false");
         let state = test_state();
         let record = &state.kb_golden_sample_runtime.golden_sample_library.records[0];
         let scene_projection = project_scene_performance(record);
@@ -2574,7 +3184,145 @@ mod tests {
     }
 
     #[test]
+    fn qwen_payload_uses_router_summary_instead_of_full_kb_rows() {
+        let provider = core_domain::TextModelProvider {
+            provider: TextModelProviderKind::Qwen,
+            model: "qwen-test".to_string(),
+            base_url: Some("https://example.invalid/v1".to_string()),
+            api_key_ref: "env:HOPE_TEXT_MODEL_API_KEY".to_string(),
+            enabled: true,
+        };
+        let request = build_text_generation_request(
+            TextGenerationTask::GenerateStoryboard,
+            Some("daily_dialogue".to_string()),
+            "scene_type: daily_dialogue\nsynopsis: quiet negotiation".to_string(),
+            Some(StoryboardDurationPlan {
+                total_duration_seconds: 10,
+                row_count: 3,
+                per_row_seconds: 3,
+                allocated_seconds: 10,
+            }),
+            "compressed kb summary only".to_string(),
+            vec!["GS-BRIDGE-01".to_string(), "GS-BRIDGE-02".to_string()],
+            vec![
+                "coverage-scene_performance:preserve action core".to_string(),
+                "reserve_gate:reserve rows stay evidence-only".to_string(),
+            ],
+            TextGenerationOutputSchema::StoryboardRowsJson,
+            Some(512),
+        );
+
+        let payload = build_qwen_request_payload(&provider, &request);
+        let payload_text = payload.to_string();
+
+        assert!(payload_text.contains("compressed kb summary only"));
+        assert!(payload_text.contains("coverage-scene_performance"));
+        assert!(payload_text.contains("reserve_gate"));
+        assert!(!payload_text.contains("source_register"));
+        assert!(!payload_text.contains("\"full_kb_rows_included\":152"));
+        assert!(!payload_text.contains("Compose a restrained dialogue shot with stable eyeline"));
+    }
+
+    #[test]
+    fn qwen_provider_mock_transport_returns_structured_storyboard_rows() {
+        let provider = core_domain::TextModelProvider {
+            provider: TextModelProviderKind::Qwen,
+            model: "qwen-test".to_string(),
+            base_url: Some("https://example.invalid/v1".to_string()),
+            api_key_ref: "env:HOPE_TEXT_MODEL_API_KEY".to_string(),
+            enabled: true,
+        };
+        let request = build_text_generation_request(
+            TextGenerationTask::GenerateStoryboard,
+            Some("daily_dialogue".to_string()),
+            "scene_type: daily_dialogue\nsynopsis: quiet negotiation".to_string(),
+            Some(StoryboardDurationPlan {
+                total_duration_seconds: 10,
+                row_count: 3,
+                per_row_seconds: 3,
+                allocated_seconds: 10,
+            }),
+            "compressed kb summary only".to_string(),
+            vec!["GS-BRIDGE-01".to_string()],
+            vec!["coverage-scene_performance:preserve action core".to_string()],
+            TextGenerationOutputSchema::StoryboardRowsJson,
+            Some(512),
+        );
+
+        let response = run_qwen_text_generation_with_transport(
+            &provider,
+            &request,
+            "https://example.invalid/v1/chat/completions",
+            "test-key",
+            |endpoint, api_key, payload| {
+                assert_eq!(endpoint, "https://example.invalid/v1/chat/completions");
+                assert_eq!(api_key, "test-key");
+                let body_text = payload.to_string();
+                assert!(body_text.contains("compressed kb summary only"));
+                assert!(body_text.contains("GS-BRIDGE-01"));
+                assert!(body_text.contains("coverage-scene_performance"));
+                assert!(!body_text.contains("test-key"));
+                Ok((
+                    json!({
+                        "choices": [{
+                            "message": {
+                                "content": "{\"rows\":[{\"shot_title\":\"Live title\",\"person\":\"Lead\",\"scene_scale\":\"MCU\",\"visual_description\":\"Live visual\",\"character_action\":\"Live action\",\"dialogue\":\"Live dialogue\"}]}"
+                            }
+                        }],
+                        "usage": {
+                            "total_tokens": 321
+                        }
+                    }),
+                    12,
+                ))
+            },
+        )
+        .expect("mock transport should succeed");
+
+        assert_eq!(response.provider, TextModelProviderKind::Qwen);
+        assert_eq!(response.model, "qwen-test");
+        assert_eq!(response.usage_tokens, Some(321));
+        assert!(response.structured_json.is_some());
+        assert!(response.text.contains("\"rows\""));
+    }
+
+    #[test]
+    fn enabled_qwen_without_api_key_falls_back_to_stub() {
+        let _enabled = EnvGuard::set("HOPE_TEXT_MODEL_ENABLED", "true");
+        let _provider = EnvGuard::set("HOPE_TEXT_MODEL_PROVIDER", "qwen");
+        let _base_url = EnvGuard::set("HOPE_TEXT_MODEL_BASE_URL", "https://example.invalid/v1");
+        let _api_key_ref =
+            EnvGuard::set("HOPE_TEXT_MODEL_API_KEY_REF", "env:HOPE_TEXT_MODEL_API_KEY");
+        let _missing_key = EnvGuard::unset("HOPE_TEXT_MODEL_API_KEY");
+
+        let state = test_state();
+        let script = expand_script(
+            &state,
+            ExpandScriptRequest {
+                scene_type: "daily_dialogue".to_string(),
+                synopsis_text: "Two leads negotiate quietly before dawn.".to_string(),
+            },
+        );
+
+        assert_eq!(script.status, BridgeCallStatus::WarningOnly);
+        assert!(script.expanded_script_text.contains("source_package:"));
+        assert!(
+            script
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "text_model_api_key_missing")
+        );
+        assert!(
+            script
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "text_model_live_expand_fallback")
+        );
+    }
+
+    #[test]
     fn v120_bridge_expands_generates_and_exports_without_live_model() {
+        let _enabled = EnvGuard::set("HOPE_TEXT_MODEL_ENABLED", "false");
         let state = test_state();
         let script = expand_script(
             &state,
@@ -2590,7 +3338,7 @@ mod tests {
             script
                 .warnings
                 .iter()
-                .any(|warning| warning.code == "qwen_live_generation_closed")
+                .any(|warning| warning.code == "text_model_live_call_closed")
         );
 
         let storyboard = generate_storyboard(

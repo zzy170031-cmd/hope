@@ -71,6 +71,7 @@ pub struct TextGenerationRequest {
     pub duration_plan: Option<StoryboardDurationPlan>,
     pub kb_context_summary: String,
     pub selected_sample_ids: Vec<String>,
+    pub selected_kb_rules: Vec<String>,
     pub output_schema: TextGenerationOutputSchema,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
