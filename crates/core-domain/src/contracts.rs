@@ -101,15 +101,26 @@ pub struct PromptTextCompilationRow {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PromptTextCompilationRequest {
     pub row: PromptTextCompilationRow,
+    pub scene_type: String,
+    pub scene_label: String,
+    pub kb_context_summary: String,
     pub selected_kb_rules: Vec<String>,
     pub continuity_negative_core: String,
     pub target_profile: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PromptTextCompilationStatus {
+    ReadyStub,
+    Blocked,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PromptTextCompilationResponse {
     pub prompt_text: String,
     pub target_profile: String,
+    pub compilation_status: PromptTextCompilationStatus,
+    pub source_row_id: String,
     pub warnings: Vec<ProductWarning>,
     pub provider: TextModelProviderKind,
     pub model: String,
@@ -267,6 +278,9 @@ pub struct GeneratedStoryboardRow {
     pub character_action: String,
     pub dialogue: String,
     pub prompt_text: String,
+    pub prompt_text_compilation_status: PromptTextCompilationStatus,
+    pub prompt_text_compilation_warnings: Vec<ProductWarning>,
+    pub prompt_text_source_row_id: String,
     pub duration_seconds: u16,
     pub prompt_body_candidate: PromptBodyCandidate,
     pub scene_performance_projection: ScenePerformanceProjection,

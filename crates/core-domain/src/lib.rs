@@ -10,10 +10,10 @@ pub use contracts::{
     GoldenSampleGateDecision, GoldenSampleSelectionResult, GoldenSampleSelectorInput, ModelChannel,
     ModelRequest, ModelResponse, ProductWarning, PromptBodyCandidate, PromptPackageRecord,
     PromptTextCompilationRequest, PromptTextCompilationResponse, PromptTextCompilationRow,
-    ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, StoryboardDurationPlan,
-    StoryboardExportStatus, StructureMode, TextGenerationOutputSchema, TextGenerationRequest,
-    TextGenerationResponse, TextGenerationTask, TextModelProvider, TextModelProviderKind,
-    ValidationSummary,
+    PromptTextCompilationStatus, ScenePerformanceProjection, SequenceFieldState, SequenceGrouping,
+    StoryboardDurationPlan, StoryboardExportStatus, StructureMode, TextGenerationOutputSchema,
+    TextGenerationRequest, TextGenerationResponse, TextGenerationTask, TextModelProvider,
+    TextModelProviderKind, ValidationSummary,
 };
 pub use domain::{
     CutRecord, DirectorCutSampleRecord, DirectorProfileRecord, EpisodeRecord, HandoffZoneRecord,

@@ -217,13 +217,17 @@ fn write_export_files(workbook: &WorkbookManifest) -> Result<(), ExportError> {
 
 fn build_v120_storyboard_workbook(request: &V120StoryboardExportRequest) -> WorkbookManifest {
     let rows = request.rows.iter().map(v120_storyboard_row_cells).collect();
+    let mut columns = V120_STORYBOARD_COLUMNS.to_vec();
+    columns.push("prompt_text_compilation_status");
+    columns.push("prompt_text_compilation_warnings");
+    columns.push("prompt_text_source_row_id");
     WorkbookManifest {
         workbook_machine_name: "v120_storyboard_export_bundle",
         workbook_chinese_name: "V120 Storyboard Export Bundle",
         sheets: vec![WorkbookSheetManifest {
             machine_name: V120_STORYBOARD_SHEET_MACHINE_NAME,
             chinese_name: "V120 Storyboard Rows",
-            columns: V120_STORYBOARD_COLUMNS.to_vec(),
+            columns,
             rows,
         }],
     }
@@ -239,6 +243,13 @@ fn v120_storyboard_row_cells(row: &GeneratedStoryboardRow) -> Vec<String> {
         row.character_action.clone(),
         row.dialogue.clone(),
         row.prompt_text.clone(),
+        format!("{:?}", row.prompt_text_compilation_status),
+        row.prompt_text_compilation_warnings
+            .iter()
+            .map(|warning| warning.code.as_str())
+            .collect::<Vec<_>>()
+            .join("|"),
+        row.prompt_text_source_row_id.clone(),
         row.duration_seconds.to_string(),
     ]
 }
@@ -669,8 +680,8 @@ mod tests {
     use std::fs;
 
     use core_domain::{
-        PromptBodyCandidate, ScenePerformanceProjection, SequenceFieldState, SequenceGrouping,
-        StructureMode,
+        ProductWarning, PromptBodyCandidate, PromptTextCompilationStatus,
+        ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, StructureMode,
     };
     use serde_json::json;
 
@@ -783,7 +794,14 @@ mod tests {
                 visual_description: "Two leads hold a restrained dialogue beat.".to_string(),
                 character_action: "One lead answers with a quiet nod.".to_string(),
                 dialogue: "We move before dawn.".to_string(),
-                prompt_text: String::new(),
+                prompt_text: "鏅ご鎻愮ず璇?Seedance2.0 stub".to_string(),
+                prompt_text_compilation_status: PromptTextCompilationStatus::ReadyStub,
+                prompt_text_compilation_warnings: vec![ProductWarning {
+                    code: "seedance_prompt_text_stub".to_string(),
+                    message: "prompt_text is compiled by deterministic stub".to_string(),
+                    related_sample_id: Some("GS-BRIDGE-001".to_string()),
+                }],
+                prompt_text_source_row_id: "GS-BRIDGE-001".to_string(),
                 duration_seconds: 8,
                 prompt_body_candidate: PromptBodyCandidate {
                     source_sample_id: "GS-BRIDGE-001".to_string(),
@@ -842,6 +860,8 @@ mod tests {
             fs::read_to_string(&json_artifact.path).expect("json artifact should be readable");
 
         assert!(json_text.contains("Bridge dialogue sample"));
+        assert!(json_text.contains("ReadyStub"));
+        assert!(json_text.contains("seedance_prompt_text_stub"));
         assert!(!json_text.contains("raw prompt body should stay out of prompt_text"));
     }
 }

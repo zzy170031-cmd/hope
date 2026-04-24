@@ -8,10 +8,10 @@ use core_domain::{
     ExportBundleRequest, ExportBundleResponse, ExternalReferenceHandleCandidate,
     GenerateStoryboardRequest, GenerateStoryboardResponse, GeneratedStoryboardRow,
     GoldenSampleLibraryRecord, ProductWarning, PromptBodyCandidate, PromptTextCompilationRequest,
-    PromptTextCompilationResponse, PromptTextCompilationRow, ScenePerformanceProjection,
-    SequenceFieldState, SequenceGrouping, StoryboardDurationPlan, StoryboardExportStatus,
-    StructureMode, TextGenerationOutputSchema, TextGenerationRequest, TextGenerationResponse,
-    TextGenerationTask, TextModelProvider, TextModelProviderKind,
+    PromptTextCompilationResponse, PromptTextCompilationRow, PromptTextCompilationStatus,
+    ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, StoryboardDurationPlan,
+    StoryboardExportStatus, StructureMode, TextGenerationOutputSchema, TextGenerationRequest,
+    TextGenerationResponse, TextGenerationTask, TextModelProvider, TextModelProviderKind,
 };
 use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
@@ -189,7 +189,10 @@ pub fn generate_storyboard(
             visual_description: scene_projection.visual_description.clone(),
             character_action: scene_projection.character_action.clone(),
             dialogue: String::new(),
-            prompt_text: prompt_compilation.prompt_text,
+            prompt_text: prompt_compilation.prompt_text.clone(),
+            prompt_text_compilation_status: prompt_compilation.compilation_status,
+            prompt_text_compilation_warnings: prompt_compilation.warnings.clone(),
+            prompt_text_source_row_id: prompt_compilation.source_row_id.clone(),
             duration_seconds: per_row_seconds,
             prompt_body_candidate: prompt_candidate,
             scene_performance_projection: scene_projection.clone(),
@@ -515,6 +518,21 @@ fn build_prompt_text_compilation_request(
     scene_projection: &ScenePerformanceProjection,
     duration_seconds: u16,
 ) -> PromptTextCompilationRequest {
+    let scene_type = record.source_fields.scene_category.clone();
+    let scene_label = record
+        .classification
+        .scene_tags
+        .first()
+        .cloned()
+        .unwrap_or_else(|| record.source_fields.scene_tag.clone());
+    let kb_context_summary = format!(
+        "sample_id={}; scene_category={}; style_cluster={}; sample_type={}",
+        record.sample_id,
+        record.source_fields.scene_category,
+        record.source_fields.style_cluster,
+        record.source_fields.sample_type
+    );
+
     PromptTextCompilationRequest {
         row: PromptTextCompilationRow {
             shot_id: record.source_fields.shot_id.clone(),
@@ -525,6 +543,9 @@ fn build_prompt_text_compilation_request(
             dialogue: String::new(),
             duration_seconds,
         },
+        scene_type,
+        scene_label,
+        kb_context_summary,
         selected_kb_rules: vec![],
         continuity_negative_core: record.source_fields.continuity_negative_core.clone(),
         target_profile: "seedance2.0".to_string(),
@@ -539,10 +560,13 @@ fn compile_seedance_prompt_text(
     let provider = default_text_model_provider();
     let generation_request = build_text_generation_request(
         TextGenerationTask::CompileSeedancePromptText,
-        Some(request.row.shot_title.clone()),
+        Some(request.scene_type.clone()),
         format!(
-            "{} | {} | {}",
-            request.row.shot_title, request.row.visual_description, request.row.character_action
+            "{} | {} | {} | {}",
+            request.scene_label,
+            request.row.shot_title,
+            request.row.visual_description,
+            request.row.character_action
         ),
         Some(StoryboardDurationPlan {
             total_duration_seconds: request.row.duration_seconds,
@@ -550,7 +574,7 @@ fn compile_seedance_prompt_text(
             per_row_seconds: request.row.duration_seconds,
             allocated_seconds: request.row.duration_seconds,
         }),
-        build_kb_context_summary(&request),
+        request.kb_context_summary.clone(),
         vec![request.row.shot_id.clone()],
         TextGenerationOutputSchema::SeedancePromptText,
         Some(220),
@@ -558,6 +582,8 @@ fn compile_seedance_prompt_text(
     let stub_response = run_text_generation_stub(&provider, &generation_request);
 
     let mut prompt_sections = vec![
+        format!("场景类型：{}", request.scene_type),
+        format!("场景标签：{}", request.scene_label),
         format!("镜头标题：{}", request.row.shot_title),
         format!("景别：{}", request.row.scene_scale),
         format!("画面描述：{}", request.row.visual_description),
@@ -570,6 +596,7 @@ fn compile_seedance_prompt_text(
     if !request.selected_kb_rules.is_empty() {
         prompt_sections.push(format!("KB摘要：{}", request.selected_kb_rules.join("；")));
     }
+    prompt_sections.push(format!("KB上下文：{}", request.kb_context_summary));
     if !request.continuity_negative_core.trim().is_empty() {
         prompt_sections.push(format!(
             "连续性约束：{}",
@@ -597,6 +624,8 @@ fn compile_seedance_prompt_text(
     PromptTextCompilationResponse {
         prompt_text: prompt_sections.join("；"),
         target_profile: request.target_profile,
+        compilation_status: PromptTextCompilationStatus::ReadyStub,
+        source_row_id: request.row.shot_id,
         warnings,
         provider: stub_response.provider,
         model: stub_response.model,
@@ -645,22 +674,6 @@ fn select_prompt_compilation_rules(
         .take(3)
         .collect()
 }
-
-fn build_kb_context_summary(request: &PromptTextCompilationRequest) -> String {
-    let mut segments = vec![
-        format!("shot={}", request.row.shot_id),
-        format!("target={}", request.target_profile),
-    ];
-    if !request.selected_kb_rules.is_empty() {
-        segments.push(format!("rules={}", request.selected_kb_rules.join("|")));
-    }
-    segments.push(format!(
-        "continuity={}",
-        request.continuity_negative_core.trim()
-    ));
-    segments.join("; ")
-}
-
 fn project_prompt_body_candidate(record: &GoldenSampleLibraryRecord) -> PromptBodyCandidate {
     let blocked = validators::contains_placeholder_marker(&record.source_fields.prompt_body)
         || record.validator_evidence.has_placeholder_signal;
@@ -961,7 +974,8 @@ mod tests {
         GoldenSampleSourceRegisterEntry, GoldenSampleSourceRegisterProvenance,
         GoldenSampleV3CoreCoverage, GoldenSampleValidatorEvidence, KbBundleManifestRecord,
         KbBundleRecordCounts, KbGoldenSampleRuntimePackage, KbRuntimeSummary, KbSnapshotRecord,
-        PromptTemplateRecord, SceneTaxonomyRecord, TextModelProviderKind,
+        PromptTemplateRecord, PromptTextCompilationStatus, SceneTaxonomyRecord,
+        TextModelProviderKind,
     };
     use project_store::{
         DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeHandle, StoreSkeleton,
@@ -969,8 +983,8 @@ mod tests {
 
     use super::{
         StoryboardPreviewPlanRequest, ValidationExportPanelSnapshotRequest,
-        ValidationExportPanelState, build_storyboard_preview_plan,
-        build_prompt_text_compilation_request, build_validation_export_panel_snapshot_from_fixture,
+        ValidationExportPanelState, build_prompt_text_compilation_request,
+        build_storyboard_preview_plan, build_validation_export_panel_snapshot_from_fixture,
         compile_seedance_prompt_text, default_text_model_provider, expand_script, export_bundle,
         generate_storyboard, project_scene_performance, resolve_scene_taxonomy,
         select_golden_sample_records,
@@ -1562,6 +1576,11 @@ mod tests {
         );
 
         assert_eq!(response.target_profile, "seedance2.0");
+        assert_eq!(
+            response.compilation_status,
+            PromptTextCompilationStatus::ReadyStub
+        );
+        assert_eq!(response.source_row_id, "GS-BRIDGE-01");
         assert_eq!(response.provider, TextModelProviderKind::Qwen);
         assert_eq!(response.model, "qwen-default-text");
         assert!(response.prompt_text.contains("镜头标题"));
@@ -1627,6 +1646,11 @@ mod tests {
         assert_eq!(state.kb_runtime.summary.golden_sample_record_count, 152);
         assert_eq!(storyboard.rows.len(), 1);
         assert_eq!(storyboard.rows[0].shot_id, "GS-BRIDGE-01");
+        assert_eq!(
+            storyboard.rows[0].prompt_text_compilation_status,
+            PromptTextCompilationStatus::ReadyStub
+        );
+        assert_eq!(storyboard.rows[0].prompt_text_source_row_id, "GS-BRIDGE-01");
         assert!(
             storyboard.rows[0]
                 .prompt_text
@@ -1695,6 +1719,12 @@ mod tests {
                 .iter()
                 .any(|warning| warning.code == "seedance_video_generation_closed")
         );
+        assert!(
+            storyboard.rows[0]
+                .prompt_text_compilation_warnings
+                .iter()
+                .any(|warning| warning.code == "text_model_live_call_closed")
+        );
 
         let export = export_bundle(
             &state,
@@ -1736,6 +1766,8 @@ mod tests {
             .expect("json artifact should be present");
         let json_text = fs::read_to_string(json_artifact.artifact_path.as_ref().unwrap())
             .expect("json artifact should be readable");
+        assert!(json_text.contains("ReadyStub"));
+        assert!(json_text.contains("text_model_live_call_closed"));
         assert!(json_text.contains("分镜提示词"));
         assert!(!json_text.contains("Compose a restrained dialogue shot with stable eyeline."));
     }
