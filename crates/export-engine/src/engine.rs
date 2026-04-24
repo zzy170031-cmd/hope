@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use core_domain::Exporter;
+use core_domain::{Exporter, GeneratedStoryboardRow};
 use serde_json::{Map, Value};
 
 use crate::contract::CANONICAL_WORKBOOK_CONTRACT;
@@ -17,6 +17,19 @@ pub const WEEK3_EXPORT_JSON_PATH: &str =
     r"E:\codex\hope\contracts\fixtures\exports\week3-export.json";
 pub const WEEK3_EXPORT_MARKDOWN_PATH: &str =
     r"E:\codex\hope\contracts\fixtures\exports\week3-export.md";
+pub const V120_STORYBOARD_EXPORT_DIR: &str = r"E:\codex\hope\exports\v120";
+pub const V120_STORYBOARD_SHEET_MACHINE_NAME: &str = "v120_storyboard_rows";
+pub const V120_STORYBOARD_COLUMNS: &[&str] = &[
+    "序号",
+    "人物",
+    "镜头",
+    "景别",
+    "画面描述",
+    "角色动作",
+    "对白/旁白",
+    "分镜提示词",
+    "时长(秒)",
+];
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ExportRequest;
@@ -42,6 +55,29 @@ pub struct ExportBundle {
     pub excel_path: PathBuf,
     pub json_path: PathBuf,
     pub markdown_path: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct V120StoryboardExportRequest {
+    pub export_manifest_id: String,
+    pub result_id: String,
+    pub rows: Vec<GeneratedStoryboardRow>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct V120StoryboardExportArtifact {
+    pub artifact_kind: &'static str,
+    pub export_format: &'static str,
+    pub path: PathBuf,
+    pub byte_size: u64,
+    pub content_hash: String,
+    pub row_count: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct V120StoryboardExportBundle {
+    pub workbook: WorkbookManifest,
+    pub artifacts: Vec<V120StoryboardExportArtifact>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,6 +116,18 @@ impl ExportEngine {
             markdown_path: PathBuf::from(WEEK3_EXPORT_MARKDOWN_PATH),
         })
     }
+
+    pub fn export_v120_storyboard(
+        request: &V120StoryboardExportRequest,
+    ) -> Result<V120StoryboardExportBundle, ExportError> {
+        let workbook = build_v120_storyboard_workbook(request);
+        let artifacts = write_v120_storyboard_export_files(request, &workbook)?;
+
+        Ok(V120StoryboardExportBundle {
+            workbook,
+            artifacts,
+        })
+    }
 }
 
 pub fn fixed_export_request() -> ExportRequest {
@@ -88,6 +136,12 @@ pub fn fixed_export_request() -> ExportRequest {
 
 pub fn export_week3_from_fixtures() -> Result<ExportBundle, ExportError> {
     ExportEngine::export_from_fixtures()
+}
+
+pub fn export_v120_storyboard_bundle(
+    request: &V120StoryboardExportRequest,
+) -> Result<V120StoryboardExportBundle, ExportError> {
+    ExportEngine::export_v120_storyboard(request)
 }
 
 impl Exporter for ExportEngine {
@@ -159,6 +213,121 @@ fn write_export_files(workbook: &WorkbookManifest) -> Result<(), ExportError> {
     })?;
 
     Ok(())
+}
+
+fn build_v120_storyboard_workbook(request: &V120StoryboardExportRequest) -> WorkbookManifest {
+    let rows = request.rows.iter().map(v120_storyboard_row_cells).collect();
+    WorkbookManifest {
+        workbook_machine_name: "v120_storyboard_export_bundle",
+        workbook_chinese_name: "V120 Storyboard Export Bundle",
+        sheets: vec![WorkbookSheetManifest {
+            machine_name: V120_STORYBOARD_SHEET_MACHINE_NAME,
+            chinese_name: "V120 Storyboard Rows",
+            columns: V120_STORYBOARD_COLUMNS.to_vec(),
+            rows,
+        }],
+    }
+}
+
+fn v120_storyboard_row_cells(row: &GeneratedStoryboardRow) -> Vec<String> {
+    vec![
+        row.order.to_string(),
+        row.person.clone(),
+        row.shot_title.clone(),
+        row.scene_scale.clone(),
+        row.visual_description.clone(),
+        row.character_action.clone(),
+        row.dialogue.clone(),
+        row.prompt_text.clone(),
+        row.duration_seconds.to_string(),
+    ]
+}
+
+fn write_v120_storyboard_export_files(
+    request: &V120StoryboardExportRequest,
+    workbook: &WorkbookManifest,
+) -> Result<Vec<V120StoryboardExportArtifact>, ExportError> {
+    fs::create_dir_all(V120_STORYBOARD_EXPORT_DIR).map_err(|error| ExportError::Io {
+        path: V120_STORYBOARD_EXPORT_DIR,
+        message: error.to_string(),
+    })?;
+
+    let file_stem = sanitize_file_stem(&request.export_manifest_id);
+    let output_dir = PathBuf::from(V120_STORYBOARD_EXPORT_DIR);
+    let json_path = output_dir.join(format!("{file_stem}.json"));
+    let csv_path = output_dir.join(format!("{file_stem}.csv"));
+    let xlsx_path = output_dir.join(format!("{file_stem}.xlsx"));
+    let row_count = request.rows.len() as u32;
+
+    let sheet = workbook
+        .sheets
+        .iter()
+        .find(|sheet| sheet.machine_name == V120_STORYBOARD_SHEET_MACHINE_NAME)
+        .expect("v120 storyboard workbook must include storyboard row sheet");
+
+    let json_bytes = render_json(workbook).into_bytes();
+    let csv_bytes = render_csv(sheet).into_bytes();
+    let xlsx_bytes = render_xlsx(workbook);
+
+    let mut artifacts = Vec::new();
+    artifacts.push(write_v120_export_artifact(
+        "storyboard_json",
+        "json",
+        json_path,
+        json_bytes,
+        row_count,
+    )?);
+    artifacts.push(write_v120_export_artifact(
+        "storyboard_csv",
+        "csv",
+        csv_path,
+        csv_bytes,
+        row_count,
+    )?);
+    artifacts.push(write_v120_export_artifact(
+        "excel_workbook",
+        "xlsx",
+        xlsx_path,
+        xlsx_bytes,
+        row_count,
+    )?);
+
+    Ok(artifacts)
+}
+
+fn write_v120_export_artifact(
+    artifact_kind: &'static str,
+    export_format: &'static str,
+    path: PathBuf,
+    bytes: Vec<u8>,
+    row_count: u32,
+) -> Result<V120StoryboardExportArtifact, ExportError> {
+    fs::write(&path, &bytes).map_err(|error| ExportError::Io {
+        path: V120_STORYBOARD_EXPORT_DIR,
+        message: format!("{}: {}", path.display(), error),
+    })?;
+
+    Ok(V120StoryboardExportArtifact {
+        artifact_kind,
+        export_format,
+        path,
+        byte_size: bytes.len() as u64,
+        content_hash: format!("crc32:{:08x}", crc32(&bytes)),
+        row_count,
+    })
+}
+
+fn sanitize_file_stem(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        .collect::<String>();
+
+    if sanitized.is_empty() {
+        "v120-storyboard-export".to_string()
+    } else {
+        sanitized
+    }
 }
 
 fn read_json(path: &'static str) -> Result<Value, ExportError> {
@@ -658,6 +827,41 @@ fn render_markdown(workbook: &WorkbookManifest) -> String {
     }
 
     markdown
+}
+
+fn render_csv(sheet: &WorkbookSheetManifest) -> String {
+    let mut csv = String::new();
+    csv.push_str(&render_csv_row(
+        &sheet
+            .columns
+            .iter()
+            .map(|column| (*column).to_string())
+            .collect::<Vec<_>>(),
+    ));
+    csv.push('\n');
+
+    for row in &sheet.rows {
+        csv.push_str(&render_csv_row(row));
+        csv.push('\n');
+    }
+
+    csv
+}
+
+fn render_csv_row(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| escape_csv(value))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn escape_csv(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
 }
 
 fn render_xlsx(workbook: &WorkbookManifest) -> Vec<u8> {

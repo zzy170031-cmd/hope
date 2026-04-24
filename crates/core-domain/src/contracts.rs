@@ -227,10 +227,15 @@ pub struct ExportArtifactRecord {
     pub export_format: String,
     pub ready: bool,
     pub blocked_reason: Option<String>,
+    pub artifact_path: Option<String>,
+    pub content_hash: Option<String>,
+    pub byte_size: Option<u64>,
+    pub row_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExportBundleResponse {
     pub export_manifest_id: String,
+    pub export_status: StoryboardExportStatus,
     pub artifacts: Vec<ExportArtifactRecord>,
 }

@@ -11,6 +11,7 @@ use core_domain::{
     SequenceFieldState, SequenceGrouping, StoryboardDurationPlan, StoryboardExportStatus,
     StructureMode,
 };
+use export_engine::{export_v120_storyboard_bundle, V120StoryboardExportRequest};
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
 use validators::{
     generate_week3_repair_recommendations, generate_week3_validation_report,
@@ -261,29 +262,135 @@ pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBu
         "export-manifest-{}",
         &stable_hash_hex(&format!("{}\n{}", request.result_id, request.export_format))[..12]
     );
-    let storyboard = state.find_storyboard(&request.result_id);
+
+    let Some(storyboard) = state.find_storyboard(&request.result_id) else {
+        return ExportBundleResponse {
+            export_manifest_id: export_manifest_id.clone(),
+            export_status: StoryboardExportStatus {
+                status: BridgeCallStatus::Blocked,
+                blockers: vec![ProductWarning {
+                    code: "storyboard_result_not_found".to_string(),
+                    message: "export_bundle requires a previously generated storyboard result_id."
+                        .to_string(),
+                    related_sample_id: None,
+                }],
+                warnings: vec![],
+                ready_row_count: 0,
+                blocked_row_count: 0,
+            },
+            artifacts: blocked_export_artifacts(
+                &export_manifest_id,
+                &request.export_format,
+                "storyboard_result_not_found",
+            ),
+        };
+    };
+
+    let mut export_status = storyboard.export_status.clone();
     let mut artifacts = vec![ExportArtifactRecord {
         artifact_id: format!("{}-bridge-manifest", export_manifest_id),
         artifact_kind: "v120_bridge_manifest".to_string(),
         export_format: request.export_format.clone(),
-        ready: storyboard.is_some(),
-        blocked_reason: storyboard
-            .is_none()
-            .then(|| "storyboard_result_not_found".to_string()),
+        ready: true,
+        blocked_reason: None,
+        artifact_path: None,
+        content_hash: None,
+        byte_size: None,
+        row_count: Some(storyboard.rows.len() as u32),
     }];
 
-    artifacts.push(ExportArtifactRecord {
-        artifact_id: format!("{}-workbook", export_manifest_id),
-        artifact_kind: "excel_workbook".to_string(),
-        export_format: request.export_format,
-        ready: false,
-        blocked_reason: Some("excel_exporter_gate_closed".to_string()),
-    });
+    match export_v120_storyboard_bundle(&V120StoryboardExportRequest {
+        export_manifest_id: export_manifest_id.clone(),
+        result_id: request.result_id,
+        rows: storyboard.rows,
+    }) {
+        Ok(bundle) => {
+            artifacts.extend(
+                bundle
+                    .artifacts
+                    .into_iter()
+                    .map(|artifact| ExportArtifactRecord {
+                        artifact_id: format!("{}-{}", export_manifest_id, artifact.artifact_kind),
+                        artifact_kind: artifact.artifact_kind.to_string(),
+                        export_format: artifact.export_format.to_string(),
+                        ready: true,
+                        blocked_reason: None,
+                        artifact_path: Some(artifact.path.display().to_string()),
+                        content_hash: Some(artifact.content_hash),
+                        byte_size: Some(artifact.byte_size),
+                        row_count: Some(artifact.row_count),
+                    }),
+            );
+        }
+        Err(error) => {
+            let reason = format!("v120_export_engine_error: {error:?}");
+            export_status.status = BridgeCallStatus::Blocked;
+            export_status.blockers.push(ProductWarning {
+                code: "v120_export_artifact_generation_failed".to_string(),
+                message: reason.clone(),
+                related_sample_id: None,
+            });
+            artifacts.extend(blocked_storyboard_export_artifacts(
+                &export_manifest_id,
+                "v120_export_artifact_generation_failed",
+            ));
+        }
+    }
 
     ExportBundleResponse {
         export_manifest_id,
+        export_status,
         artifacts,
     }
+}
+
+fn blocked_export_artifacts(
+    export_manifest_id: &str,
+    requested_format: &str,
+    blocked_reason: &str,
+) -> Vec<ExportArtifactRecord> {
+    let mut artifacts = vec![ExportArtifactRecord {
+        artifact_id: format!("{}-bridge-manifest", export_manifest_id),
+        artifact_kind: "v120_bridge_manifest".to_string(),
+        export_format: requested_format.to_string(),
+        ready: false,
+        blocked_reason: Some(blocked_reason.to_string()),
+        artifact_path: None,
+        content_hash: None,
+        byte_size: None,
+        row_count: None,
+    }];
+    artifacts.extend(blocked_storyboard_export_artifacts(
+        export_manifest_id,
+        blocked_reason,
+    ));
+    artifacts
+}
+
+fn blocked_storyboard_export_artifacts(
+    export_manifest_id: &str,
+    blocked_reason: &str,
+) -> Vec<ExportArtifactRecord> {
+    ["storyboard_json", "storyboard_csv", "excel_workbook"]
+        .into_iter()
+        .map(|artifact_kind| ExportArtifactRecord {
+            artifact_id: format!("{}-{}", export_manifest_id, artifact_kind),
+            artifact_kind: artifact_kind.to_string(),
+            export_format: match artifact_kind {
+                "storyboard_json" => "json",
+                "storyboard_csv" => "csv",
+                "excel_workbook" => "xlsx",
+                _ => "unknown",
+            }
+            .to_string(),
+            ready: false,
+            blocked_reason: Some(blocked_reason.to_string()),
+            artifact_path: None,
+            content_hash: None,
+            byte_size: None,
+            row_count: None,
+        })
+        .collect()
 }
 
 fn select_golden_sample_records<'a>(
@@ -421,6 +528,9 @@ fn extract_reference_tokens(value: &str) -> Vec<(String, String, Option<String>)
             continue;
         }
         let reference_name = chars[start..index].iter().collect::<String>();
+        if start > 0 && matches!(chars[start - 1], '/' | '\\' | ':') {
+            continue;
+        }
         if looks_like_path_or_url(&reference_name) {
             continue;
         }
@@ -612,6 +722,7 @@ fn map_repair_recommendation(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::fs;
 
     use core_domain::{
         BridgeCallStatus, ExpandScriptRequest, ExportBundleRequest, FailurePatternRecord,
@@ -777,7 +888,7 @@ mod tests {
                 camera_directing_core: "Hold a stable medium close composition.".to_string(),
                 audio_directing_core: "Room tone and breath stay low.".to_string(),
                 continuity_negative_core: "Do not drift eyeline or prop handoff.".to_string(),
-                reference_bundle: "scene_room(layout,strong) char_lead(face,reference)".to_string(),
+                reference_bundle: "scene_room(layout,strong) char_lead(face,reference) plate_url(url,strong) plate_uri(uri,strong) plate_media(media,strong) plate_asset(asset,strong) plate_file(file,strong) C:/refs/chair(layout,strong)".to_string(),
                 ip_abstraction_note: "abstracted".to_string(),
                 covered_points: "dialogue / eyeline".to_string(),
                 missed_points: String::new(),
@@ -1112,6 +1223,26 @@ mod tests {
             .external_reference_handle_candidates
             .iter()
             .any(|candidate| candidate.reference_name == "scene_room"));
+        assert!(storyboard.rows[0]
+            .external_reference_handle_candidates
+            .iter()
+            .all(|candidate| !matches!(
+                candidate.reference_kind.as_str(),
+                "path" | "url" | "uri" | "media" | "asset" | "file"
+            )));
+        for forbidden_name in [
+            "plate_url",
+            "plate_uri",
+            "plate_media",
+            "plate_asset",
+            "plate_file",
+            "chair",
+        ] {
+            assert!(storyboard.rows[0]
+                .external_reference_handle_candidates
+                .iter()
+                .all(|candidate| candidate.reference_name != forbidden_name));
+        }
         assert_eq!(
             storyboard.export_status.status,
             BridgeCallStatus::WarningOnly
@@ -1125,14 +1256,64 @@ mod tests {
             },
         );
 
-        assert_eq!(export.artifacts.len(), 2);
+        assert_eq!(export.export_status.status, BridgeCallStatus::WarningOnly);
+        assert_eq!(export.artifacts.len(), 4);
         assert!(export
             .artifacts
             .iter()
             .any(|artifact| artifact.artifact_kind == "v120_bridge_manifest" && artifact.ready));
-        assert!(export.artifacts.iter().any(
-            |artifact| artifact.blocked_reason.as_deref() == Some("excel_exporter_gate_closed")
-        ));
+        for artifact_kind in ["storyboard_json", "storyboard_csv", "excel_workbook"] {
+            let artifact = export
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.artifact_kind == artifact_kind)
+                .expect("storyboard export artifact should be present");
+            assert!(artifact.ready, "{artifact_kind} should be ready");
+            assert!(artifact.blocked_reason.is_none());
+            assert_eq!(artifact.row_count, Some(1));
+            assert!(artifact.byte_size.unwrap_or_default() > 0);
+            let path = artifact
+                .artifact_path
+                .as_deref()
+                .expect("ready artifact should expose a file path");
+            assert!(std::path::Path::new(path).is_file());
+        }
+
+        let json_artifact = export
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.artifact_kind == "storyboard_json")
+            .expect("json artifact should be present");
+        let json_text = fs::read_to_string(json_artifact.artifact_path.as_ref().unwrap())
+            .expect("json artifact should be readable");
+        assert!(json_text.contains("分镜提示词"));
+        assert!(!json_text.contains("Compose a restrained dialogue shot with stable eyeline."));
+    }
+
+    #[test]
+    fn export_bundle_missing_storyboard_result_stays_blocked() {
+        let state = test_state();
+
+        let export = export_bundle(
+            &state,
+            ExportBundleRequest {
+                result_id: "storyboard-missing".to_string(),
+                export_format: "xlsx".to_string(),
+            },
+        );
+
+        assert_eq!(export.export_status.status, BridgeCallStatus::Blocked);
+        assert!(export
+            .export_status
+            .blockers
+            .iter()
+            .any(|blocker| blocker.code == "storyboard_result_not_found"));
+        assert!(export.artifacts.iter().all(|artifact| !artifact.ready));
+        assert!(export
+            .artifacts
+            .iter()
+            .all(|artifact| artifact.blocked_reason.as_deref()
+                == Some("storyboard_result_not_found")));
     }
 
     #[test]
