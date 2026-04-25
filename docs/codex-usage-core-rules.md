@@ -181,3 +181,33 @@ Rules:
   `Hope契约层-StoryboardShotGroundingContract【镜头强绑定与自适应场景契约】`.
 - Use `Hope桌面端-【等待主线镜头适配契约】` instead of
   `Hope桌面端-ShotIntentAdaptiveUI【等待主线镜头适配契约】`.
+
+## Controller / Worker Directive Label Rule
+
+All cross-thread copy-ready `text` blocks must declare their role and target.
+
+When the controller sends instructions to a worker thread, the block must start
+with:
+
+```text
+分线程指令：
+目标线程：<target worker thread>
+```
+
+When a worker thread reports back to the controller, the block must start with:
+
+```text
+总控回报：
+目标线程：总控线程
+来源线程：<reporting worker thread>
+```
+
+Rules:
+
+- Controller recaps remain separate and use `总控复盘：`.
+- Worker instructions use `分线程指令：`, not generic labels such as
+  `给某线程的指令`.
+- Worker reports use `总控回报：`, not generic labels such as `回报` alone.
+- The `目标线程：` line is mandatory in both instruction and report blocks.
+- If a controller response contains both recap and worker instructions, keep
+  them in separate `text` blocks.
