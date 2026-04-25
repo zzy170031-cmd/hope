@@ -537,14 +537,21 @@ function normalizeExpandScriptResponse(raw: unknown): ExpandScriptResponse {
 
 function normalizeGeneratedStoryboardRow(raw: unknown): GeneratedStoryboardRow {
   const row = readObject(raw, "generated storyboard row");
-  const promptBodyCandidate = readObject(
-    row.prompt_body_candidate ?? row.promptBodyCandidate ?? {},
-    "prompt body candidate",
-  );
 
   return {
     shot_id: String(row.shot_id ?? row.shotId ?? ""),
     order: Number(row.order ?? 0),
+    shot_script: String(row.shot_script ?? row.shotScript ?? ""),
+    primary_scene_type: String(row.primary_scene_type ?? row.primarySceneType ?? ""),
+    primary_scene_label: String(row.primary_scene_label ?? row.primarySceneLabel ?? ""),
+    primary_scene_category: String(row.primary_scene_category ?? row.primarySceneCategory ?? ""),
+    shot_scene_type: String(row.shot_scene_type ?? row.shotSceneType ?? ""),
+    shot_scene_label: String(row.shot_scene_label ?? row.shotSceneLabel ?? ""),
+    shot_intent: String(row.shot_intent ?? row.shotIntent ?? ""),
+    adaptation_reason: String(row.adaptation_reason ?? row.adaptationReason ?? ""),
+    grounding_source: String(
+      row.grounding_source ?? row.groundingSource ?? "expanded_script_text",
+    ) as GeneratedStoryboardRow["grounding_source"],
     person: String(row.person ?? ""),
     shot_title: String(row.shot_title ?? row.shotTitle ?? ""),
     scene_scale: String(row.scene_scale ?? row.sceneScale ?? ""),
@@ -562,24 +569,14 @@ function normalizeGeneratedStoryboardRow(raw: unknown): GeneratedStoryboardRow {
       row.prompt_text_source_row_id ?? row.promptTextSourceRowId ?? "",
     ),
     duration_seconds: Number(row.duration_seconds ?? row.durationSeconds ?? 0),
-    prompt_body_candidate: {
-      source_sample_id: String(
-        promptBodyCandidate.source_sample_id ?? promptBodyCandidate.sourceSampleId ?? "",
-      ),
-      source_prompt_body: String(
-        promptBodyCandidate.source_prompt_body ?? promptBodyCandidate.sourcePromptBody ?? "",
-      ),
-      candidate_text:
-        (promptBodyCandidate.candidate_text ?? promptBodyCandidate.candidateText ?? null) as
-          | string
-          | null,
-      blocked: Boolean(promptBodyCandidate.blocked),
-      blocker_codes: Array.isArray(promptBodyCandidate.blocker_codes)
-        ? promptBodyCandidate.blocker_codes.map(String)
-        : Array.isArray(promptBodyCandidate.blockerCodes)
-          ? promptBodyCandidate.blockerCodes.map(String)
-          : [],
-    },
+    scene_performance_projection:
+      row.scene_performance_projection ?? row.scenePerformanceProjection ?? {},
+    external_reference_handle_candidates: Array.isArray(row.external_reference_handle_candidates)
+      ? row.external_reference_handle_candidates
+      : Array.isArray(row.externalReferenceHandleCandidates)
+        ? row.externalReferenceHandleCandidates
+        : [],
+    sequence_grouping: row.sequence_grouping ?? row.sequenceGrouping ?? {},
   };
 }
 

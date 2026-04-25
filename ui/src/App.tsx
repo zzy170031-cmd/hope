@@ -360,6 +360,7 @@ export function App() {
     [modelConfig, modelProviderStatus],
   );
   const activeKbRouterResult = storyboardResult?.kb_router_result ?? expandedScriptResult?.kb_router_result ?? null;
+  const shotGroundingSummary = useMemo(() => buildShotGroundingSummary(rows), [rows]);
 
   const confirmDiscardDirty = (actionLabel: string) => {
     if (!rowsDirty) {
@@ -969,6 +970,17 @@ export function App() {
         scene_type: taskSceneOption.value,
         scene_label: currentSceneTask?.sourceSceneLabel ?? taskSceneOption.label,
         scene_category: currentSceneTask?.sourceSceneCategory ?? taskSceneOption.group,
+        shot_script: source,
+        primary_scene_type: taskSceneOption.value,
+        primary_scene_label: currentSceneTask?.sourceSceneLabel ?? taskSceneOption.label,
+        primary_scene_category: currentSceneTask?.sourceSceneCategory ?? taskSceneOption.group,
+        shot_scene_type: currentSceneTask?.sourceSceneType ?? taskSceneOption.value,
+        shot_scene_label: currentSceneTask?.sourceSceneLabel ?? taskSceneOption.label,
+        shot_intent: taskSegmentTitle || taskName,
+        adaptation_reason:
+          currentSceneTask?.sourceSceneType && currentSceneTask.sourceSceneType !== taskSceneOption.value
+            ? "镜头任务使用用户选择的局部场景方向。"
+            : null,
         expanded_script_text: source,
         selected_total_duration_seconds: taskDurationSeconds,
         model_config_summary: modelConfigSummary,
@@ -1631,6 +1643,21 @@ qwen_request: {
               />
             ) : null}
 
+            {rows.length ? (
+              <div className="grounding-note">
+                当前人物/动作若显示为占位文案，表示桌面端仅做显示层产品化；主线仍需补全人物/动作 grounding。
+              </div>
+            ) : null}
+
+            {shotGroundingSummary ? (
+              <div className="grounding-note grounding-note--details">
+                <strong>镜头强绑定</strong>
+                <span>镜头意图：{shotGroundingSummary.intent}</span>
+                <span>局部场景：{shotGroundingSummary.scene}</span>
+                <span>适配说明：{shotGroundingSummary.reason}</span>
+              </div>
+            ) : null}
+
             <div className="table-wrapper">
               <table className="storyboard-table">
                 <thead>
@@ -1652,9 +1679,21 @@ qwen_request: {
                     pagedRows.map((row) => (
                       <tr key={row.id}>
                         <td>{row.order}</td>
-                        <td>{row.person}</td>
-                        <td>{row.shot}</td>
-                        <td>{row.sceneScale}</td>
+                        <td>
+                          <span className="table-compact-text" title={formatInternalPlaceholder(row.person)}>
+                            {formatInternalPlaceholder(row.person)}
+                          </span>
+                        </td>
+                        <td>
+                          <span className="table-compact-text" title={formatInternalPlaceholder(row.shot)}>
+                            {formatInternalPlaceholder(row.shot)}
+                          </span>
+                        </td>
+                        <td>
+                          <span className="table-compact-text" title={row.sceneScale}>
+                            {row.sceneScale}
+                          </span>
+                        </td>
                         <td>
                           <LongTextCell
                             label="画面描述"
@@ -1683,7 +1722,11 @@ qwen_request: {
                             onOpen={() => openStoryboardCellDialog(row, "prompt", "分镜提示词")}
                           />
                         </td>
-                        <td>{row.durationSeconds}</td>
+                        <td>
+                          <span className="table-compact-text" title={`${row.durationSeconds}`}>
+                            {row.durationSeconds}
+                          </span>
+                        </td>
                         <td>
                           <div className="row-actions">
                             <button type="button" className="link-button" onClick={() => openStoryboardEditDialog(row)}>
@@ -2345,19 +2388,67 @@ function truncatePreview(text: string, maxLength = 96) {
   return cleanText.length > maxLength ? `${cleanText.slice(0, maxLength)}...` : cleanText;
 }
 
+function formatInternalPlaceholder(value: string) {
+  const cleanValue = value.trim();
+  const dictionary: Record<string, string> = {
+    not_specified: "未指定角色",
+    not_specified_by_v120_bridge: "未指定角色",
+    visual_scene_core: "场景视觉核心",
+    fused_scene_performance_core_preserved: "保持表演连续性",
+  };
+
+  if (dictionary[cleanValue]) {
+    return dictionary[cleanValue];
+  }
+
+  return cleanValue
+    .replace(/\bnot_specified_by_v120_bridge\b/g, "未指定角色")
+    .replace(/\bnot_specified\b/g, "未指定角色")
+    .replace(/\bvisual_scene_core\b/g, "场景视觉核心")
+    .replace(/\bfused_scene_performance_core_preserved\b/g, "保持表演连续性");
+}
+
+function buildShotGroundingSummary(rows: StoryboardWorkbenchRow[]) {
+  const row = rows.find(
+    (item) => item.shotIntent || item.shotSceneType || item.adaptationReason,
+  );
+  if (!row) {
+    return null;
+  }
+
+  const shotScene = [row.shotSceneLabel, row.shotSceneType]
+    .map((value) => value?.trim())
+    .filter(Boolean)
+    .join(" · ");
+
+  return {
+    intent: formatInternalPlaceholder(row.shotIntent || "未返回"),
+    scene: formatInternalPlaceholder(shotScene || "未返回"),
+    reason: row.adaptationReason?.trim() || "沿用主场景方向",
+  };
+}
+
 function mapGeneratedStoryboardRow(row: GeneratedStoryboardRow): StoryboardWorkbenchRow {
   const promptText = row.prompt_text?.trim();
-  const promptCandidate = row.prompt_body_candidate?.candidate_text?.trim();
   return {
     id: row.shot_id || createRowId(),
     order: row.order,
-    person: row.person || "not_specified",
-    shot: row.shot_title || row.shot_id,
+    shotScript: row.shot_script,
+    primarySceneType: row.primary_scene_type,
+    primarySceneLabel: row.primary_scene_label,
+    primarySceneCategory: row.primary_scene_category,
+    shotSceneType: row.shot_scene_type,
+    shotSceneLabel: row.shot_scene_label,
+    shotIntent: row.shot_intent,
+    adaptationReason: row.adaptation_reason,
+    groundingSource: row.grounding_source,
+    person: formatInternalPlaceholder(row.person || "not_specified"),
+    shot: formatInternalPlaceholder(row.shot_title || row.shot_id),
     sceneScale: row.scene_scale || "source",
     visualDescription: row.visual_description,
-    characterAction: row.character_action,
+    characterAction: formatInternalPlaceholder(row.character_action),
     dialogue: row.dialogue || "（无）",
-    prompt: promptText || (promptCandidate ? `候选证据：${promptCandidate}` : "prompt_text gated"),
+    prompt: promptText || "prompt_text 未生成，等待主线镜头 grounding",
     durationSeconds: row.duration_seconds,
     backendRow: row,
   };
@@ -2374,29 +2465,48 @@ function toGeneratedStoryboardRows(rows: StoryboardWorkbenchRow[]): GeneratedSto
   return renumberRows(rows).map((row) => {
     const backend = row.backendRow;
     const shotId = backend?.shot_id || row.id;
+    const sequenceGrouping = backend?.sequence_grouping ?? {
+      structure_mode: "SingleShot",
+      sequence_id: null,
+      shot_order: row.order,
+      sequence_field_state: "Present",
+    };
+    const scenePerformanceProjection = backend?.scene_performance_projection ?? {
+      source_sample_id: shotId,
+      source_sample_title: row.shot,
+      scene_scale: row.sceneScale,
+      person: row.person,
+      visual_description: row.visualDescription,
+      character_action: row.characterAction,
+      fused_source_text: row.shotScript ?? row.visualDescription,
+      sequence_grouping: sequenceGrouping,
+    };
     return {
       shot_id: shotId,
       order: row.order,
+      shot_script: row.shotScript ?? backend?.shot_script ?? "",
+      primary_scene_type: row.primarySceneType ?? backend?.primary_scene_type ?? "",
+      primary_scene_label: row.primarySceneLabel ?? backend?.primary_scene_label ?? "",
+      primary_scene_category: row.primarySceneCategory ?? backend?.primary_scene_category ?? "",
+      shot_scene_type: row.shotSceneType ?? backend?.shot_scene_type ?? "",
+      shot_scene_label: row.shotSceneLabel ?? backend?.shot_scene_label ?? "",
+      shot_intent: row.shotIntent ?? backend?.shot_intent ?? "",
+      adaptation_reason: row.adaptationReason ?? backend?.adaptation_reason ?? "",
+      grounding_source: row.groundingSource ?? backend?.grounding_source ?? "expanded_script_text",
       person: row.person,
       shot_title: row.shot,
       scene_scale: row.sceneScale,
       visual_description: row.visualDescription,
       character_action: row.characterAction,
       dialogue: row.dialogue,
-      prompt_text: row.prompt.startsWith("候选证据：")
-        ? backend?.prompt_text ?? ""
-        : row.prompt,
+      prompt_text: row.prompt === "prompt_text 未生成，等待主线镜头 grounding" ? "" : row.prompt,
       prompt_text_compilation_status: backend?.prompt_text_compilation_status || "ReadyStub",
       prompt_text_compilation_warnings: backend?.prompt_text_compilation_warnings ?? [],
       prompt_text_source_row_id: backend?.prompt_text_source_row_id || shotId,
       duration_seconds: row.durationSeconds,
-      prompt_body_candidate: backend?.prompt_body_candidate ?? {
-        source_sample_id: "",
-        source_prompt_body: "",
-        candidate_text: null,
-        blocked: false,
-        blocker_codes: [],
-      },
+      scene_performance_projection: scenePerformanceProjection,
+      external_reference_handle_candidates: backend?.external_reference_handle_candidates ?? [],
+      sequence_grouping: sequenceGrouping,
     };
   });
 }

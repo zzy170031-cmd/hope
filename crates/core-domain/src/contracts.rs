@@ -193,15 +193,6 @@ pub struct ExternalReferenceHandleCandidate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PromptBodyCandidate {
-    pub source_sample_id: String,
-    pub source_prompt_body: String,
-    pub candidate_text: Option<String>,
-    pub blocked: bool,
-    pub blocker_codes: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScenePerformanceProjection {
     pub source_sample_id: String,
     pub source_sample_title: String,
@@ -211,6 +202,26 @@ pub struct ScenePerformanceProjection {
     pub character_action: String,
     pub fused_source_text: String,
     pub sequence_grouping: SequenceGrouping,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShotGroundingSource {
+    ShotScript,
+    ExpandedScriptText,
+    PrimarySceneFields,
+    KbRouterSummary,
+}
+
+impl ShotGroundingSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ShotScript => "shot_script",
+            Self::ExpandedScriptText => "expanded_script_text",
+            Self::PrimarySceneFields => "primary_scene_fields",
+            Self::KbRouterSummary => "kb_router_summary",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -262,6 +273,14 @@ pub struct KbRouterRuntimeRequest {
     pub synopsis_text: String,
     pub duration_seconds: u16,
     pub task_type: KbRouterTaskType,
+    #[serde(default)]
+    pub primary_scene_type: Option<String>,
+    #[serde(default)]
+    pub primary_scene_label: Option<String>,
+    #[serde(default)]
+    pub shot_scene_type: Option<String>,
+    #[serde(default)]
+    pub shot_scene_label: Option<String>,
     pub shot_intent: Option<String>,
     pub structure_type: Option<String>,
 }
@@ -335,6 +354,22 @@ pub struct GenerateStoryboardRequest {
     pub scene_label: Option<String>,
     #[serde(default)]
     pub scene_category: Option<String>,
+    #[serde(default)]
+    pub shot_script: Option<String>,
+    #[serde(default)]
+    pub primary_scene_type: Option<String>,
+    #[serde(default)]
+    pub primary_scene_label: Option<String>,
+    #[serde(default)]
+    pub primary_scene_category: Option<String>,
+    #[serde(default)]
+    pub shot_scene_type: Option<String>,
+    #[serde(default)]
+    pub shot_scene_label: Option<String>,
+    #[serde(default)]
+    pub shot_intent: Option<String>,
+    #[serde(default)]
+    pub adaptation_reason: Option<String>,
     pub expanded_script_text: Option<String>,
     pub selected_total_duration_seconds: u16,
     #[serde(default)]
@@ -345,6 +380,15 @@ pub struct GenerateStoryboardRequest {
 pub struct GeneratedStoryboardRow {
     pub shot_id: String,
     pub order: u32,
+    pub shot_script: String,
+    pub primary_scene_type: String,
+    pub primary_scene_label: String,
+    pub primary_scene_category: String,
+    pub shot_scene_type: String,
+    pub shot_scene_label: String,
+    pub shot_intent: String,
+    pub adaptation_reason: String,
+    pub grounding_source: ShotGroundingSource,
     pub person: String,
     pub shot_title: String,
     pub scene_scale: String,
@@ -359,7 +403,6 @@ pub struct GeneratedStoryboardRow {
     #[serde(default)]
     pub prompt_text_source_row_id: String,
     pub duration_seconds: u16,
-    pub prompt_body_candidate: PromptBodyCandidate,
     pub scene_performance_projection: ScenePerformanceProjection,
     pub external_reference_handle_candidates: Vec<ExternalReferenceHandleCandidate>,
     pub sequence_grouping: SequenceGrouping,

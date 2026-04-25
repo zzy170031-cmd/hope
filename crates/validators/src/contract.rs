@@ -208,7 +208,7 @@ pub fn project_v120_evidence_aware_findings(
     {
         projection.push_blocker(
             "prompt_body_blocked_by_placeholder",
-            "prompt_body_candidate",
+            "internal_sample_prompt_evidence",
             "Prompt body stays blocked until placeholder-bearing source text is removed.",
             sample_id.clone(),
             vec!["prompt_body".to_string(), "validator_evidence".to_string()],

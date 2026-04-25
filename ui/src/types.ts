@@ -41,6 +41,15 @@ export type SceneFusionOption =
 export interface StoryboardWorkbenchRow {
   id: string;
   order: number;
+  shotScript?: string;
+  primarySceneType?: string;
+  primarySceneLabel?: string;
+  primarySceneCategory?: string;
+  shotSceneType?: string;
+  shotSceneLabel?: string;
+  shotIntent?: string;
+  adaptationReason?: string;
+  groundingSource?: ShotGroundingSource;
   person: string;
   shot: string;
   sceneScale: string;
@@ -133,6 +142,14 @@ export interface GenerateStoryboardRequest {
   scene_type?: string | null;
   scene_label?: string | null;
   scene_category?: string | null;
+  shot_script?: string | null;
+  primary_scene_type?: string | null;
+  primary_scene_label?: string | null;
+  primary_scene_category?: string | null;
+  shot_scene_type?: string | null;
+  shot_scene_label?: string | null;
+  shot_intent?: string | null;
+  adaptation_reason?: string | null;
   expanded_script_text?: string | null;
   selected_total_duration_seconds: number;
   model_config_summary?: ModelConfigSummary;
@@ -140,17 +157,24 @@ export interface GenerateStoryboardRequest {
 
 export type BridgeCallStatus = "Ready" | "WarningOnly" | "Blocked" | "Gated";
 
-export interface PromptBodyCandidate {
-  source_sample_id: string;
-  source_prompt_body: string;
-  candidate_text?: string | null;
-  blocked: boolean;
-  blocker_codes: string[];
-}
+export type ShotGroundingSource =
+  | "shot_script"
+  | "expanded_script_text"
+  | "primary_scene_fields"
+  | "kb_router_summary";
 
 export interface GeneratedStoryboardRow {
   shot_id: string;
   order: number;
+  shot_script: string;
+  primary_scene_type: string;
+  primary_scene_label: string;
+  primary_scene_category: string;
+  shot_scene_type: string;
+  shot_scene_label: string;
+  shot_intent: string;
+  adaptation_reason: string;
+  grounding_source: ShotGroundingSource;
   person: string;
   shot_title: string;
   scene_scale: string;
@@ -162,7 +186,9 @@ export interface GeneratedStoryboardRow {
   prompt_text_compilation_warnings?: ProductWarning[];
   prompt_text_source_row_id?: string;
   duration_seconds: number;
-  prompt_body_candidate: PromptBodyCandidate;
+  scene_performance_projection: unknown;
+  external_reference_handle_candidates: unknown[];
+  sequence_grouping: unknown;
 }
 
 export interface StoryboardDurationPlan {

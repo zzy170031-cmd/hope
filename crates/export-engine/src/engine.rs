@@ -696,8 +696,8 @@ mod tests {
     use std::fs;
 
     use core_domain::{
-        ProductWarning, PromptBodyCandidate, PromptTextCompilationStatus,
-        ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, StructureMode,
+        ProductWarning, PromptTextCompilationStatus, ScenePerformanceProjection, SequenceFieldState,
+        SequenceGrouping, ShotGroundingSource, StructureMode,
     };
     use serde_json::json;
 
@@ -807,6 +807,15 @@ mod tests {
             rows: vec![GeneratedStoryboardRow {
                 shot_id: "GS-BRIDGE-001".to_string(),
                 order: 1,
+                shot_script: "Two leads hold a restrained dialogue beat before dawn.".to_string(),
+                primary_scene_type: "emotional_dialogue".to_string(),
+                primary_scene_label: "情绪对话".to_string(),
+                primary_scene_category: "基础动漫叙事".to_string(),
+                shot_scene_type: "emotional_dialogue".to_string(),
+                shot_scene_label: "情绪对话".to_string(),
+                shot_intent: "dialogue".to_string(),
+                adaptation_reason: String::new(),
+                grounding_source: ShotGroundingSource::ShotScript,
                 person: "lead_pair".to_string(),
                 shot_title: "Bridge dialogue sample".to_string(),
                 scene_scale: "MCU".to_string(),
@@ -822,16 +831,6 @@ mod tests {
                 }],
                 prompt_text_source_row_id: "GS-BRIDGE-001".to_string(),
                 duration_seconds: 8,
-                prompt_body_candidate: PromptBodyCandidate {
-                    source_sample_id: "GS-BRIDGE-001".to_string(),
-                    source_prompt_body: "raw prompt body should stay out of prompt_text"
-                        .to_string(),
-                    candidate_text: Some(
-                        "raw prompt body should stay out of prompt_text".to_string(),
-                    ),
-                    blocked: false,
-                    blocker_codes: vec![],
-                },
                 scene_performance_projection: ScenePerformanceProjection {
                     source_sample_id: "GS-BRIDGE-001".to_string(),
                     source_sample_title: "Bridge dialogue sample".to_string(),
