@@ -486,6 +486,125 @@ pub struct GenerateStoryboardResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FinalizedStoryboardShotResult {
+    pub project_id: String,
+    pub script_id: String,
+    pub shot_task_id: String,
+    pub result_id: String,
+    pub shot_order: u32,
+    pub shot_task_name: String,
+    pub rows: Vec<GeneratedStoryboardRow>,
+    pub prompt_text: String,
+    pub shot_duration_seconds: u16,
+    pub duration_source: String,
+    pub confirmed: bool,
+    pub updated_at_ms: u64,
+    pub rows_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SaveStoryboardShotResultRequest {
+    pub project_id: String,
+    pub script_id: String,
+    pub shot_task_id: String,
+    pub result_id: String,
+    pub shot_order: u32,
+    pub shot_task_name: String,
+    pub rows: Vec<GeneratedStoryboardRow>,
+    pub prompt_text: String,
+    pub shot_duration_seconds: u16,
+    pub duration_source: String,
+    pub confirmed: bool,
+    pub updated_at_ms: u64,
+    pub rows_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SaveStoryboardShotResultResponse {
+    pub status: BridgeCallStatus,
+    pub shot: Option<FinalizedStoryboardShotResult>,
+    pub blockers: Vec<ProductWarning>,
+    pub warnings: Vec<ProductWarning>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListStoryboardShotResultsRequest {
+    pub project_id: String,
+    pub script_id: Option<String>,
+    pub confirmed: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListStoryboardShotResultsResponse {
+    pub project_id: String,
+    pub script_id: Option<String>,
+    pub shots: Vec<FinalizedStoryboardShotResult>,
+    pub warnings: Vec<ProductWarning>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateStoryboardShotResultRequest {
+    pub project_id: String,
+    pub result_id: String,
+    pub shot_order: u32,
+    pub shot_task_name: String,
+    pub rows: Vec<GeneratedStoryboardRow>,
+    pub prompt_text: String,
+    pub shot_duration_seconds: u16,
+    pub duration_source: String,
+    pub confirmed: bool,
+    pub updated_at_ms: u64,
+    pub rows_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateStoryboardShotResultResponse {
+    pub status: BridgeCallStatus,
+    pub shot: Option<FinalizedStoryboardShotResult>,
+    pub blockers: Vec<ProductWarning>,
+    pub warnings: Vec<ProductWarning>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoveStoryboardShotResultRequest {
+    pub project_id: String,
+    pub result_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoveStoryboardShotResultResponse {
+    pub status: BridgeCallStatus,
+    pub project_id: String,
+    pub result_id: String,
+    pub removed: bool,
+    pub warnings: Vec<ProductWarning>,
+    pub blockers: Vec<ProductWarning>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExportStoryboardBankRequest {
+    pub project_id: String,
+    pub script_id: Option<String>,
+    pub export_format: String,
+    pub include_unconfirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExportStoryboardBankResponse {
+    pub export_manifest_id: String,
+    pub project_id: String,
+    pub script_id: Option<String>,
+    pub status: BridgeCallStatus,
+    pub no_export: bool,
+    pub confirmed_shot_count: u32,
+    pub exported_result_ids: Vec<String>,
+    pub total_shot_duration_seconds: u16,
+    pub artifacts: Vec<ExportArtifactRecord>,
+    pub warnings: Vec<ProductWarning>,
+    pub blockers: Vec<ProductWarning>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExportBundleRequest {
     pub result_id: Option<String>,
     pub task_id: Option<String>,

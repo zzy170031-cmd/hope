@@ -7,27 +7,32 @@ use crate::state::AppState;
 
 use core_domain::{
     BridgeCallStatus, ExpandScriptRequest, ExpandScriptResponse, ExportArtifactRecord,
-    ExportBundleRequest, ExportBundleResponse, ExternalReferenceHandleCandidate,
+    ExportBundleRequest, ExportBundleResponse, ExportStoryboardBankRequest,
+    ExportStoryboardBankResponse, ExternalReferenceHandleCandidate, FinalizedStoryboardShotResult,
     GenerateStoryboardRequest, GenerateStoryboardResponse, GeneratedStoryboardRow,
     GoldenSampleLibraryRecord, KbRouterExcludedCandidate, KbRouterRetrievalTrace,
     KbRouterRuntimeRequest, KbRouterRuntimeResponse, KbRouterSelectedRule, KbRouterSelectionReason,
-    KbRouterTaskType, KbRouterTokenBudget, ProductWarning, PromptTextCompilationRequest,
+    KbRouterTaskType, KbRouterTokenBudget, ListStoryboardShotResultsRequest,
+    ListStoryboardShotResultsResponse, ProductWarning, PromptTextCompilationRequest,
     PromptTextCompilationResponse, PromptTextCompilationRow, PromptTextCompilationStatus,
-    ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, ShotGroundingSource,
-    ShotTask, SplitScriptToShotTasksRequest, SplitScriptToShotTasksResponse,
-    StoryboardDurationPlan, StoryboardExportStatus, StructureMode, TextGenerationOutputSchema,
-    TextGenerationRequest, TextGenerationResponse, TextGenerationTask, TextModelProvider,
-    TextModelProviderKind, UpdateStoryboardRowsRequest,
+    RemoveStoryboardShotResultRequest, RemoveStoryboardShotResultResponse,
+    SaveStoryboardShotResultRequest, SaveStoryboardShotResultResponse, ScenePerformanceProjection,
+    SequenceFieldState, SequenceGrouping, ShotGroundingSource, ShotTask,
+    SplitScriptToShotTasksRequest, SplitScriptToShotTasksResponse, StoryboardDurationPlan,
+    StoryboardExportStatus, StructureMode, TextGenerationOutputSchema, TextGenerationRequest,
+    TextGenerationResponse, TextGenerationTask, TextModelProvider, TextModelProviderKind,
+    UpdateStoryboardRowsRequest, UpdateStoryboardShotResultRequest,
+    UpdateStoryboardShotResultResponse,
 };
-use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
+use export_engine::{export_v120_storyboard_bundle, V120StoryboardExportRequest};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
 use validators::{
-    RepairRecommendation, WEEK3_SHARED_FIXTURE_PATH, Week3SharedFixture,
     generate_week3_repair_recommendations, generate_week3_validation_report,
-    load_week3_shared_fixture, project_v120_evidence_aware_findings,
+    load_week3_shared_fixture, project_v120_evidence_aware_findings, RepairRecommendation,
+    Week3SharedFixture, WEEK3_SHARED_FIXTURE_PATH,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +141,30 @@ struct ShotGroundedRowDraft {
     sequence_grouping: SequenceGrouping,
     scene_performance_projection: ScenePerformanceProjection,
 }
+
+const STORYBOARD_DURATION_SOURCE: &str = "storyboard_duration_plan.allocated_row_duration_seconds";
+
+const FINALIZED_BANK_FORBIDDEN_TERMS: &[&str] = &[
+    "raw prompt_body",
+    "prompt_body",
+    "prompt body",
+    "prompt_body_candidate",
+    "source_register",
+    "source register",
+    "overlay json",
+    "overlay_json",
+    "api key",
+    "api_key",
+    "authorization",
+    "bearer ",
+    "provider secret",
+    "plaintext secret",
+    "token",
+    "full raw kb",
+    "full raw kb rows",
+    "full_kb_rows",
+    "full_kb_rows_included",
+];
 
 #[derive(Debug, Deserialize)]
 struct QwenChatCompletionResponse {
@@ -805,6 +834,576 @@ pub fn save_storyboard_rows(
 
     state.remember_storyboard(snapshot.clone());
     snapshot
+}
+
+pub fn save_storyboard_shot_result(
+    state: &AppState,
+    request: SaveStoryboardShotResultRequest,
+) -> SaveStoryboardShotResultResponse {
+    let now_ms = now_epoch_ms();
+    let (mut blockers, rows_hash) = validate_finalized_storyboard_shot_payload(
+        &request.project_id,
+        &request.script_id,
+        &request.shot_task_id,
+        &request.result_id,
+        &request.shot_task_name,
+        &request.rows,
+        &request.prompt_text,
+        request.shot_duration_seconds,
+        &request.duration_source,
+        &request.rows_hash,
+    );
+    if state
+        .find_finalized_storyboard_shot(&request.project_id, &request.result_id)
+        .is_some()
+    {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_result_already_exists".to_string(),
+            message: "A finalized storyboard shot result with this result_id already exists."
+                .to_string(),
+            related_sample_id: Some(request.result_id.clone()),
+        });
+    }
+    if !blockers.is_empty() {
+        return SaveStoryboardShotResultResponse {
+            status: BridgeCallStatus::Blocked,
+            shot: None,
+            blockers,
+            warnings: vec![],
+        };
+    }
+
+    let shot = FinalizedStoryboardShotResult {
+        project_id: request.project_id,
+        script_id: request.script_id,
+        shot_task_id: request.shot_task_id,
+        result_id: request.result_id,
+        shot_order: request.shot_order,
+        shot_task_name: request.shot_task_name,
+        rows: request.rows,
+        prompt_text: request.prompt_text,
+        shot_duration_seconds: request.shot_duration_seconds,
+        duration_source: request.duration_source,
+        confirmed: request.confirmed,
+        updated_at_ms: if request.updated_at_ms == 0 {
+            now_ms
+        } else {
+            request.updated_at_ms
+        },
+        rows_hash,
+    };
+
+    state.remember_finalized_storyboard_shot(shot.clone());
+    SaveStoryboardShotResultResponse {
+        status: BridgeCallStatus::Ready,
+        shot: Some(shot),
+        blockers: vec![],
+        warnings: vec![],
+    }
+}
+
+pub fn list_storyboard_shot_results(
+    state: &AppState,
+    request: ListStoryboardShotResultsRequest,
+) -> ListStoryboardShotResultsResponse {
+    let warnings = if request.project_id.trim().is_empty() {
+        vec![ProductWarning {
+            code: "project_id_required".to_string(),
+            message: "project_id is required before listing finalized storyboard shots."
+                .to_string(),
+            related_sample_id: None,
+        }]
+    } else {
+        vec![]
+    };
+    let shots = if request.project_id.trim().is_empty() {
+        vec![]
+    } else {
+        state.list_finalized_storyboard_shots(
+            &request.project_id,
+            request.script_id.as_deref(),
+            request.confirmed,
+        )
+    };
+
+    ListStoryboardShotResultsResponse {
+        project_id: request.project_id,
+        script_id: request.script_id,
+        shots,
+        warnings,
+    }
+}
+
+pub fn update_storyboard_shot_result(
+    state: &AppState,
+    request: UpdateStoryboardShotResultRequest,
+) -> UpdateStoryboardShotResultResponse {
+    let Some(existing) =
+        state.find_finalized_storyboard_shot(&request.project_id, &request.result_id)
+    else {
+        return UpdateStoryboardShotResultResponse {
+            status: BridgeCallStatus::Blocked,
+            shot: None,
+            blockers: vec![ProductWarning {
+                code: "storyboard_bank_result_not_found".to_string(),
+                message: "No finalized storyboard shot result exists for this project/result_id."
+                    .to_string(),
+                related_sample_id: Some(request.result_id),
+            }],
+            warnings: vec![],
+        };
+    };
+
+    let (blockers, rows_hash) = validate_finalized_storyboard_shot_payload(
+        &existing.project_id,
+        &existing.script_id,
+        &existing.shot_task_id,
+        &existing.result_id,
+        &request.shot_task_name,
+        &request.rows,
+        &request.prompt_text,
+        request.shot_duration_seconds,
+        &request.duration_source,
+        &request.rows_hash,
+    );
+    if !blockers.is_empty() {
+        return UpdateStoryboardShotResultResponse {
+            status: BridgeCallStatus::Blocked,
+            shot: None,
+            blockers,
+            warnings: vec![],
+        };
+    }
+
+    let shot = FinalizedStoryboardShotResult {
+        project_id: existing.project_id,
+        script_id: existing.script_id,
+        shot_task_id: existing.shot_task_id,
+        result_id: existing.result_id,
+        shot_order: request.shot_order,
+        shot_task_name: request.shot_task_name,
+        rows: request.rows,
+        prompt_text: request.prompt_text,
+        shot_duration_seconds: request.shot_duration_seconds,
+        duration_source: request.duration_source,
+        confirmed: request.confirmed,
+        updated_at_ms: if request.updated_at_ms == 0 {
+            now_epoch_ms()
+        } else {
+            request.updated_at_ms
+        },
+        rows_hash,
+    };
+
+    state.remember_finalized_storyboard_shot(shot.clone());
+    UpdateStoryboardShotResultResponse {
+        status: BridgeCallStatus::Ready,
+        shot: Some(shot),
+        blockers: vec![],
+        warnings: vec![],
+    }
+}
+
+pub fn remove_storyboard_shot_result(
+    state: &AppState,
+    request: RemoveStoryboardShotResultRequest,
+) -> RemoveStoryboardShotResultResponse {
+    if request.project_id.trim().is_empty() || request.result_id.trim().is_empty() {
+        return RemoveStoryboardShotResultResponse {
+            status: BridgeCallStatus::Blocked,
+            project_id: request.project_id,
+            result_id: request.result_id,
+            removed: false,
+            warnings: vec![],
+            blockers: vec![ProductWarning {
+                code: "storyboard_bank_remove_selector_required".to_string(),
+                message: "project_id and result_id are required before removing a finalized shot."
+                    .to_string(),
+                related_sample_id: None,
+            }],
+        };
+    }
+
+    let removed = state.remove_finalized_storyboard_shot(&request.project_id, &request.result_id);
+    RemoveStoryboardShotResultResponse {
+        status: if removed {
+            BridgeCallStatus::Ready
+        } else {
+            BridgeCallStatus::Blocked
+        },
+        project_id: request.project_id,
+        result_id: request.result_id.clone(),
+        removed,
+        warnings: vec![],
+        blockers: if removed {
+            vec![]
+        } else {
+            vec![ProductWarning {
+                code: "storyboard_bank_result_not_found".to_string(),
+                message: "No finalized storyboard shot result was found for removal.".to_string(),
+                related_sample_id: Some(request.result_id),
+            }]
+        },
+    }
+}
+
+pub fn export_storyboard_bank(
+    state: &AppState,
+    request: ExportStoryboardBankRequest,
+) -> ExportStoryboardBankResponse {
+    let export_manifest_id = format!(
+        "storyboard-bank-export-{}",
+        &stable_hash_hex(&format!(
+            "{}\n{}\n{}",
+            request.project_id,
+            request.script_id.as_deref().unwrap_or_default(),
+            request.export_format
+        ))[..12]
+    );
+    let mut blockers = Vec::new();
+    if request.project_id.trim().is_empty() {
+        blockers.push(ProductWarning {
+            code: "project_id_required".to_string(),
+            message: "project_id is required before exporting finalized storyboard shots."
+                .to_string(),
+            related_sample_id: None,
+        });
+    }
+    if request.include_unconfirmed {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_include_unconfirmed_not_supported".to_string(),
+            message: "V1 finalized storyboard bank export only supports confirmed shots."
+                .to_string(),
+            related_sample_id: None,
+        });
+    }
+    if !blockers.is_empty() {
+        return ExportStoryboardBankResponse {
+            export_manifest_id,
+            project_id: request.project_id,
+            script_id: request.script_id,
+            status: BridgeCallStatus::Blocked,
+            no_export: true,
+            confirmed_shot_count: 0,
+            exported_result_ids: vec![],
+            total_shot_duration_seconds: 0,
+            artifacts: vec![],
+            warnings: vec![],
+            blockers,
+        };
+    }
+
+    let confirmed_shots = state.list_finalized_storyboard_shots(
+        &request.project_id,
+        request.script_id.as_deref(),
+        Some(true),
+    );
+    if confirmed_shots.is_empty() {
+        return ExportStoryboardBankResponse {
+            export_manifest_id,
+            project_id: request.project_id,
+            script_id: request.script_id,
+            status: BridgeCallStatus::Gated,
+            no_export: true,
+            confirmed_shot_count: 0,
+            exported_result_ids: vec![],
+            total_shot_duration_seconds: 0,
+            artifacts: vec![],
+            warnings: vec![ProductWarning {
+                code: "storyboard_bank_no_confirmed_shots".to_string(),
+                message: "No confirmed finalized storyboard shots exist, so no storyboard bank export was created."
+                    .to_string(),
+                related_sample_id: None,
+            }],
+            blockers: vec![],
+        };
+    }
+
+    let mut total_shot_duration_seconds = 0u16;
+    let mut rows = Vec::new();
+    for shot in &confirmed_shots {
+        let (shot_blockers, expected_rows_hash) = validate_finalized_storyboard_shot_payload(
+            &shot.project_id,
+            &shot.script_id,
+            &shot.shot_task_id,
+            &shot.result_id,
+            &shot.shot_task_name,
+            &shot.rows,
+            &shot.prompt_text,
+            shot.shot_duration_seconds,
+            &shot.duration_source,
+            &shot.rows_hash,
+        );
+        if !shot_blockers.is_empty() {
+            return blocked_storyboard_bank_export_response(
+                export_manifest_id,
+                request.project_id,
+                request.script_id,
+                shot_blockers,
+            );
+        }
+        if expected_rows_hash != shot.rows_hash {
+            return blocked_storyboard_bank_export_response(
+                export_manifest_id,
+                request.project_id,
+                request.script_id,
+                vec![ProductWarning {
+                    code: "storyboard_bank_rows_hash_mismatch".to_string(),
+                    message: "Saved rows_hash no longer matches the finalized storyboard rows; export stopped before packaging."
+                        .to_string(),
+                    related_sample_id: Some(shot.result_id.clone()),
+                }],
+            );
+        }
+        let Some(total) = total_shot_duration_seconds.checked_add(shot.shot_duration_seconds)
+        else {
+            return blocked_storyboard_bank_export_response(
+                export_manifest_id,
+                request.project_id,
+                request.script_id,
+                vec![ProductWarning {
+                    code: "storyboard_bank_duration_overflow".to_string(),
+                    message: "Finalized storyboard bank duration exceeds the V1 export range."
+                        .to_string(),
+                    related_sample_id: Some(shot.result_id.clone()),
+                }],
+            );
+        };
+        total_shot_duration_seconds = total;
+        rows.extend(shot.rows.clone());
+    }
+
+    let exported_result_ids = confirmed_shots
+        .iter()
+        .map(|shot| shot.result_id.clone())
+        .collect::<Vec<_>>();
+    match export_v120_storyboard_bundle(&V120StoryboardExportRequest {
+        export_manifest_id: export_manifest_id.clone(),
+        result_id: "finalized_storyboard_bank".to_string(),
+        selected_total_duration_seconds: total_shot_duration_seconds,
+        source_result_id: exported_result_ids.join(","),
+        edited_rows_applied: false,
+        rows,
+    }) {
+        Ok(bundle) => ExportStoryboardBankResponse {
+            export_manifest_id: export_manifest_id.clone(),
+            project_id: request.project_id,
+            script_id: request.script_id,
+            status: BridgeCallStatus::Ready,
+            no_export: false,
+            confirmed_shot_count: confirmed_shots.len() as u32,
+            exported_result_ids,
+            total_shot_duration_seconds,
+            artifacts: bundle
+                .artifacts
+                .into_iter()
+                .map(|artifact| ExportArtifactRecord {
+                    artifact_id: format!("{}-{}", export_manifest_id, artifact.artifact_kind),
+                    artifact_kind: artifact.artifact_kind.to_string(),
+                    export_format: artifact.export_format.to_string(),
+                    ready: true,
+                    blocked_reason: None,
+                    artifact_path: None,
+                    content_hash: Some(artifact.content_hash),
+                    byte_size: Some(artifact.byte_size),
+                    row_count: Some(artifact.row_count),
+                    selected_total_duration_seconds: Some(total_shot_duration_seconds),
+                    source_result_id: Some("finalized_storyboard_bank".to_string()),
+                    edited_rows_applied: false,
+                    prompt_text_compilation_statuses: vec![],
+                    prompt_text_compilation_warning_codes: vec![],
+                    selected_sample_ids: vec![],
+                    selected_kb_rule_ids: vec![],
+                    kb_context_summary: None,
+                    retrieval_trace: None,
+                    full_kb_rows_included: 0,
+                })
+                .collect(),
+            warnings: vec![],
+            blockers: vec![],
+        },
+        Err(error) => blocked_storyboard_bank_export_response(
+            export_manifest_id,
+            request.project_id,
+            request.script_id,
+            vec![ProductWarning {
+                code: "storyboard_bank_export_artifact_generation_failed".to_string(),
+                message: format!("Finalized storyboard bank export failed: {error:?}"),
+                related_sample_id: None,
+            }],
+        ),
+    }
+}
+
+fn validate_finalized_storyboard_shot_payload(
+    project_id: &str,
+    script_id: &str,
+    shot_task_id: &str,
+    result_id: &str,
+    shot_task_name: &str,
+    rows: &[GeneratedStoryboardRow],
+    prompt_text: &str,
+    shot_duration_seconds: u16,
+    duration_source: &str,
+    rows_hash: &str,
+) -> (Vec<ProductWarning>, String) {
+    let mut blockers = Vec::new();
+    for (field_name, value) in [
+        ("project_id", project_id),
+        ("script_id", script_id),
+        ("shot_task_id", shot_task_id),
+        ("result_id", result_id),
+        ("shot_task_name", shot_task_name),
+    ] {
+        if value.trim().is_empty() {
+            blockers.push(ProductWarning {
+                code: format!("{field_name}_required"),
+                message: format!("{field_name} is required for finalized storyboard bank V1."),
+                related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+            });
+        }
+    }
+    if rows.is_empty() {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_rows_required".to_string(),
+            message: "Finalized storyboard shot results must include saved storyboard rows."
+                .to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+    if prompt_text.trim().is_empty() {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_prompt_text_required".to_string(),
+            message: "Finalized storyboard shot results must include clean prompt_text."
+                .to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+    if shot_duration_seconds == 0 {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_shot_duration_required".to_string(),
+            message: "shot_duration_seconds must be greater than 0 for finalized shot results."
+                .to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+    if duration_source != STORYBOARD_DURATION_SOURCE {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_duration_source_unsupported".to_string(),
+            message: "duration_source must use the V1 storyboard duration plan allocation marker."
+                .to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+    if rows.iter().any(|row| row.shot_duration_seconds == 0) {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_row_duration_required".to_string(),
+            message: "Every saved storyboard row must include shot_duration_seconds.".to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+    let row_duration_sum = rows
+        .iter()
+        .map(|row| row.shot_duration_seconds)
+        .sum::<u16>();
+    if shot_duration_seconds != 0 && row_duration_sum != shot_duration_seconds {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_shot_duration_mismatch".to_string(),
+            message: "shot_duration_seconds must equal the saved storyboard row duration sum."
+                .to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+
+    if finalized_storyboard_payload_contains_forbidden_terms(shot_task_name, prompt_text, rows) {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_forbidden_payload".to_string(),
+            message: "Finalized storyboard bank rejected internal, raw, credential, or full-KB payload content."
+                .to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+
+    let expected_rows_hash = stable_hash_hex(&serialize_storyboard_rows(rows));
+    if !rows_hash.trim().is_empty() && rows_hash.trim() != expected_rows_hash {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_rows_hash_mismatch".to_string(),
+            message:
+                "rows_hash does not match the supplied finalized storyboard rows; export cannot trust this shot."
+                    .to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+
+    (blockers, expected_rows_hash)
+}
+
+fn finalized_storyboard_payload_contains_forbidden_terms(
+    shot_task_name: &str,
+    prompt_text: &str,
+    rows: &[GeneratedStoryboardRow],
+) -> bool {
+    let row_product_text = rows
+        .iter()
+        .map(|row| {
+            format!(
+                "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                row.shot_script,
+                row.person,
+                row.shot_title,
+                row.scene_scale,
+                row.visual_description,
+                row.character_action,
+                row.dialogue,
+                row.prompt_text
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let payload = format!("{shot_task_name}\n{prompt_text}\n{row_product_text}").to_lowercase();
+    FINALIZED_BANK_FORBIDDEN_TERMS
+        .iter()
+        .any(|term| payload.contains(term))
+        || contains_secret_like_sk_token(&payload)
+}
+
+fn contains_secret_like_sk_token(payload: &str) -> bool {
+    payload
+        .split(|character: char| {
+            character.is_whitespace()
+                || matches!(
+                    character,
+                    '"' | '\'' | ',' | ';' | ':' | '(' | ')' | '[' | ']' | '{' | '}'
+                )
+        })
+        .any(|token| {
+            token.starts_with("sk-")
+                && token.len() >= 16
+                && token.chars().skip(3).all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                })
+        })
+}
+
+fn blocked_storyboard_bank_export_response(
+    export_manifest_id: String,
+    project_id: String,
+    script_id: Option<String>,
+    blockers: Vec<ProductWarning>,
+) -> ExportStoryboardBankResponse {
+    ExportStoryboardBankResponse {
+        export_manifest_id,
+        project_id,
+        script_id,
+        status: BridgeCallStatus::Blocked,
+        no_export: true,
+        confirmed_shot_count: 0,
+        exported_result_ids: vec![],
+        total_shot_duration_seconds: 0,
+        artifacts: vec![],
+        warnings: vec![],
+        blockers,
+    }
 }
 
 pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBundleResponse {
@@ -1605,7 +2204,7 @@ fn build_generated_storyboard_row(
         prompt_text_source_row_id: prompt_compilation.source_row_id.clone(),
         duration_seconds: draft.duration_seconds,
         shot_duration_seconds: draft.duration_seconds,
-        duration_source: "storyboard_duration_plan.allocated_row_duration_seconds".to_string(),
+        duration_source: STORYBOARD_DURATION_SOURCE.to_string(),
         scene_performance_projection: draft.scene_performance_projection.clone(),
         external_reference_handle_candidates: vec![],
         sequence_grouping: draft.sequence_grouping.clone(),
@@ -1635,7 +2234,7 @@ fn restore_shot_grounded_row(
     row.scene_performance_projection = draft.scene_performance_projection.clone();
     row.external_reference_handle_candidates.clear();
     row.shot_duration_seconds = draft.duration_seconds;
-    row.duration_source = "storyboard_duration_plan.allocated_row_duration_seconds".to_string();
+    row.duration_source = STORYBOARD_DURATION_SOURCE.to_string();
     row.sequence_grouping = draft.sequence_grouping.clone();
 }
 
@@ -3059,9 +3658,9 @@ mod tests {
     use std::fs;
 
     use core_domain::{
-        BridgeCallStatus, ExpandScriptRequest, ExportBundleRequest, FailurePatternRecord,
-        GenerateStoryboardRequest, GoldenSampleAssetSource, GoldenSampleClassification,
-        GoldenSampleComparisonBaseline, GoldenSampleCoverageSummary,
+        BridgeCallStatus, ExpandScriptRequest, ExportBundleRequest, ExportStoryboardBankRequest,
+        FailurePatternRecord, GenerateStoryboardRequest, GoldenSampleAssetSource,
+        GoldenSampleClassification, GoldenSampleComparisonBaseline, GoldenSampleCoverageSummary,
         GoldenSampleFailureCodeDefinition, GoldenSampleFailureMappingAsset,
         GoldenSampleFailureMappingRecord, GoldenSampleFailureValidatorEvidence,
         GoldenSampleFewshotGate, GoldenSampleFewshotState, GoldenSampleFieldCoverageRuleAsset,
@@ -3073,10 +3672,11 @@ mod tests {
         GoldenSampleSourceRegisterEntry, GoldenSampleSourceRegisterProvenance,
         GoldenSampleV3CoreCoverage, GoldenSampleValidatorEvidence, KbBundleManifestRecord,
         KbBundleRecordCounts, KbGoldenSampleRuntimePackage, KbRouterRuntimeRequest,
-        KbRouterTaskType, KbRuntimeSummary, KbSnapshotRecord, PromptTemplateRecord,
-        PromptTextCompilationStatus, SceneTaxonomyRecord, ShotGroundingSource,
+        KbRouterTaskType, KbRuntimeSummary, KbSnapshotRecord, ListStoryboardShotResultsRequest,
+        PromptTemplateRecord, PromptTextCompilationStatus, RemoveStoryboardShotResultRequest,
+        SaveStoryboardShotResultRequest, SceneTaxonomyRecord, ShotGroundingSource,
         StoryboardDurationPlan, TextGenerationOutputSchema, TextGenerationTask,
-        TextModelProviderKind, UpdateStoryboardRowsRequest,
+        TextModelProviderKind, UpdateStoryboardRowsRequest, UpdateStoryboardShotResultRequest,
     };
     use project_store::{
         DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeHandle, StoreSkeleton,
@@ -3084,17 +3684,19 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        StoryboardPreviewPlanRequest, ValidationExportPanelSnapshotRequest,
-        ValidationExportPanelState, build_prompt_text_compilation_request,
-        build_qwen_request_payload, build_storyboard_preview_plan, build_text_generation_request,
+        build_prompt_text_compilation_request, build_qwen_request_payload,
+        build_storyboard_preview_plan, build_text_generation_request,
         build_validation_export_panel_snapshot_from_fixture, compile_seedance_prompt_text,
-        default_text_model_provider, expand_script, export_bundle, generate_storyboard,
-        project_scene_performance, resolve_scene_taxonomy, run_kb_router,
-        run_qwen_text_generation_with_transport, save_storyboard_rows,
-        select_golden_sample_records,
+        default_text_model_provider, expand_script, export_bundle, export_storyboard_bank,
+        generate_storyboard, list_storyboard_shot_results, project_scene_performance,
+        remove_storyboard_shot_result, resolve_scene_taxonomy, run_kb_router,
+        run_qwen_text_generation_with_transport, save_storyboard_rows, save_storyboard_shot_result,
+        select_golden_sample_records, serialize_storyboard_rows, stable_hash_hex,
+        update_storyboard_shot_result, StoryboardPreviewPlanRequest,
+        ValidationExportPanelSnapshotRequest, ValidationExportPanelState,
     };
     use crate::state::AppState;
-    use validators::{WEEK3_SHARED_FIXTURE_PATH, load_week3_shared_fixture};
+    use validators::{load_week3_shared_fixture, WEEK3_SHARED_FIXTURE_PATH};
 
     fn test_state() -> AppState {
         let store = StoreSkeleton::new(DualSqliteConnectionPolicy::new(
@@ -3207,6 +3809,76 @@ mod tests {
         };
 
         AppState::new(store, kb_runtime, kb_knowledge, golden_sample_package)
+    }
+
+    fn generate_test_storyboard(
+        state: &AppState,
+        task_name: &str,
+        duration_seconds: u16,
+    ) -> core_domain::GenerateStoryboardResponse {
+        generate_storyboard(
+            state,
+            GenerateStoryboardRequest {
+                task_name: task_name.to_string(),
+                script_id: None,
+                shot_script: Some(format!(
+                    "{task_name} blocks the incoming strike, the opponent is pushed back, and the shot resolves on a visible power shift."
+                )),
+                expanded_script_text: Some(
+                    "scene_type: daily_dialogue\nsynopsis: a grounded action beat inside the current shot"
+                        .to_string(),
+                ),
+                primary_scene_type: Some("daily_dialogue".to_string()),
+                primary_scene_label: Some("Daily Dialogue".to_string()),
+                primary_scene_category: Some("dialogue".to_string()),
+                shot_scene_type: Some("daily_dialogue".to_string()),
+                shot_scene_label: Some("Daily Dialogue".to_string()),
+                shot_intent: Some("story_beat".to_string()),
+                adaptation_reason: None,
+                selected_total_duration_seconds: duration_seconds,
+            },
+        )
+    }
+
+    fn finalized_save_request_from_storyboard(
+        project_id: &str,
+        script_id: &str,
+        shot_order: u32,
+        confirmed: bool,
+        storyboard: &core_domain::GenerateStoryboardResponse,
+    ) -> SaveStoryboardShotResultRequest {
+        let prompt_text = storyboard
+            .rows
+            .iter()
+            .map(|row| row.prompt_text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let shot_duration_seconds = storyboard
+            .rows
+            .iter()
+            .map(|row| row.shot_duration_seconds)
+            .sum::<u16>();
+        SaveStoryboardShotResultRequest {
+            project_id: project_id.to_string(),
+            script_id: script_id.to_string(),
+            shot_task_id: storyboard
+                .task_id
+                .clone()
+                .unwrap_or_else(|| "shot-task-test".to_string()),
+            result_id: storyboard.result_id.clone(),
+            shot_order,
+            shot_task_name: storyboard
+                .task_id
+                .clone()
+                .unwrap_or_else(|| "finalized shot".to_string()),
+            rows: storyboard.rows.clone(),
+            prompt_text,
+            shot_duration_seconds,
+            duration_source: "storyboard_duration_plan.allocated_row_duration_seconds".to_string(),
+            confirmed,
+            updated_at_ms: storyboard.updated_at_ms,
+            rows_hash: stable_hash_hex(&serialize_storyboard_rows(&storyboard.rows)),
+        }
     }
 
     #[derive(Debug)]
@@ -3710,23 +4382,17 @@ mod tests {
         );
         assert!(router_result.kb_context_summary.chars().count() >= 800);
         assert!(router_result.kb_context_summary.chars().count() <= 1500);
-        assert!(
-            !router_result
-                .kb_context_summary
-                .contains("TODO: fill prompt")
-        );
-        assert!(
-            !router_result
-                .kb_context_summary
-                .contains("reserve evidence")
-        );
-        assert!(
-            router_result
-                .retrieval_trace
-                .excluded_candidates
-                .iter()
-                .any(|candidate| candidate.reason_code == "reserve_gate")
-        );
+        assert!(!router_result
+            .kb_context_summary
+            .contains("TODO: fill prompt"));
+        assert!(!router_result
+            .kb_context_summary
+            .contains("reserve evidence"));
+        assert!(router_result
+            .retrieval_trace
+            .excluded_candidates
+            .iter()
+            .any(|candidate| candidate.reason_code == "reserve_gate"));
     }
 
     #[test]
@@ -3739,14 +4405,12 @@ mod tests {
         assert_eq!(package.official_record_count(), 108);
         assert_eq!(package.reserve_record_count(), 44);
         assert_eq!(package.positive_fewshot_record_count(), 108);
-        assert!(
-            package
-                .golden_sample_library
-                .records
-                .iter()
-                .filter(|record| record.is_reserve())
-                .all(|record| record.source_fields.usable_for_fewshot == "No")
-        );
+        assert!(package
+            .golden_sample_library
+            .records
+            .iter()
+            .filter(|record| record.is_reserve())
+            .all(|record| record.source_fields.usable_for_fewshot == "No"));
 
         let selected = select_golden_sample_records(
             &state,
@@ -3830,29 +4494,21 @@ mod tests {
         assert!(!response.prompt_text.contains("shot_scene_type"));
         assert!(!response.prompt_text.contains("retrieval trace"));
         assert!(!response.prompt_text.contains("retrieval_trace"));
-        assert!(
-            !response
-                .prompt_text
-                .contains("Compose a restrained dialogue shot with stable eyeline")
-        );
-        assert!(
-            response
-                .warnings
-                .iter()
-                .any(|warning| warning.code == "text_model_live_call_closed")
-        );
-        assert!(
-            response
-                .warnings
-                .iter()
-                .any(|warning| warning.code == "seedance_video_generation_closed")
-        );
-        assert!(
-            response
-                .warnings
-                .iter()
-                .any(|warning| warning.code == "role_action_grounding_incomplete")
-        );
+        assert!(!response
+            .prompt_text
+            .contains("Compose a restrained dialogue shot with stable eyeline"));
+        assert!(response
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "text_model_live_call_closed"));
+        assert!(response
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "seedance_video_generation_closed"));
+        assert!(response
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "role_action_grounding_incomplete"));
     }
 
     #[test]
@@ -4043,10 +4699,9 @@ mod tests {
             );
             assert!(!row.adaptation_reason.trim().is_empty());
             assert!(!row.person.contains("not_specified_by_v120_bridge"));
-            assert!(
-                !row.character_action
-                    .contains("fused_scene_performance_core_preserved")
-            );
+            assert!(!row
+                .character_action
+                .contains("fused_scene_performance_core_preserved"));
             assert!(!row.character_action.contains("按镜头脚本执行"));
             assert!(!row.character_action.contains("执行关键动作"));
             assert!(row.character_action.contains("从"));
@@ -4067,15 +4722,13 @@ mod tests {
             assert!(!row.prompt_text.contains("shot_scene_type"));
             assert!(!row.prompt_text.contains("retrieval trace"));
             assert!(!row.prompt_text.contains("retrieval_trace"));
-            assert!(
-                !row.prompt_text
-                    .contains("Compose a restrained dialogue shot")
-            );
-            assert!(
-                !row.prompt_text_compilation_warnings
-                    .iter()
-                    .any(|warning| warning.code == "role_action_grounding_incomplete")
-            );
+            assert!(!row
+                .prompt_text
+                .contains("Compose a restrained dialogue shot"));
+            assert!(!row
+                .prompt_text_compilation_warnings
+                .iter()
+                .any(|warning| warning.code == "role_action_grounding_incomplete"));
             assert!(row.external_reference_handle_candidates.is_empty());
         }
 
@@ -4083,6 +4736,300 @@ mod tests {
             serde_json::to_string(&storyboard).expect("storyboard response should serialize");
         assert!(!response_json.contains("prompt_body_candidate"));
         assert!(!response_json.contains("Compose a restrained dialogue shot"));
+    }
+
+    #[test]
+    fn finalized_storyboard_bank_saves_lists_updates_removes_and_exports_confirmed_only() {
+        let state = test_state();
+        let first_storyboard = generate_test_storyboard(&state, "finalized-shot-01", 10);
+        let second_storyboard = generate_test_storyboard(&state, "finalized-shot-02", 15);
+
+        let first_save = save_storyboard_shot_result(
+            &state,
+            finalized_save_request_from_storyboard(
+                "project-bank-001",
+                "script-bank-001",
+                2,
+                true,
+                &first_storyboard,
+            ),
+        );
+        assert_eq!(
+            first_save.status,
+            BridgeCallStatus::Ready,
+            "{:?}",
+            first_save.blockers
+        );
+        let second_save = save_storyboard_shot_result(
+            &state,
+            finalized_save_request_from_storyboard(
+                "project-bank-001",
+                "script-bank-001",
+                1,
+                false,
+                &second_storyboard,
+            ),
+        );
+        assert_eq!(
+            second_save.status,
+            BridgeCallStatus::Ready,
+            "{:?}",
+            second_save.blockers
+        );
+
+        let listed = list_storyboard_shot_results(
+            &state,
+            ListStoryboardShotResultsRequest {
+                project_id: "project-bank-001".to_string(),
+                script_id: Some("script-bank-001".to_string()),
+                confirmed: None,
+            },
+        );
+        assert_eq!(listed.shots.len(), 2);
+        assert_eq!(listed.shots[0].result_id, second_storyboard.result_id);
+        assert_eq!(listed.shots[1].result_id, first_storyboard.result_id);
+
+        let confirmed_export = export_storyboard_bank(
+            &state,
+            ExportStoryboardBankRequest {
+                project_id: "project-bank-001".to_string(),
+                script_id: Some("script-bank-001".to_string()),
+                export_format: "v120_storyboard".to_string(),
+                include_unconfirmed: false,
+            },
+        );
+        assert_eq!(confirmed_export.status, BridgeCallStatus::Ready);
+        assert!(!confirmed_export.no_export);
+        assert_eq!(confirmed_export.confirmed_shot_count, 1);
+        assert_eq!(
+            confirmed_export.exported_result_ids,
+            vec![first_storyboard.result_id.clone()]
+        );
+        assert_eq!(
+            confirmed_export.total_shot_duration_seconds,
+            first_storyboard
+                .rows
+                .iter()
+                .map(|row| row.shot_duration_seconds)
+                .sum::<u16>()
+        );
+        assert_eq!(confirmed_export.artifacts.len(), 3);
+        assert!(confirmed_export.artifacts.iter().all(|artifact| {
+            artifact.ready
+                && artifact.artifact_path.is_none()
+                && artifact.full_kb_rows_included == 0
+                && artifact.selected_sample_ids.is_empty()
+                && artifact.selected_kb_rule_ids.is_empty()
+                && artifact.kb_context_summary.is_none()
+                && artifact.retrieval_trace.is_none()
+        }));
+
+        let existing_second = second_save
+            .shot
+            .expect("saved finalized shot should be returned");
+        let updated_second = update_storyboard_shot_result(
+            &state,
+            UpdateStoryboardShotResultRequest {
+                project_id: existing_second.project_id.clone(),
+                result_id: existing_second.result_id.clone(),
+                shot_order: existing_second.shot_order,
+                shot_task_name: "updated finalized shot".to_string(),
+                rows: existing_second.rows.clone(),
+                prompt_text: existing_second.prompt_text.clone(),
+                shot_duration_seconds: existing_second.shot_duration_seconds,
+                duration_source: existing_second.duration_source.clone(),
+                confirmed: true,
+                updated_at_ms: existing_second.updated_at_ms + 1,
+                rows_hash: existing_second.rows_hash.clone(),
+            },
+        );
+        assert_eq!(updated_second.status, BridgeCallStatus::Ready);
+
+        let multi_export = export_storyboard_bank(
+            &state,
+            ExportStoryboardBankRequest {
+                project_id: "project-bank-001".to_string(),
+                script_id: Some("script-bank-001".to_string()),
+                export_format: "v120_storyboard".to_string(),
+                include_unconfirmed: false,
+            },
+        );
+        assert_eq!(multi_export.status, BridgeCallStatus::Ready);
+        assert_eq!(multi_export.confirmed_shot_count, 2);
+        assert_eq!(
+            multi_export.exported_result_ids,
+            vec![
+                second_storyboard.result_id.clone(),
+                first_storyboard.result_id.clone()
+            ]
+        );
+        assert_eq!(
+            multi_export.total_shot_duration_seconds,
+            first_storyboard
+                .rows
+                .iter()
+                .chain(second_storyboard.rows.iter())
+                .map(|row| row.shot_duration_seconds)
+                .sum::<u16>()
+        );
+
+        let removed = remove_storyboard_shot_result(
+            &state,
+            RemoveStoryboardShotResultRequest {
+                project_id: "project-bank-001".to_string(),
+                result_id: first_storyboard.result_id.clone(),
+            },
+        );
+        assert_eq!(removed.status, BridgeCallStatus::Ready);
+        assert!(removed.removed);
+        let listed_confirmed = list_storyboard_shot_results(
+            &state,
+            ListStoryboardShotResultsRequest {
+                project_id: "project-bank-001".to_string(),
+                script_id: Some("script-bank-001".to_string()),
+                confirmed: Some(true),
+            },
+        );
+        assert_eq!(listed_confirmed.shots.len(), 1);
+        assert_eq!(
+            listed_confirmed.shots[0].result_id,
+            second_storyboard.result_id
+        );
+    }
+
+    #[test]
+    fn export_storyboard_bank_returns_no_export_without_confirmed_shots() {
+        let state = test_state();
+        let generated_but_unsaved = generate_test_storyboard(&state, "not-bank-result", 10);
+
+        let empty_export = export_storyboard_bank(
+            &state,
+            ExportStoryboardBankRequest {
+                project_id: "project-bank-empty".to_string(),
+                script_id: Some("script-bank-empty".to_string()),
+                export_format: "v120_storyboard".to_string(),
+                include_unconfirmed: false,
+            },
+        );
+        assert_eq!(empty_export.status, BridgeCallStatus::Gated);
+        assert!(empty_export.no_export);
+        assert_eq!(empty_export.confirmed_shot_count, 0);
+        assert!(empty_export.exported_result_ids.is_empty());
+        assert!(empty_export.artifacts.is_empty());
+        assert!(!empty_export
+            .exported_result_ids
+            .contains(&generated_but_unsaved.result_id));
+        assert!(empty_export
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "storyboard_bank_no_confirmed_shots"));
+
+        let unconfirmed_save = save_storyboard_shot_result(
+            &state,
+            finalized_save_request_from_storyboard(
+                "project-bank-empty",
+                "script-bank-empty",
+                1,
+                false,
+                &generated_but_unsaved,
+            ),
+        );
+        assert_eq!(
+            unconfirmed_save.status,
+            BridgeCallStatus::Ready,
+            "{:?}",
+            unconfirmed_save.blockers
+        );
+        let unconfirmed_export = export_storyboard_bank(
+            &state,
+            ExportStoryboardBankRequest {
+                project_id: "project-bank-empty".to_string(),
+                script_id: Some("script-bank-empty".to_string()),
+                export_format: "v120_storyboard".to_string(),
+                include_unconfirmed: false,
+            },
+        );
+        assert_eq!(unconfirmed_export.status, BridgeCallStatus::Gated);
+        assert!(unconfirmed_export.no_export);
+        assert!(unconfirmed_export.exported_result_ids.is_empty());
+
+        let include_unconfirmed_export = export_storyboard_bank(
+            &state,
+            ExportStoryboardBankRequest {
+                project_id: "project-bank-empty".to_string(),
+                script_id: Some("script-bank-empty".to_string()),
+                export_format: "v120_storyboard".to_string(),
+                include_unconfirmed: true,
+            },
+        );
+        assert_eq!(include_unconfirmed_export.status, BridgeCallStatus::Blocked);
+        assert!(include_unconfirmed_export.no_export);
+        assert!(include_unconfirmed_export
+            .blockers
+            .iter()
+            .any(|blocker| blocker.code == "storyboard_bank_include_unconfirmed_not_supported"));
+    }
+
+    #[test]
+    fn finalized_storyboard_bank_rejects_forbidden_payload_and_hash_drift() {
+        let state = test_state();
+        let storyboard = generate_test_storyboard(&state, "bank-safety-shot", 10);
+        let mut forbidden_request = finalized_save_request_from_storyboard(
+            "project-bank-safe",
+            "script-bank-safe",
+            1,
+            true,
+            &storyboard,
+        );
+        forbidden_request.prompt_text = "raw prompt_body must never be saved".to_string();
+
+        let forbidden_save = save_storyboard_shot_result(&state, forbidden_request);
+        assert_eq!(forbidden_save.status, BridgeCallStatus::Blocked);
+        assert!(forbidden_save
+            .blockers
+            .iter()
+            .any(|blocker| blocker.code == "storyboard_bank_forbidden_payload"));
+
+        let valid_save = save_storyboard_shot_result(
+            &state,
+            finalized_save_request_from_storyboard(
+                "project-bank-safe",
+                "script-bank-safe",
+                1,
+                true,
+                &storyboard,
+            ),
+        );
+        assert_eq!(
+            valid_save.status,
+            BridgeCallStatus::Ready,
+            "{:?}",
+            valid_save.blockers
+        );
+        let mut corrupted = valid_save
+            .shot
+            .expect("valid finalized shot should be returned");
+        corrupted.rows[0]
+            .visual_description
+            .push_str(" adjusted after hash was stored");
+        state.remember_finalized_storyboard_shot(corrupted.clone());
+
+        let export = export_storyboard_bank(
+            &state,
+            ExportStoryboardBankRequest {
+                project_id: "project-bank-safe".to_string(),
+                script_id: Some("script-bank-safe".to_string()),
+                export_format: "v120_storyboard".to_string(),
+                include_unconfirmed: false,
+            },
+        );
+        assert_eq!(export.status, BridgeCallStatus::Blocked);
+        assert!(export.no_export);
+        assert!(export.artifacts.is_empty());
+        assert!(export.blockers.iter().any(|blocker| {
+            blocker.code == "storyboard_bank_rows_hash_mismatch"
+                && blocker.related_sample_id.as_deref() == Some(corrupted.result_id.as_str())
+        }));
     }
 
     #[test]
@@ -4105,18 +5052,14 @@ mod tests {
 
         assert_eq!(script.status, BridgeCallStatus::WarningOnly);
         assert!(script.expanded_script_text.contains("source_package:"));
-        assert!(
-            script
-                .warnings
-                .iter()
-                .any(|warning| warning.code == "text_model_api_key_missing")
-        );
-        assert!(
-            script
-                .warnings
-                .iter()
-                .any(|warning| warning.code == "text_model_live_expand_fallback")
-        );
+        assert!(script
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "text_model_api_key_missing"));
+        assert!(script
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "text_model_live_expand_fallback"));
     }
 
     #[test]
@@ -4133,12 +5076,10 @@ mod tests {
 
         assert!(script.script_id.starts_with("script-"));
         assert!(script.expanded_script_text.contains("daily_dialogue"));
-        assert!(
-            script
-                .warnings
-                .iter()
-                .any(|warning| warning.code == "text_model_live_call_closed")
-        );
+        assert!(script
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "text_model_live_call_closed"));
 
         let storyboard = generate_storyboard(
             &state,
@@ -4192,61 +5133,47 @@ mod tests {
         assert!(!storyboard.rows[0].prompt_text.contains("sample_id"));
         assert!(!storyboard.rows[0].prompt_text.contains("scene_category"));
         assert!(!storyboard.rows[0].prompt_text.contains("style_cluster"));
-        assert!(
-            !storyboard.rows[0]
-                .prompt_text
-                .contains("selected_sample_ids")
-        );
+        assert!(!storyboard.rows[0]
+            .prompt_text
+            .contains("selected_sample_ids"));
         assert!(!storyboard.rows[0].prompt_text.contains("rule_id"));
         assert!(!storyboard.rows[0].prompt_text.contains("duration_guard"));
         assert!(!storyboard.rows[0].prompt_text.contains("reserve_gate"));
         assert!(!storyboard.rows[0].prompt_text.contains("grounding_source"));
-        assert!(
-            !storyboard.rows[0]
-                .prompt_text
-                .contains("primary_scene_type")
-        );
+        assert!(!storyboard.rows[0]
+            .prompt_text
+            .contains("primary_scene_type"));
         assert!(!storyboard.rows[0].prompt_text.contains("shot_scene_type"));
         assert!(!storyboard.rows[0].prompt_text.contains("retrieval trace"));
         assert!(!storyboard.rows[0].prompt_text.contains("retrieval_trace"));
-        assert!(
-            !storyboard.rows[0]
-                .prompt_text
-                .contains("Compose a restrained dialogue shot with stable eyeline")
-        );
+        assert!(!storyboard.rows[0]
+            .prompt_text
+            .contains("Compose a restrained dialogue shot with stable eyeline"));
         assert_eq!(
             storyboard.rows[0].sequence_grouping.sequence_field_state,
             core_domain::SequenceFieldState::NotApplicable
         );
-        assert!(
-            storyboard.rows[0]
-                .external_reference_handle_candidates
-                .is_empty()
-        );
+        assert!(storyboard.rows[0]
+            .external_reference_handle_candidates
+            .is_empty());
         assert_eq!(
             storyboard.export_status.status,
             BridgeCallStatus::WarningOnly
         );
-        assert!(
-            storyboard
-                .export_status
-                .warnings
-                .iter()
-                .any(|warning| warning.code == "text_model_live_call_closed")
-        );
-        assert!(
-            storyboard
-                .export_status
-                .warnings
-                .iter()
-                .any(|warning| warning.code == "seedance_video_generation_closed")
-        );
-        assert!(
-            storyboard.rows[0]
-                .prompt_text_compilation_warnings
-                .iter()
-                .any(|warning| warning.code == "text_model_live_call_closed")
-        );
+        assert!(storyboard
+            .export_status
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "text_model_live_call_closed"));
+        assert!(storyboard
+            .export_status
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "seedance_video_generation_closed"));
+        assert!(storyboard.rows[0]
+            .prompt_text_compilation_warnings
+            .iter()
+            .any(|warning| warning.code == "text_model_live_call_closed"));
 
         let export = export_bundle(
             &state,
@@ -4259,12 +5186,10 @@ mod tests {
 
         assert_eq!(export.export_status.status, BridgeCallStatus::WarningOnly);
         assert_eq!(export.artifacts.len(), 4);
-        assert!(
-            export
-                .artifacts
-                .iter()
-                .any(|artifact| artifact.artifact_kind == "v120_bridge_manifest" && artifact.ready)
-        );
+        assert!(export
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.artifact_kind == "v120_bridge_manifest" && artifact.ready));
         for artifact_kind in ["storyboard_json", "storyboard_csv", "excel_workbook"] {
             let artifact = export
                 .artifacts
@@ -4311,21 +5236,17 @@ mod tests {
         );
 
         assert_eq!(export.export_status.status, BridgeCallStatus::Blocked);
-        assert!(
-            export
-                .export_status
-                .blockers
-                .iter()
-                .any(|blocker| blocker.code == "storyboard_result_not_found")
-        );
+        assert!(export
+            .export_status
+            .blockers
+            .iter()
+            .any(|blocker| blocker.code == "storyboard_result_not_found"));
         assert!(export.artifacts.iter().all(|artifact| !artifact.ready));
-        assert!(
-            export
-                .artifacts
-                .iter()
-                .all(|artifact| artifact.blocked_reason.as_deref()
-                    == Some("storyboard_result_not_found"))
-        );
+        assert!(export
+            .artifacts
+            .iter()
+            .all(|artifact| artifact.blocked_reason.as_deref()
+                == Some("storyboard_result_not_found")));
     }
 
     #[test]
@@ -4342,12 +5263,10 @@ mod tests {
 
         assert_eq!(response.status, BridgeCallStatus::Blocked);
         assert!(response.script_id.is_empty());
-        assert!(
-            response
-                .blockers
-                .iter()
-                .any(|item| item.code == "synopsis_required")
-        );
+        assert!(response
+            .blockers
+            .iter()
+            .any(|item| item.code == "synopsis_required"));
     }
 
     #[test]
@@ -4374,13 +5293,11 @@ mod tests {
         assert_eq!(empty_script.export_status.status, BridgeCallStatus::Blocked);
         assert!(empty_script.result_id.is_empty());
         assert!(empty_script.rows.is_empty());
-        assert!(
-            empty_script
-                .export_status
-                .blockers
-                .iter()
-                .any(|item| item.code == "task_script_required")
-        );
+        assert!(empty_script
+            .export_status
+            .blockers
+            .iter()
+            .any(|item| item.code == "task_script_required"));
 
         for duration in [7u16, 20u16, 0u16] {
             let response = generate_storyboard(
@@ -4404,13 +5321,11 @@ mod tests {
             );
             assert_eq!(response.export_status.status, BridgeCallStatus::Blocked);
             assert!(response.result_id.is_empty());
-            assert!(
-                response
-                    .export_status
-                    .blockers
-                    .iter()
-                    .any(|item| item.code == "duration_not_supported")
-            );
+            assert!(response
+                .export_status
+                .blockers
+                .iter()
+                .any(|item| item.code == "duration_not_supported"));
         }
     }
 
@@ -4435,11 +5350,9 @@ mod tests {
                 },
             );
             assert_ne!(script.status, BridgeCallStatus::Blocked);
-            assert!(
-                script
-                    .expanded_script_text
-                    .contains("scene_type: daily_dialogue")
-            );
+            assert!(script
+                .expanded_script_text
+                .contains("scene_type: daily_dialogue"));
 
             let storyboard = generate_storyboard(
                 &state,
@@ -4576,12 +5489,10 @@ mod tests {
         assert_eq!(json_artifact.selected_total_duration_seconds, Some(10));
         assert_eq!(json_artifact.full_kb_rows_included, 0);
         assert_eq!(json_artifact.selected_sample_ids.len(), 3);
-        assert!(
-            json_artifact
-                .prompt_text_compilation_statuses
-                .iter()
-                .any(|status| status == "ReadyStub")
-        );
+        assert!(json_artifact
+            .prompt_text_compilation_statuses
+            .iter()
+            .any(|status| status == "ReadyStub"));
         assert!(json_artifact.kb_context_summary.is_some());
         assert!(json_artifact.retrieval_trace.is_some());
 
@@ -4630,13 +5541,11 @@ mod tests {
         );
 
         assert_eq!(saved.export_status.status, BridgeCallStatus::Blocked);
-        assert!(
-            saved
-                .export_status
-                .blockers
-                .iter()
-                .any(|item| item.code == "duration_conservation_failed")
-        );
+        assert!(saved
+            .export_status
+            .blockers
+            .iter()
+            .any(|item| item.code == "duration_conservation_failed"));
         assert!(saved.result_id.is_empty());
     }
 
@@ -4756,19 +5665,15 @@ mod tests {
             snapshot.summary_items[2].state,
             ValidationExportPanelState::Ready
         );
-        assert!(
-            snapshot
-                .repair_recommendations
-                .iter()
-                .any(|item| item.failure_code == "chinese_prompt_noise")
-        );
-        assert!(
-            snapshot
-                .repair_recommendations
-                .iter()
-                .flat_map(|item| item.prompt_template_names.iter())
-                .any(|name| name == "Repair Prompt Language")
-        );
+        assert!(snapshot
+            .repair_recommendations
+            .iter()
+            .any(|item| item.failure_code == "chinese_prompt_noise"));
+        assert!(snapshot
+            .repair_recommendations
+            .iter()
+            .flat_map(|item| item.prompt_template_names.iter())
+            .any(|name| name == "Repair Prompt Language"));
     }
 
     #[test]
