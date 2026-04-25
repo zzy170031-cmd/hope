@@ -113,6 +113,10 @@ pub struct KbRouterRuntimeRequest {
     pub synopsis_text: String,
     pub duration_seconds: u16,
     pub task_type: KbRouterTaskType,
+    pub primary_scene_type: Option<String>,
+    pub primary_scene_label: Option<String>,
+    pub shot_scene_type: Option<String>,
+    pub shot_scene_label: Option<String>,
     pub shot_intent: Option<String>,
     pub structure_type: Option<String>,
 }
@@ -181,6 +185,7 @@ pub struct PromptTextCompilationRow {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PromptTextCompilationRequest {
     pub row: PromptTextCompilationRow,
+    pub shot_script: Option<String>,
     pub scene_type: String,
     pub scene_label: String,
     pub kb_context_summary: String,
@@ -325,6 +330,62 @@ pub struct ScenePerformanceProjection {
     pub sequence_grouping: SequenceGrouping,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShotGroundingSource {
+    ShotScript,
+    ExpandedScriptText,
+    PrimarySceneFields,
+    KbRouterSummary,
+}
+
+impl ShotGroundingSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ShotScript => "shot_script",
+            Self::ExpandedScriptText => "expanded_script_text",
+            Self::PrimarySceneFields => "primary_scene_fields",
+            Self::KbRouterSummary => "kb_router_summary",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SplitScriptToShotTasksRequest {
+    pub script_id: Option<String>,
+    pub expanded_script_text: String,
+    pub selected_total_duration_seconds: u16,
+    pub primary_scene_type: String,
+    pub primary_scene_label: Option<String>,
+    pub primary_scene_category: Option<String>,
+    pub task_type: Option<String>,
+    pub shot_count_hint: Option<u32>,
+    pub structure_type: Option<String>,
+    pub kb_context_summary: Option<String>,
+    pub selected_kb_rules: Vec<String>,
+    pub selected_sample_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShotTask {
+    pub shot_task_id: String,
+    pub shot_order: u32,
+    pub shot_script: String,
+    pub duration_seconds: u16,
+    pub shot_scene_type: String,
+    pub shot_scene_label: String,
+    pub shot_intent: String,
+    pub adaptation_reason: String,
+    pub grounding_source: ShotGroundingSource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SplitScriptToShotTasksResponse {
+    pub script_id: Option<String>,
+    pub shot_tasks: Vec<ShotTask>,
+    pub warnings: Vec<ProductWarning>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExpandScriptRequest {
     pub scene_type: String,
@@ -346,7 +407,15 @@ pub struct ExpandScriptResponse {
 pub struct GenerateStoryboardRequest {
     pub task_name: String,
     pub script_id: Option<String>,
+    pub shot_script: Option<String>,
     pub expanded_script_text: Option<String>,
+    pub primary_scene_type: Option<String>,
+    pub primary_scene_label: Option<String>,
+    pub primary_scene_category: Option<String>,
+    pub shot_scene_type: Option<String>,
+    pub shot_scene_label: Option<String>,
+    pub shot_intent: Option<String>,
+    pub adaptation_reason: Option<String>,
     pub selected_total_duration_seconds: u16,
 }
 
@@ -354,6 +423,15 @@ pub struct GenerateStoryboardRequest {
 pub struct GeneratedStoryboardRow {
     pub shot_id: String,
     pub order: u32,
+    pub shot_script: String,
+    pub primary_scene_type: String,
+    pub primary_scene_label: String,
+    pub primary_scene_category: String,
+    pub shot_scene_type: String,
+    pub shot_scene_label: String,
+    pub shot_intent: String,
+    pub adaptation_reason: String,
+    pub grounding_source: ShotGroundingSource,
     pub person: String,
     pub shot_title: String,
     pub scene_scale: String,
@@ -365,7 +443,6 @@ pub struct GeneratedStoryboardRow {
     pub prompt_text_compilation_warnings: Vec<ProductWarning>,
     pub prompt_text_source_row_id: String,
     pub duration_seconds: u16,
-    pub prompt_body_candidate: PromptBodyCandidate,
     pub scene_performance_projection: ScenePerformanceProjection,
     pub external_reference_handle_candidates: Vec<ExternalReferenceHandleCandidate>,
     pub sequence_grouping: SequenceGrouping,

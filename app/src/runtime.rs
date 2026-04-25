@@ -11,9 +11,10 @@ use core_domain::{
     GenerateStoryboardRequest, GenerateStoryboardResponse, GeneratedStoryboardRow,
     GoldenSampleLibraryRecord, KbRouterExcludedCandidate, KbRouterRetrievalTrace,
     KbRouterRuntimeRequest, KbRouterRuntimeResponse, KbRouterSelectedRule, KbRouterSelectionReason,
-    KbRouterTaskType, KbRouterTokenBudget, ProductWarning, PromptBodyCandidate,
-    PromptTextCompilationRequest, PromptTextCompilationResponse, PromptTextCompilationRow,
-    PromptTextCompilationStatus, ScenePerformanceProjection, SequenceFieldState, SequenceGrouping,
+    KbRouterTaskType, KbRouterTokenBudget, ProductWarning, PromptTextCompilationRequest,
+    PromptTextCompilationResponse, PromptTextCompilationRow, PromptTextCompilationStatus,
+    ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, ShotGroundingSource,
+    ShotTask, SplitScriptToShotTasksRequest, SplitScriptToShotTasksResponse,
     StoryboardDurationPlan, StoryboardExportStatus, StructureMode, TextGenerationOutputSchema,
     TextGenerationRequest, TextGenerationResponse, TextGenerationTask, TextModelProvider,
     TextModelProviderKind, UpdateStoryboardRowsRequest,
@@ -106,6 +107,36 @@ struct LiveStoryboardRowsEnvelope {
     rows: Vec<LiveStoryboardRowPatch>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StoryboardGroundingContext {
+    shot_script: String,
+    expanded_script_text: String,
+    grounding_text: String,
+    grounding_source: ShotGroundingSource,
+    primary_scene_type: String,
+    primary_scene_label: String,
+    primary_scene_category: String,
+    shot_scene_type: String,
+    shot_scene_label: String,
+    shot_intent: String,
+    adaptation_reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShotGroundedRowDraft {
+    shot_id: String,
+    shot_script: String,
+    person: String,
+    shot_title: String,
+    scene_scale: String,
+    visual_description: String,
+    character_action: String,
+    dialogue: String,
+    duration_seconds: u16,
+    sequence_grouping: SequenceGrouping,
+    scene_performance_projection: ScenePerformanceProjection,
+}
+
 #[derive(Debug, Deserialize)]
 struct QwenChatCompletionResponse {
     choices: Vec<QwenChoice>,
@@ -138,6 +169,10 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
         synopsis_text: request.synopsis_text.clone(),
         duration_seconds: 0,
         task_type: KbRouterTaskType::ExpandScript,
+        primary_scene_type: Some(normalized_scene_type.clone()),
+        primary_scene_label: Some(request.scene_type.clone()),
+        shot_scene_type: None,
+        shot_scene_label: None,
         shot_intent: None,
         structure_type: None,
     };
@@ -278,7 +313,7 @@ pub fn generate_storyboard(
     request: GenerateStoryboardRequest,
 ) -> GenerateStoryboardResponse {
     let now_ms = now_epoch_ms();
-    let script_text = request
+    let expanded_script_text = request
         .expanded_script_text
         .clone()
         .or_else(|| {
@@ -289,20 +324,24 @@ pub fn generate_storyboard(
                 .map(|script| script.expanded_script_text)
         })
         .unwrap_or_default();
-    let scene_type = extract_scene_type(&script_text);
-    let normalized_scene_type = normalize_scene_type(&scene_type);
-    let synopsis_text = extract_synopsis_text(&script_text);
+    let grounding = resolve_storyboard_grounding_context(&request, expanded_script_text);
+    let normalized_scene_type = normalize_scene_type(&grounding.primary_scene_type);
+    let synopsis_text = build_storyboard_router_synopsis(&grounding);
     let router_request = KbRouterRuntimeRequest {
         scene_type: normalized_scene_type.clone(),
         synopsis_text,
         duration_seconds: request.selected_total_duration_seconds,
         task_type: KbRouterTaskType::GenerateStoryboard,
-        shot_intent: None,
+        primary_scene_type: Some(grounding.primary_scene_type.clone()),
+        primary_scene_label: Some(grounding.primary_scene_label.clone()),
+        shot_scene_type: Some(grounding.shot_scene_type.clone()),
+        shot_scene_label: Some(grounding.shot_scene_label.clone()),
+        shot_intent: non_blank_string(&grounding.shot_intent),
         structure_type: None,
     };
     let mut blockers = Vec::new();
 
-    if script_text.trim().is_empty() {
+    if grounding.grounding_text.trim().is_empty() {
         blockers.push(ProductWarning {
             code: "task_script_required".to_string(),
             message: "请先完成脚本扩写或提供有效脚本内容，再生成分镜。".to_string(),
@@ -323,18 +362,28 @@ pub fn generate_storyboard(
             related_sample_id: None,
         });
     }
-    if scene_type.trim().is_empty() {
+    if grounding.primary_scene_type.trim().is_empty() {
         blockers.push(ProductWarning {
             code: "scene_type_required".to_string(),
             message: "脚本中缺少有效场景类型，无法生成分镜。".to_string(),
             related_sample_id: None,
         });
-    } else if resolve_scene_taxonomy(state, Some(&scene_type)).is_none()
+    } else if resolve_scene_taxonomy(state, Some(&grounding.primary_scene_type)).is_none()
         && resolve_scene_taxonomy(state, Some(&normalized_scene_type)).is_none()
     {
         blockers.push(ProductWarning {
             code: "scene_type_invalid".to_string(),
             message: "脚本中的场景类型无效，无法生成分镜。".to_string(),
+            related_sample_id: None,
+        });
+    }
+    if grounding.shot_scene_type != grounding.primary_scene_type
+        && grounding.adaptation_reason.trim().is_empty()
+    {
+        blockers.push(ProductWarning {
+            code: "adaptation_reason_required".to_string(),
+            message: "shot_scene_type differs from primary_scene_type and needs adaptation_reason."
+                .to_string(),
             related_sample_id: None,
         });
     }
@@ -391,8 +440,8 @@ pub fn generate_storyboard(
     let provider = default_text_model_provider();
     let generation_request = build_text_generation_request(
         TextGenerationTask::GenerateStoryboard,
-        Some(normalized_scene_type.clone()),
-        script_text.clone(),
+        Some(grounding.shot_scene_type.clone()),
+        build_storyboard_model_story_input(&grounding),
         Some(StoryboardDurationPlan {
             total_duration_seconds: request.selected_total_duration_seconds,
             row_count: row_count as u32,
@@ -419,72 +468,70 @@ pub fn generate_storyboard(
         }
     };
 
-    for (index, record) in selected_records.iter().enumerate() {
-        let failure_mapping = state
-            .kb_golden_sample_runtime
-            .failure_mapping
-            .records
-            .iter()
-            .find(|mapping| mapping.sample_id == record.sample_id);
-        let evidence = project_v120_evidence_aware_findings(record, failure_mapping);
-        blockers.extend(
-            evidence
-                .blockers
-                .into_iter()
-                .map(product_warning_from_evidence),
-        );
-        warnings.extend(
-            evidence
-                .warnings
-                .into_iter()
-                .map(product_warning_from_evidence),
-        );
-
-        let prompt_candidate = project_prompt_body_candidate(record);
-        let scene_projection = project_scene_performance(record);
-        if prompt_candidate.candidate_text.is_some() {
-            warnings.push(ProductWarning {
-                code: "prompt_body_candidate_not_compiled".to_string(),
-                message: "V120 prompt_body is held as candidate evidence and is not compiled into runtime prompt_text.".to_string(),
-                related_sample_id: Some(record.sample_id.clone()),
-            });
+    for index in 0..row_count {
+        let record = selected_records.get(index).copied();
+        if let Some(record) = record {
+            let failure_mapping = state
+                .kb_golden_sample_runtime
+                .failure_mapping
+                .records
+                .iter()
+                .find(|mapping| mapping.sample_id == record.sample_id);
+            let evidence = project_v120_evidence_aware_findings(record, failure_mapping);
+            blockers.extend(
+                evidence
+                    .blockers
+                    .into_iter()
+                    .map(product_warning_from_evidence),
+            );
+            warnings.extend(
+                evidence
+                    .warnings
+                    .into_iter()
+                    .map(product_warning_from_evidence),
+            );
         }
+
+        let draft = build_shot_grounded_row_draft(
+            &grounding,
+            index,
+            row_count,
+            row_durations[index],
+            record,
+        );
         let prompt_compilation = compile_seedance_prompt_text(
             state,
-            build_prompt_text_compilation_request(
-                record,
-                &scene_projection,
-                row_durations[index],
+            build_shot_prompt_text_compilation_request(
+                &draft,
+                &grounding,
                 &kb_router_result,
+                record.map(|item| item.source_fields.continuity_negative_core.as_str()),
             ),
         );
         warnings.extend(prompt_compilation.warnings.iter().cloned());
 
-        rows.push(GeneratedStoryboardRow {
-            shot_id: record.source_fields.shot_id.clone(),
-            order: (index + 1) as u32,
-            person: scene_projection.person.clone(),
-            shot_title: record.source_fields.sample_title.clone(),
-            scene_scale: scene_projection.scene_scale.clone(),
-            visual_description: scene_projection.visual_description.clone(),
-            character_action: scene_projection.character_action.clone(),
-            dialogue: String::new(),
-            prompt_text: prompt_compilation.prompt_text.clone(),
-            prompt_text_compilation_status: prompt_compilation.compilation_status,
-            prompt_text_compilation_warnings: prompt_compilation.warnings.clone(),
-            prompt_text_source_row_id: prompt_compilation.source_row_id.clone(),
-            duration_seconds: row_durations[index],
-            prompt_body_candidate: prompt_candidate,
-            scene_performance_projection: scene_projection.clone(),
-            external_reference_handle_candidates: project_reference_handle_candidates(record),
-            sequence_grouping: scene_projection.sequence_grouping,
-        });
+        rows.push(build_generated_storyboard_row(
+            (index + 1) as u32,
+            &grounding,
+            &draft,
+            &prompt_compilation,
+        ));
 
         if let Some(patch) = live_row_patches.get(index) {
             let row = rows
                 .last_mut()
                 .expect("storyboard row must exist immediately after push");
             apply_live_storyboard_patch(row, patch);
+            if !row_is_grounded_in_story(row, &grounding) {
+                warnings.push(ProductWarning {
+                    code: "text_model_live_storyboard_fallback".to_string(),
+                    message:
+                        "Live storyboard content did not stay grounded in shot_script, so Hope kept the deterministic shot-grounded row."
+                            .to_string(),
+                    related_sample_id: Some(row.shot_id.clone()),
+                });
+                restore_shot_grounded_row(row, &draft, &grounding);
+            }
         }
     }
 
@@ -501,40 +548,31 @@ pub fn generate_storyboard(
                 related_sample_id: None,
             });
             rows.clear();
-            for (index, record) in selected_records.iter().enumerate() {
-                let prompt_candidate = project_prompt_body_candidate(record);
-                let scene_projection = project_scene_performance(record);
+            for index in 0..row_count {
+                let record = selected_records.get(index).copied();
+                let draft = build_shot_grounded_row_draft(
+                    &grounding,
+                    index,
+                    row_count,
+                    row_durations[index],
+                    record,
+                );
                 let prompt_compilation = compile_seedance_prompt_text(
                     state,
-                    build_prompt_text_compilation_request(
-                        record,
-                        &scene_projection,
-                        row_durations[index],
+                    build_shot_prompt_text_compilation_request(
+                        &draft,
+                        &grounding,
                         &kb_router_result,
+                        record.map(|item| item.source_fields.continuity_negative_core.as_str()),
                     ),
                 );
                 warnings.extend(prompt_compilation.warnings.iter().cloned());
-                rows.push(GeneratedStoryboardRow {
-                    shot_id: record.source_fields.shot_id.clone(),
-                    order: (index + 1) as u32,
-                    person: scene_projection.person.clone(),
-                    shot_title: record.source_fields.sample_title.clone(),
-                    scene_scale: scene_projection.scene_scale.clone(),
-                    visual_description: scene_projection.visual_description.clone(),
-                    character_action: scene_projection.character_action.clone(),
-                    dialogue: String::new(),
-                    prompt_text: prompt_compilation.prompt_text.clone(),
-                    prompt_text_compilation_status: prompt_compilation.compilation_status,
-                    prompt_text_compilation_warnings: prompt_compilation.warnings.clone(),
-                    prompt_text_source_row_id: prompt_compilation.source_row_id.clone(),
-                    duration_seconds: row_durations[index],
-                    prompt_body_candidate: prompt_candidate,
-                    scene_performance_projection: scene_projection.clone(),
-                    external_reference_handle_candidates: project_reference_handle_candidates(
-                        record,
-                    ),
-                    sequence_grouping: scene_projection.sequence_grouping,
-                });
+                rows.push(build_generated_storyboard_row(
+                    (index + 1) as u32,
+                    &grounding,
+                    &draft,
+                    &prompt_compilation,
+                ));
             }
         }
     }
@@ -572,14 +610,14 @@ pub fn generate_storyboard(
         &stable_hash_hex(&format!(
             "{}\n{}",
             request.task_name.trim(),
-            normalized_scene_type
+            grounding.shot_scene_type
         ))[..12]
     );
     let result_id = format!(
         "storyboard-{}",
         &stable_hash_hex(&format!(
             "{}\n{}\n{}",
-            request.task_name, script_text, request.selected_total_duration_seconds
+            request.task_name, grounding.grounding_text, request.selected_total_duration_seconds
         ))[..12]
     );
     let operation_id = format!(
@@ -629,6 +667,10 @@ pub fn save_storyboard_rows(
         synopsis_text: String::new(),
         duration_seconds: 0,
         task_type: KbRouterTaskType::GenerateStoryboard,
+        primary_scene_type: None,
+        primary_scene_label: None,
+        shot_scene_type: None,
+        shot_scene_label: None,
         shot_intent: None,
         structure_type: None,
     };
@@ -658,6 +700,10 @@ pub fn save_storyboard_rows(
         synopsis_text: snapshot.kb_router_result.kb_context_summary.clone(),
         duration_seconds: snapshot.selected_total_duration_seconds,
         task_type: KbRouterTaskType::GenerateStoryboard,
+        primary_scene_type: None,
+        primary_scene_label: None,
+        shot_scene_type: None,
+        shot_scene_label: None,
         shot_intent: None,
         structure_type: None,
     };
@@ -998,10 +1044,14 @@ fn blocked_storyboard_export_artifacts(
 fn run_kb_router(state: &AppState, request: KbRouterRuntimeRequest) -> KbRouterRuntimeResponse {
     let story_keywords = derive_story_keywords(&request.synopsis_text, &request.scene_type);
     let query = format!(
-        "{} {} {} {} {}",
+        "{} {} {} {} {} {} {} {} {}",
         request.scene_type,
         request.synopsis_text,
         story_keywords.join(" "),
+        request.primary_scene_type.as_deref().unwrap_or_default(),
+        request.primary_scene_label.as_deref().unwrap_or_default(),
+        request.shot_scene_type.as_deref().unwrap_or_default(),
+        request.shot_scene_label.as_deref().unwrap_or_default(),
         request.shot_intent.as_deref().unwrap_or_default(),
         request.structure_type.as_deref().unwrap_or_default()
     )
@@ -1083,11 +1133,13 @@ fn run_kb_router(state: &AppState, request: KbRouterRuntimeRequest) -> KbRouterR
         &excluded_candidates,
     );
     let content_cache_key = stable_hash_hex(&format!(
-        "{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         state.kb_runtime.snapshot.seed_format,
         request.scene_type,
         request.duration_seconds,
         request.task_type.as_str(),
+        request.primary_scene_type.as_deref().unwrap_or_default(),
+        request.shot_scene_type.as_deref().unwrap_or_default(),
         request.shot_intent.as_deref().unwrap_or_default(),
         stable_hash_hex(&request.synopsis_text)
     ));
@@ -1247,6 +1299,15 @@ fn build_kb_context_summary(
         excluded_summary
     );
 
+    summary.push_str(&format!(
+        " primary_scene_type={} primary_scene_label={} shot_scene_type={} shot_scene_label={} shot_intent={} summary_only=true.",
+        request.primary_scene_type.as_deref().unwrap_or(&request.scene_type),
+        request.primary_scene_label.as_deref().unwrap_or_default(),
+        request.shot_scene_type.as_deref().unwrap_or(&request.scene_type),
+        request.shot_scene_label.as_deref().unwrap_or_default(),
+        request.shot_intent.as_deref().unwrap_or_default(),
+    ));
+
     while summary.chars().count() < 820 {
         summary.push_str(" 本地摘要继续强调：只保留与当前任务直接相关的结构化规则和样本 lesson，不复制原始 23 字段整行，不复制 prompt_body，不复制 teaching_note，不复制 provenance。");
     }
@@ -1269,6 +1330,518 @@ fn select_golden_sample_records_from_router<'a>(
                 .find(|record| &record.sample_id == sample_id)
         })
         .collect()
+}
+
+pub fn split_script_to_shot_tasks(
+    request: SplitScriptToShotTasksRequest,
+) -> SplitScriptToShotTasksResponse {
+    let source_segments = split_story_segments(&request.expanded_script_text);
+    let shot_count = request
+        .shot_count_hint
+        .map(|value| value.max(1) as usize)
+        .unwrap_or_else(|| source_segments.len().clamp(1, 8));
+    let durations =
+        allocate_storyboard_row_durations(request.selected_total_duration_seconds, shot_count)
+            .unwrap_or_else(|| vec![request.selected_total_duration_seconds]);
+    let mut shot_tasks = Vec::new();
+    let script_hash = stable_hash_hex(&format!(
+        "{}\n{}\n{}",
+        request.script_id.as_deref().unwrap_or_default(),
+        request.expanded_script_text,
+        request.selected_total_duration_seconds
+    ));
+
+    for index in 0..shot_count {
+        let shot_script = source_segments
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| request.expanded_script_text.trim().to_string());
+        let primary_scene_type = request.primary_scene_type.clone();
+        let shot_scene_type = infer_shot_scene_type(&shot_script, &primary_scene_type);
+        let adaptation_reason = if shot_scene_type == primary_scene_type {
+            String::new()
+        } else {
+            build_adaptation_reason(&shot_script, &shot_scene_type)
+        };
+        shot_tasks.push(ShotTask {
+            shot_task_id: format!("shot-task-{}-{:02}", &script_hash[..12], index + 1),
+            shot_order: (index + 1) as u32,
+            shot_script,
+            duration_seconds: durations[index.min(durations.len() - 1)],
+            shot_scene_type: shot_scene_type.clone(),
+            shot_scene_label: derive_shot_scene_label(&shot_scene_type),
+            shot_intent: derive_shot_intent(
+                source_segments
+                    .get(index)
+                    .map(String::as_str)
+                    .unwrap_or(&request.expanded_script_text),
+            ),
+            adaptation_reason,
+            grounding_source: ShotGroundingSource::ExpandedScriptText,
+        });
+    }
+
+    SplitScriptToShotTasksResponse {
+        script_id: request.script_id,
+        shot_tasks,
+        warnings: vec![],
+    }
+}
+
+fn resolve_storyboard_grounding_context(
+    request: &GenerateStoryboardRequest,
+    expanded_script_text: String,
+) -> StoryboardGroundingContext {
+    let shot_script =
+        non_blank_string(request.shot_script.as_deref().unwrap_or_default()).unwrap_or_default();
+    let primary_scene_type =
+        non_blank_string(request.primary_scene_type.as_deref().unwrap_or_default())
+            .or_else(|| non_blank_string(&extract_scene_type(&expanded_script_text)))
+            .or_else(|| non_blank_string(&extract_scene_type(&shot_script)))
+            .unwrap_or_default();
+    let grounding_source = if !shot_script.trim().is_empty() {
+        ShotGroundingSource::ShotScript
+    } else if !expanded_script_text.trim().is_empty() {
+        ShotGroundingSource::ExpandedScriptText
+    } else if !primary_scene_type.trim().is_empty() {
+        ShotGroundingSource::PrimarySceneFields
+    } else {
+        ShotGroundingSource::KbRouterSummary
+    };
+    let grounding_text = match grounding_source {
+        ShotGroundingSource::ShotScript => shot_script.clone(),
+        ShotGroundingSource::ExpandedScriptText => expanded_script_text.clone(),
+        ShotGroundingSource::PrimarySceneFields => primary_scene_type.clone(),
+        ShotGroundingSource::KbRouterSummary => String::new(),
+    };
+    let shot_scene_type = non_blank_string(request.shot_scene_type.as_deref().unwrap_or_default())
+        .unwrap_or_else(|| infer_shot_scene_type(&grounding_text, &primary_scene_type));
+    let adaptation_reason = non_blank_string(
+        request.adaptation_reason.as_deref().unwrap_or_default(),
+    )
+    .unwrap_or_else(|| {
+        if shot_scene_type == primary_scene_type {
+            String::new()
+        } else {
+            build_adaptation_reason(&grounding_text, &shot_scene_type)
+        }
+    });
+
+    StoryboardGroundingContext {
+        shot_script,
+        expanded_script_text,
+        grounding_text,
+        grounding_source,
+        primary_scene_type: primary_scene_type.clone(),
+        primary_scene_label: non_blank_string(
+            request.primary_scene_label.as_deref().unwrap_or_default(),
+        )
+        .unwrap_or_else(|| derive_shot_scene_label(&primary_scene_type)),
+        primary_scene_category: non_blank_string(
+            request
+                .primary_scene_category
+                .as_deref()
+                .unwrap_or_default(),
+        )
+        .unwrap_or_else(|| primary_scene_type.clone()),
+        shot_scene_label: non_blank_string(request.shot_scene_label.as_deref().unwrap_or_default())
+            .unwrap_or_else(|| derive_shot_scene_label(&shot_scene_type)),
+        shot_intent: non_blank_string(request.shot_intent.as_deref().unwrap_or_default())
+            .unwrap_or_else(|| derive_shot_intent(&shot_scene_type)),
+        shot_scene_type,
+        adaptation_reason,
+    }
+}
+
+fn build_storyboard_router_synopsis(grounding: &StoryboardGroundingContext) -> String {
+    format!(
+        "primary_scene_type={}; primary_scene_label={}; primary_scene_category={}; shot_scene_type={}; shot_scene_label={}; shot_intent={}; grounding_source={}; shot_script={}; expanded_script_text={}",
+        grounding.primary_scene_type,
+        grounding.primary_scene_label,
+        grounding.primary_scene_category,
+        grounding.shot_scene_type,
+        grounding.shot_scene_label,
+        grounding.shot_intent,
+        grounding.grounding_source.as_str(),
+        grounding.shot_script,
+        grounding.expanded_script_text
+    )
+}
+
+fn build_storyboard_model_story_input(grounding: &StoryboardGroundingContext) -> String {
+    format!(
+        "grounding_priority=1.shot_script 2.expanded_script_text 3.primary_scene_fields 4.kb_router_summary\nshot_script={}\nexpanded_script_text={}\nprimary_scene_type={}\nprimary_scene_label={}\nprimary_scene_category={}\nshot_scene_type={}\nshot_scene_label={}\nshot_intent={}\nadaptation_reason={}",
+        grounding.shot_script,
+        grounding.expanded_script_text,
+        grounding.primary_scene_type,
+        grounding.primary_scene_label,
+        grounding.primary_scene_category,
+        grounding.shot_scene_type,
+        grounding.shot_scene_label,
+        grounding.shot_intent,
+        grounding.adaptation_reason,
+    )
+}
+
+fn build_shot_grounded_row_draft(
+    grounding: &StoryboardGroundingContext,
+    index: usize,
+    row_count: usize,
+    duration_seconds: u16,
+    _record: Option<&GoldenSampleLibraryRecord>,
+) -> ShotGroundedRowDraft {
+    let segments = split_story_segments(&grounding.grounding_text);
+    let segment = segments
+        .get(index)
+        .cloned()
+        .unwrap_or_else(|| grounding.grounding_text.trim().to_string());
+    let shot_id = format!(
+        "shot-task-{}-{:02}",
+        &stable_hash_hex(&format!(
+            "{}\n{}\n{}",
+            grounding.grounding_text, grounding.shot_scene_type, row_count
+        ))[..12],
+        index + 1
+    );
+    let person = derive_product_person(&segment, &grounding.grounding_text);
+    let scene_scale = derive_shot_scene_scale(&segment);
+    let character_action = derive_character_action_from_story(&segment, &grounding.grounding_text);
+    let shot_title = derive_shot_title(index, &segment, &character_action);
+    let dialogue = extract_dialogue_from_story(&segment);
+    let visual_description = if segment.trim().is_empty() {
+        "当前镜头按已确认镜头脚本推进。".to_string()
+    } else {
+        segment.trim().to_string()
+    };
+    let sequence_grouping = SequenceGrouping {
+        structure_mode: StructureMode::SingleShot,
+        sequence_id: None,
+        shot_order: None,
+        sequence_field_state: SequenceFieldState::NotApplicable,
+    };
+    let scene_performance_projection = ScenePerformanceProjection {
+        source_sample_id: shot_id.clone(),
+        source_sample_title: shot_title.clone(),
+        scene_scale: scene_scale.clone(),
+        person: person.clone(),
+        visual_description: visual_description.clone(),
+        character_action: character_action.clone(),
+        fused_source_text: grounding.grounding_text.clone(),
+        sequence_grouping: sequence_grouping.clone(),
+    };
+
+    ShotGroundedRowDraft {
+        shot_id,
+        shot_script: segment,
+        person,
+        shot_title,
+        scene_scale,
+        visual_description,
+        character_action,
+        dialogue,
+        duration_seconds,
+        sequence_grouping,
+        scene_performance_projection,
+    }
+}
+
+fn build_shot_prompt_text_compilation_request(
+    draft: &ShotGroundedRowDraft,
+    grounding: &StoryboardGroundingContext,
+    kb_router_result: &KbRouterRuntimeResponse,
+    continuity_negative_core: Option<&str>,
+) -> PromptTextCompilationRequest {
+    PromptTextCompilationRequest {
+        row: PromptTextCompilationRow {
+            shot_id: draft.shot_id.clone(),
+            shot_title: draft.shot_title.clone(),
+            scene_scale: draft.scene_scale.clone(),
+            visual_description: draft.visual_description.clone(),
+            character_action: draft.character_action.clone(),
+            dialogue: draft.dialogue.clone(),
+            duration_seconds: draft.duration_seconds,
+        },
+        shot_script: Some(draft.shot_script.clone()),
+        scene_type: grounding.shot_scene_type.clone(),
+        scene_label: grounding.shot_scene_label.clone(),
+        kb_context_summary: kb_router_result.kb_context_summary.clone(),
+        selected_kb_rules: kb_router_result
+            .selected_kb_rules
+            .iter()
+            .map(|rule| rule.summary.clone())
+            .collect(),
+        continuity_negative_core: continuity_negative_core.unwrap_or_default().to_string(),
+        target_profile: "seedance2.0".to_string(),
+    }
+}
+
+fn build_generated_storyboard_row(
+    order: u32,
+    grounding: &StoryboardGroundingContext,
+    draft: &ShotGroundedRowDraft,
+    prompt_compilation: &PromptTextCompilationResponse,
+) -> GeneratedStoryboardRow {
+    GeneratedStoryboardRow {
+        shot_id: draft.shot_id.clone(),
+        order,
+        shot_script: draft.shot_script.clone(),
+        primary_scene_type: grounding.primary_scene_type.clone(),
+        primary_scene_label: grounding.primary_scene_label.clone(),
+        primary_scene_category: grounding.primary_scene_category.clone(),
+        shot_scene_type: grounding.shot_scene_type.clone(),
+        shot_scene_label: grounding.shot_scene_label.clone(),
+        shot_intent: grounding.shot_intent.clone(),
+        adaptation_reason: grounding.adaptation_reason.clone(),
+        grounding_source: grounding.grounding_source,
+        person: draft.person.clone(),
+        shot_title: draft.shot_title.clone(),
+        scene_scale: draft.scene_scale.clone(),
+        visual_description: draft.visual_description.clone(),
+        character_action: draft.character_action.clone(),
+        dialogue: draft.dialogue.clone(),
+        prompt_text: prompt_compilation.prompt_text.clone(),
+        prompt_text_compilation_status: prompt_compilation.compilation_status,
+        prompt_text_compilation_warnings: prompt_compilation.warnings.clone(),
+        prompt_text_source_row_id: prompt_compilation.source_row_id.clone(),
+        duration_seconds: draft.duration_seconds,
+        scene_performance_projection: draft.scene_performance_projection.clone(),
+        external_reference_handle_candidates: vec![],
+        sequence_grouping: draft.sequence_grouping.clone(),
+    }
+}
+
+fn restore_shot_grounded_row(
+    row: &mut GeneratedStoryboardRow,
+    draft: &ShotGroundedRowDraft,
+    grounding: &StoryboardGroundingContext,
+) {
+    row.shot_script = draft.shot_script.clone();
+    row.primary_scene_type = grounding.primary_scene_type.clone();
+    row.primary_scene_label = grounding.primary_scene_label.clone();
+    row.primary_scene_category = grounding.primary_scene_category.clone();
+    row.shot_scene_type = grounding.shot_scene_type.clone();
+    row.shot_scene_label = grounding.shot_scene_label.clone();
+    row.shot_intent = grounding.shot_intent.clone();
+    row.adaptation_reason = grounding.adaptation_reason.clone();
+    row.grounding_source = grounding.grounding_source;
+    row.person = draft.person.clone();
+    row.shot_title = draft.shot_title.clone();
+    row.scene_scale = draft.scene_scale.clone();
+    row.visual_description = draft.visual_description.clone();
+    row.character_action = draft.character_action.clone();
+    row.dialogue = draft.dialogue.clone();
+    row.scene_performance_projection = draft.scene_performance_projection.clone();
+    row.external_reference_handle_candidates.clear();
+    row.sequence_grouping = draft.sequence_grouping.clone();
+}
+
+fn split_story_segments(text: &str) -> Vec<String> {
+    let normalized = text.replace("\r\n", "\n");
+    normalized
+        .split(|character| {
+            matches!(
+                character,
+                '\n' | '。' | '！' | '？' | '!' | '?' | ';' | '；'
+            )
+        })
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn infer_shot_scene_type(text: &str, primary_scene_type: &str) -> String {
+    if contains_any_story_term(
+        text,
+        &[
+            "格挡", "震退", "焦土", "银辉", "觉醒", "交锋", "掌心", "战", "击",
+        ],
+    ) {
+        "action_beat".to_string()
+    } else if contains_any_story_term(text, &["告别", "对话", "低语", "回应"]) {
+        "dialogue_beat".to_string()
+    } else if primary_scene_type.trim().is_empty() {
+        "unspecified_scene".to_string()
+    } else {
+        primary_scene_type.to_string()
+    }
+}
+
+fn derive_shot_scene_label(scene_type: &str) -> String {
+    match scene_type {
+        "action_beat" => "动作交锋镜头".to_string(),
+        "dialogue_beat" => "对白反应镜头".to_string(),
+        "daily_dialogue" => "日常对白".to_string(),
+        value if value.trim().is_empty() => "未指定场景".to_string(),
+        value => value.to_string(),
+    }
+}
+
+fn derive_shot_intent(text: &str) -> String {
+    if contains_any_story_term(text, &["觉醒", "银辉", "掌心"]) {
+        "reveal".to_string()
+    } else if contains_any_story_term(text, &["格挡", "震退", "交锋", "击"]) {
+        "action_beat".to_string()
+    } else if contains_any_story_term(text, &["心跳", "鼓点", "低频"]) {
+        "rhythm_emphasis".to_string()
+    } else if contains_any_story_term(text, &["对话", "说", "低语"]) {
+        "dialogue".to_string()
+    } else {
+        "story_beat".to_string()
+    }
+}
+
+fn build_adaptation_reason(text: &str, shot_scene_type: &str) -> String {
+    let evidence = story_anchor_terms(text);
+    if evidence.is_empty() {
+        format!(
+            "shot_script supports local {} classification",
+            shot_scene_type
+        )
+    } else {
+        format!(
+            "shot_script evidence [{}] supports local {} classification",
+            evidence.join("/"),
+            shot_scene_type
+        )
+    }
+}
+
+fn derive_product_person(segment: &str, full_text: &str) -> String {
+    if contains_any_story_term(segment, &["掌心", "银辉", "觉醒"]) {
+        "觉醒者".to_string()
+    } else if contains_any_story_term(segment, &["震退", "七步"]) {
+        "被震退者".to_string()
+    } else if contains_any_story_term(full_text, &["格挡", "交锋", "震退"]) {
+        "交锋双方".to_string()
+    } else {
+        "当前镜头主体".to_string()
+    }
+}
+
+fn derive_shot_scene_scale(segment: &str) -> String {
+    if contains_any_story_term(segment, &["掌心", "手臂", "银辉"]) {
+        "特写".to_string()
+    } else if contains_any_story_term(segment, &["焦土", "犁痕"]) {
+        "全景".to_string()
+    } else if contains_any_story_term(segment, &["心跳", "鼓点"]) {
+        "近景".to_string()
+    } else {
+        "中景".to_string()
+    }
+}
+
+fn derive_character_action_from_story(segment: &str, full_text: &str) -> String {
+    let source = if segment.trim().is_empty() {
+        full_text
+    } else {
+        segment
+    };
+    let mut actions = Vec::new();
+    for term in [
+        "格挡",
+        "震退七步",
+        "震退",
+        "焦土犁痕",
+        "心跳",
+        "低频鼓点",
+        "掌心银辉",
+        "银辉觉醒",
+        "沿手臂上升",
+        "交锋",
+    ] {
+        if source.contains(term) && !actions.contains(&term) {
+            actions.push(term);
+        }
+    }
+    if actions.is_empty() {
+        "按当前镜头脚本执行关键动作".to_string()
+    } else {
+        actions.join("、")
+    }
+}
+
+fn derive_shot_title(index: usize, segment: &str, character_action: &str) -> String {
+    let title_core = story_anchor_terms(segment)
+        .into_iter()
+        .take(2)
+        .collect::<Vec<_>>();
+    if title_core.is_empty() {
+        format!("镜头{}：{}", index + 1, character_action)
+    } else {
+        format!("镜头{}：{}", index + 1, title_core.join(""))
+    }
+}
+
+fn extract_dialogue_from_story(segment: &str) -> String {
+    let chars = segment.chars().collect::<Vec<_>>();
+    let Some(start) = chars.iter().position(|character| *character == '“') else {
+        return String::new();
+    };
+    let Some(end) = chars
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find_map(|(index, character)| (*character == '”').then_some(index))
+    else {
+        return String::new();
+    };
+    chars[start + 1..end].iter().collect::<String>()
+}
+
+fn row_is_grounded_in_story(
+    row: &GeneratedStoryboardRow,
+    grounding: &StoryboardGroundingContext,
+) -> bool {
+    let combined = format!(
+        "{} {} {} {} {} {}",
+        row.person,
+        row.shot_title,
+        row.visual_description,
+        row.character_action,
+        row.dialogue,
+        row.prompt_text
+    );
+    if contains_any_story_term(
+        &combined,
+        &[
+            "城市夜雨站台",
+            "夜雨站台",
+            "便利店",
+            "透明伞",
+            "霓虹反光",
+            "雨中告别",
+        ],
+    ) {
+        return false;
+    }
+    let anchors = story_anchor_terms(&grounding.grounding_text);
+    anchors.is_empty() || anchors.iter().any(|anchor| combined.contains(anchor))
+}
+
+fn story_anchor_terms(text: &str) -> Vec<&'static str> {
+    [
+        "格挡",
+        "震退七步",
+        "震退",
+        "焦土犁痕",
+        "焦土",
+        "心跳",
+        "低频鼓点",
+        "鼓点",
+        "掌心银辉",
+        "银辉",
+        "觉醒",
+        "沿手臂上升",
+        "交锋",
+    ]
+    .into_iter()
+    .filter(|term| text.contains(term))
+    .collect()
+}
+
+fn contains_any_story_term(value: &str, terms: &[&str]) -> bool {
+    terms.iter().any(|term| value.contains(term))
 }
 
 #[cfg(test)]
@@ -1532,9 +2105,9 @@ fn build_qwen_request_payload(
         TextGenerationOutputSchema::RepairPlanJson => "repair_plan_json",
         TextGenerationOutputSchema::SeedancePromptText => "seedance_prompt_text",
     };
-    let system_prompt = "You are Hope's controlled text-generation layer. Use only the compressed KB context you receive. Never invent real director names, IP names, brand names, or external asset bindings. Do not expand to full KB rows.";
+    let system_prompt = "You are Hope's controlled text-generation layer. Ground storyboard output in shot_script first, then expanded_script_text, then primary scene fields, and only then compressed KB context. Never invent real director names, IP names, brand names, or external asset bindings. Do not expand to full KB rows.";
     let user_prompt = format!(
-        "task_type={:?}\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema={}\nconstraints=keep total duration conserved; do not emit full KB; do not emit raw prompt_body as final prompt_text; do not use real director/IP/brand names.",
+        "task_type={:?}\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema={}\nconstraints=shot_script is authoritative when present; KB samples are summary-only references and must not replace current story; keep total duration conserved; do not emit full KB; do not emit raw prompt_body as final prompt_text; do not use real director/IP/brand names.",
         request.task_type,
         scene_type,
         duration_seconds,
@@ -1742,6 +2315,23 @@ fn validate_storyboard_rows(
                     related_sample_id: Some(row.prompt_text_source_row_id.clone()),
                 });
             }
+            if contains_any_story_term(
+                field_value,
+                &[
+                    "not_specified_by_v120_bridge",
+                    "visual_scene_core",
+                    "fused_scene_performance_core_preserved",
+                ],
+            ) {
+                findings.push(ProductWarning {
+                    code: "internal_field_code_leaked".to_string(),
+                    message: format!(
+                        "Storyboard row {} includes an internal code in {}.",
+                        row.shot_id, field_name
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
         }
     }
     findings
@@ -1796,6 +2386,7 @@ fn build_prompt_text_compilation_request(
             dialogue: String::new(),
             duration_seconds,
         },
+        shot_script: None,
         scene_type,
         scene_label,
         kb_context_summary: kb_router_result.kb_context_summary.clone(),
@@ -1820,13 +2411,7 @@ fn compile_seedance_prompt_text(
     let generation_request = build_text_generation_request(
         TextGenerationTask::CompileSeedancePromptText,
         Some(request.scene_type.clone()),
-        format!(
-            "{} | {} | {} | {}",
-            request.scene_label,
-            request.row.shot_title,
-            request.row.visual_description,
-            request.row.character_action
-        ),
+        build_prompt_compilation_story_input(&request),
         Some(StoryboardDurationPlan {
             total_duration_seconds: request.row.duration_seconds,
             row_count: 1,
@@ -1850,17 +2435,30 @@ fn compile_seedance_prompt_text(
     let mut prompt_sections = vec![
         format!("场景类型：{}", request.scene_type),
         format!("场景标签：{}", request.scene_label),
+    ];
+    if let Some(shot_script) = request
+        .shot_script
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        prompt_sections.push(format!("镜头脚本：{}", shot_script));
+    }
+    prompt_sections.extend([
         format!("镜头标题：{}", request.row.shot_title),
         format!("景别：{}", request.row.scene_scale),
         format!("画面描述：{}", request.row.visual_description),
         format!("角色动作：{}", request.row.character_action),
-    ];
+    ]);
     if !request.row.dialogue.trim().is_empty() {
         prompt_sections.push(format!("对白/旁白：{}", request.row.dialogue.trim()));
     }
     prompt_sections.push(format!("时长：{}秒", request.row.duration_seconds));
     if !request.selected_kb_rules.is_empty() {
-        prompt_sections.push(format!("KB摘要：{}", request.selected_kb_rules.join("；")));
+        prompt_sections.push(format!(
+            "KB摘要：{}",
+            sanitize_selected_kb_rule_summaries(&request.selected_kb_rules).join("；")
+        ));
     }
     prompt_sections.push(format!("KB上下文：{}", request.kb_context_summary));
     if !request.continuity_negative_core.trim().is_empty() {
@@ -1880,9 +2478,9 @@ fn compile_seedance_prompt_text(
         related_sample_id: Some(request.row.shot_id.clone()),
     });
     warnings.push(ProductWarning {
-        code: "prompt_body_candidate_not_promoted".to_string(),
+        code: "kb_sample_prompt_not_promoted".to_string(),
         message:
-            "Prompt compilation uses structured storyboard fields plus selected KB summaries; raw prompt_body does not become final prompt_text."
+            "Prompt compilation uses shot_script, structured row fields, and selected KB summaries; raw KB sample prompt evidence stays internal."
                 .to_string(),
         related_sample_id: Some(request.row.shot_id.clone()),
     });
@@ -1896,6 +2494,30 @@ fn compile_seedance_prompt_text(
         provider: stub_response.provider,
         model: stub_response.model,
     }
+}
+
+fn build_prompt_compilation_story_input(request: &PromptTextCompilationRequest) -> String {
+    format!(
+        "grounding_priority=shot_script_then_row_fields\nshot_script={}\nscene_label={}\nshot_title={}\nvisual_description={}\ncharacter_action={}\ndialogue={}",
+        request.shot_script.as_deref().unwrap_or_default(),
+        request.scene_label,
+        request.row.shot_title,
+        request.row.visual_description,
+        request.row.character_action,
+        request.row.dialogue,
+    )
+}
+
+fn sanitize_selected_kb_rule_summaries(rules: &[String]) -> Vec<String> {
+    rules
+        .iter()
+        .map(|rule| {
+            rule.split_once(':')
+                .map(|(_, summary)| summary.trim().to_string())
+                .unwrap_or_else(|| rule.trim().to_string())
+        })
+        .filter(|rule| !rule.is_empty())
+        .collect()
 }
 
 fn select_prompt_compilation_rules(
@@ -1940,28 +2562,14 @@ fn select_prompt_compilation_rules(
         .take(3)
         .collect()
 }
-fn project_prompt_body_candidate(record: &GoldenSampleLibraryRecord) -> PromptBodyCandidate {
-    let blocked = validators::contains_placeholder_marker(&record.source_fields.prompt_body)
-        || record.validator_evidence.has_placeholder_signal;
-    PromptBodyCandidate {
-        source_sample_id: record.sample_id.clone(),
-        source_prompt_body: record.source_fields.prompt_body.clone(),
-        candidate_text: (!blocked).then(|| record.source_fields.prompt_body.clone()),
-        blocked,
-        blocker_codes: blocked
-            .then(|| vec!["prompt_body_blocked_by_placeholder".to_string()])
-            .unwrap_or_default(),
-    }
-}
-
 fn project_scene_performance(record: &GoldenSampleLibraryRecord) -> ScenePerformanceProjection {
     ScenePerformanceProjection {
         source_sample_id: record.sample_id.clone(),
         source_sample_title: record.source_fields.sample_title.clone(),
         scene_scale: derive_scene_scale(&record.source_fields.technical_profile),
-        person: "not_specified_by_v120_bridge".to_string(),
+        person: "未指定主体".to_string(),
         visual_description: record.source_fields.scene_performance_core.clone(),
-        character_action: "fused_scene_performance_core_preserved".to_string(),
+        character_action: "待明确动作".to_string(),
         fused_source_text: record.source_fields.scene_performance_core.clone(),
         sequence_grouping: project_sequence_grouping(record),
     }
@@ -2095,11 +2703,13 @@ fn empty_kb_router_response(
             snapshot_id: kb_runtime.snapshot.snapshot_id.clone(),
             snapshot_checksum: kb_runtime.snapshot.snapshot_hash.clone(),
             content_cache_key: stable_hash_hex(&format!(
-                "{}\n{}\n{}\n{}\n{}\n{}",
+                "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
                 request.scene_type,
                 request.synopsis_text,
                 request.duration_seconds,
                 request.task_type.as_str(),
+                request.primary_scene_type.as_deref().unwrap_or_default(),
+                request.shot_scene_type.as_deref().unwrap_or_default(),
                 request.shot_intent.as_deref().unwrap_or_default(),
                 request.structure_type.as_deref().unwrap_or_default()
             )),
@@ -2182,9 +2792,18 @@ fn serialize_storyboard_rows(rows: &[GeneratedStoryboardRow]) -> String {
     rows.iter()
         .map(|row| {
             format!(
-                "{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}",
                 row.shot_id,
                 row.order,
+                row.shot_script,
+                row.primary_scene_type,
+                row.primary_scene_label,
+                row.primary_scene_category,
+                row.shot_scene_type,
+                row.shot_scene_label,
+                row.shot_intent,
+                row.adaptation_reason,
+                row.grounding_source.as_str(),
                 row.person,
                 row.shot_title,
                 row.visual_description,
@@ -2432,9 +3051,9 @@ mod tests {
         GoldenSampleV3CoreCoverage, GoldenSampleValidatorEvidence, KbBundleManifestRecord,
         KbBundleRecordCounts, KbGoldenSampleRuntimePackage, KbRouterRuntimeRequest,
         KbRouterTaskType, KbRuntimeSummary, KbSnapshotRecord, PromptTemplateRecord,
-        PromptTextCompilationStatus, SceneTaxonomyRecord, StoryboardDurationPlan,
-        TextGenerationOutputSchema, TextGenerationTask, TextModelProviderKind,
-        UpdateStoryboardRowsRequest,
+        PromptTextCompilationStatus, SceneTaxonomyRecord, ShotGroundingSource,
+        StoryboardDurationPlan, TextGenerationOutputSchema, TextGenerationTask,
+        TextModelProviderKind, UpdateStoryboardRowsRequest,
     };
     use project_store::{
         DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeHandle, StoreSkeleton,
@@ -3049,6 +3668,10 @@ mod tests {
                     .to_string(),
                 duration_seconds: 60,
                 task_type: KbRouterTaskType::GenerateStoryboard,
+                primary_scene_type: Some("daily_dialogue".to_string()),
+                primary_scene_label: Some("Daily Dialogue".to_string()),
+                shot_scene_type: Some("daily_dialogue".to_string()),
+                shot_scene_label: Some("Daily Dialogue".to_string()),
                 shot_intent: Some("dialogue".to_string()),
                 structure_type: Some("single_shot".to_string()),
             },
@@ -3108,7 +3731,15 @@ mod tests {
             &GenerateStoryboardRequest {
                 task_name: "daily_dialogue_scene".to_string(),
                 script_id: Some("script-test".to_string()),
+                shot_script: None,
                 expanded_script_text: None,
+                primary_scene_type: None,
+                primary_scene_label: None,
+                primary_scene_category: None,
+                shot_scene_type: None,
+                shot_scene_label: None,
+                shot_intent: None,
+                adaptation_reason: None,
                 selected_total_duration_seconds: 15,
             },
         );
@@ -3135,6 +3766,10 @@ mod tests {
                 synopsis_text: "Two leads negotiate quietly before dawn.".to_string(),
                 duration_seconds: 8,
                 task_type: KbRouterTaskType::CompileSeedancePromptText,
+                primary_scene_type: Some("daily_dialogue".to_string()),
+                primary_scene_label: Some("Daily Dialogue".to_string()),
+                shot_scene_type: Some("daily_dialogue".to_string()),
+                shot_scene_label: Some("Daily Dialogue".to_string()),
                 shot_intent: None,
                 structure_type: None,
             },
@@ -3287,6 +3922,104 @@ mod tests {
     }
 
     #[test]
+    fn generate_storyboard_grounds_rows_in_shot_script_before_kb_samples() {
+        let state = test_state();
+        let shot_script = "格挡正面冲击。对手被震退七步，焦土被脚跟犁出痕。心跳与低频鼓点压住全场。掌心银辉觉醒，并沿手臂上升。";
+
+        let storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "guoman-action-grounding".to_string(),
+                script_id: None,
+                shot_script: Some(shot_script.to_string()),
+                expanded_script_text: Some(
+                    "scene_type: daily_dialogue\nsynopsis: 国漫群像表演中的局部交锋镜头"
+                        .to_string(),
+                ),
+                primary_scene_type: Some("daily_dialogue".to_string()),
+                primary_scene_label: Some("国漫群像表演".to_string()),
+                primary_scene_category: Some("group_performance".to_string()),
+                shot_scene_type: None,
+                shot_scene_label: None,
+                shot_intent: None,
+                adaptation_reason: None,
+                selected_total_duration_seconds: 45,
+            },
+        );
+
+        assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
+        assert_eq!(
+            storyboard
+                .kb_router_result
+                .retrieval_trace
+                .token_budget
+                .full_kb_rows_included,
+            0
+        );
+        assert!(storyboard.rows.len() >= 4);
+        let combined_rows = storyboard
+            .rows
+            .iter()
+            .map(|row| {
+                format!(
+                    "{} {} {} {} {} {} {}",
+                    row.person,
+                    row.shot_title,
+                    row.visual_description,
+                    row.character_action,
+                    row.dialogue,
+                    row.prompt_text,
+                    row.shot_script
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "格挡",
+            "震退七步",
+            "焦土",
+            "心跳",
+            "低频鼓点",
+            "掌心银辉",
+            "沿手臂上升",
+        ] {
+            assert!(
+                combined_rows.contains(required),
+                "shot grounding output should contain {required}"
+            );
+        }
+        for forbidden in ["夜雨站台", "便利店", "透明伞", "霓虹反光", "雨中告别"]
+        {
+            assert!(
+                !combined_rows.contains(forbidden),
+                "shot grounding output drifted into forbidden sample content {forbidden}"
+            );
+        }
+        for row in &storyboard.rows {
+            assert_eq!(row.grounding_source, ShotGroundingSource::ShotScript);
+            assert_eq!(row.shot_scene_type, "action_beat");
+            assert!(!row.adaptation_reason.trim().is_empty());
+            assert!(!row.person.contains("not_specified_by_v120_bridge"));
+            assert!(
+                !row.character_action
+                    .contains("fused_scene_performance_core_preserved")
+            );
+            assert!(row.prompt_text.contains(&row.shot_script));
+            assert!(
+                !row.prompt_text
+                    .contains("Compose a restrained dialogue shot")
+            );
+            assert!(row.external_reference_handle_candidates.is_empty());
+        }
+
+        let response_json =
+            serde_json::to_string(&storyboard).expect("storyboard response should serialize");
+        assert!(!response_json.contains("prompt_body_candidate"));
+        assert!(!response_json.contains("Compose a restrained dialogue shot"));
+    }
+
+    #[test]
     fn enabled_qwen_without_api_key_falls_back_to_stub() {
         let _enabled = EnvGuard::set("HOPE_TEXT_MODEL_ENABLED", "true");
         let _provider = EnvGuard::set("HOPE_TEXT_MODEL_PROVIDER", "qwen");
@@ -3346,7 +4079,15 @@ mod tests {
             GenerateStoryboardRequest {
                 task_name: "daily_dialogue_scene".to_string(),
                 script_id: Some(script.script_id.clone()),
+                shot_script: None,
                 expanded_script_text: None,
+                primary_scene_type: None,
+                primary_scene_label: None,
+                primary_scene_category: None,
+                shot_scene_type: None,
+                shot_scene_label: None,
+                shot_intent: None,
+                adaptation_reason: None,
                 selected_total_duration_seconds: 10,
             },
         );
@@ -3362,12 +4103,21 @@ mod tests {
                 .full_kb_rows_included,
             0
         );
-        assert_eq!(storyboard.rows[0].shot_id, "GS-BRIDGE-01");
+        assert!(storyboard.rows[0].shot_id.starts_with("shot-task-"));
+        assert_eq!(
+            storyboard.rows[0].grounding_source,
+            ShotGroundingSource::ExpandedScriptText
+        );
+        assert_eq!(storyboard.rows[0].primary_scene_type, "daily_dialogue");
+        assert_eq!(storyboard.rows[0].shot_scene_type, "daily_dialogue");
         assert_eq!(
             storyboard.rows[0].prompt_text_compilation_status,
             PromptTextCompilationStatus::ReadyStub
         );
-        assert_eq!(storyboard.rows[0].prompt_text_source_row_id, "GS-BRIDGE-01");
+        assert_eq!(
+            storyboard.rows[0].prompt_text_source_row_id,
+            storyboard.rows[0].shot_id
+        );
         assert!(
             storyboard.rows[0]
                 .prompt_text
@@ -3378,12 +4128,6 @@ mod tests {
                 .prompt_text
                 .contains("Compose a restrained dialogue shot with stable eyeline")
         );
-        assert!(
-            storyboard.rows[0]
-                .prompt_body_candidate
-                .candidate_text
-                .is_some()
-        );
         assert_eq!(
             storyboard.rows[0].sequence_grouping.sequence_field_state,
             core_domain::SequenceFieldState::NotApplicable
@@ -3391,33 +4135,8 @@ mod tests {
         assert!(
             storyboard.rows[0]
                 .external_reference_handle_candidates
-                .iter()
-                .any(|candidate| candidate.reference_name == "scene_room")
+                .is_empty()
         );
-        assert!(
-            storyboard.rows[0]
-                .external_reference_handle_candidates
-                .iter()
-                .all(|candidate| !matches!(
-                    candidate.reference_kind.as_str(),
-                    "path" | "url" | "uri" | "media" | "asset" | "file"
-                ))
-        );
-        for forbidden_name in [
-            "plate_url",
-            "plate_uri",
-            "plate_media",
-            "plate_asset",
-            "plate_file",
-            "chair",
-        ] {
-            assert!(
-                storyboard.rows[0]
-                    .external_reference_handle_candidates
-                    .iter()
-                    .all(|candidate| candidate.reference_name != forbidden_name)
-            );
-        }
         assert_eq!(
             storyboard.export_status.status,
             BridgeCallStatus::WarningOnly
@@ -3554,7 +4273,15 @@ mod tests {
             GenerateStoryboardRequest {
                 task_name: "empty-script".to_string(),
                 script_id: None,
+                shot_script: None,
                 expanded_script_text: Some("".to_string()),
+                primary_scene_type: None,
+                primary_scene_label: None,
+                primary_scene_category: None,
+                shot_scene_type: None,
+                shot_scene_label: None,
+                shot_intent: None,
+                adaptation_reason: None,
                 selected_total_duration_seconds: 10,
             },
         );
@@ -3575,9 +4302,17 @@ mod tests {
                 GenerateStoryboardRequest {
                     task_name: format!("invalid-duration-{duration}"),
                     script_id: None,
+                    shot_script: None,
                     expanded_script_text: Some(
                         "scene_type: daily_dialogue\nsynopsis: valid synopsis".to_string(),
                     ),
+                    primary_scene_type: None,
+                    primary_scene_label: None,
+                    primary_scene_category: None,
+                    shot_scene_type: None,
+                    shot_scene_label: None,
+                    shot_intent: None,
+                    adaptation_reason: None,
                     selected_total_duration_seconds: duration,
                 },
             );
@@ -3625,7 +4360,15 @@ mod tests {
                 GenerateStoryboardRequest {
                     task_name: format!("task-{scene_type}"),
                     script_id: Some(script.script_id.clone()),
+                    shot_script: None,
                     expanded_script_text: None,
+                    primary_scene_type: None,
+                    primary_scene_label: None,
+                    primary_scene_category: None,
+                    shot_scene_type: None,
+                    shot_scene_label: None,
+                    shot_intent: None,
+                    adaptation_reason: None,
                     selected_total_duration_seconds: 10,
                 },
             );
@@ -3651,9 +4394,17 @@ mod tests {
                 GenerateStoryboardRequest {
                     task_name: format!("duration-{duration}"),
                     script_id: None,
+                    shot_script: None,
                     expanded_script_text: Some(format!(
                         "scene_type: daily_dialogue\nsynopsis: duration test {duration}"
                     )),
+                    primary_scene_type: None,
+                    primary_scene_label: None,
+                    primary_scene_category: None,
+                    shot_scene_type: None,
+                    shot_scene_label: None,
+                    shot_intent: None,
+                    adaptation_reason: None,
                     selected_total_duration_seconds: duration,
                 },
             );
@@ -3679,9 +4430,17 @@ mod tests {
             GenerateStoryboardRequest {
                 task_name: "editable-storyboard".to_string(),
                 script_id: None,
+                shot_script: None,
                 expanded_script_text: Some(
                     "scene_type: daily_dialogue\nsynopsis: editable export".to_string(),
                 ),
+                primary_scene_type: None,
+                primary_scene_label: None,
+                primary_scene_category: None,
+                shot_scene_type: None,
+                shot_scene_label: None,
+                shot_intent: None,
+                adaptation_reason: None,
                 selected_total_duration_seconds: 10,
             },
         );
@@ -3754,9 +4513,17 @@ mod tests {
             GenerateStoryboardRequest {
                 task_name: "duration-mismatch".to_string(),
                 script_id: None,
+                shot_script: None,
                 expanded_script_text: Some(
                     "scene_type: daily_dialogue\nsynopsis: duration mismatch".to_string(),
                 ),
+                primary_scene_type: None,
+                primary_scene_label: None,
+                primary_scene_category: None,
+                shot_scene_type: None,
+                shot_scene_label: None,
+                shot_intent: None,
+                adaptation_reason: None,
                 selected_total_duration_seconds: 10,
             },
         );

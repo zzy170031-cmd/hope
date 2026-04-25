@@ -13,10 +13,11 @@ pub use contracts::{
     KbRouterTokenBudget, ModelChannel, ModelRequest, ModelResponse, ProductWarning,
     PromptBodyCandidate, PromptPackageRecord, PromptTextCompilationRequest,
     PromptTextCompilationResponse, PromptTextCompilationRow, PromptTextCompilationStatus,
-    ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, StoryboardDurationPlan,
-    StoryboardExportStatus, StructureMode, TextGenerationOutputSchema, TextGenerationRequest,
-    TextGenerationResponse, TextGenerationTask, TextModelProvider, TextModelProviderKind,
-    UpdateStoryboardRowsRequest, ValidationSummary,
+    ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, ShotGroundingSource,
+    ShotTask, SplitScriptToShotTasksRequest, SplitScriptToShotTasksResponse,
+    StoryboardDurationPlan, StoryboardExportStatus, StructureMode, TextGenerationOutputSchema,
+    TextGenerationRequest, TextGenerationResponse, TextGenerationTask, TextModelProvider,
+    TextModelProviderKind, UpdateStoryboardRowsRequest, ValidationSummary,
 };
 pub use domain::{
     CutRecord, DirectorCutSampleRecord, DirectorProfileRecord, EpisodeRecord, HandoffZoneRecord,
