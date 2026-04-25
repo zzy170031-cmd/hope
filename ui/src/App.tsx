@@ -1746,12 +1746,15 @@ qwen_request: {
                             value={row.prompt}
                             onOpen={() => openStoryboardCellDialog(row, "prompt", "分镜提示词")}
                           />
-                        </td>
-                        <td>
-                          <span className="table-compact-text" title={`${row.durationSeconds}`}>
-                            {row.durationSeconds}
-                          </span>
-                        </td>
+                          </td>
+                          <td>
+                            <span
+                              className="table-compact-text"
+                              title={`权威时长：${row.shotDurationSeconds ?? row.durationSeconds} 秒；${formatDurationSource(row.durationSource)}`}
+                            >
+                              {row.shotDurationSeconds ?? row.durationSeconds}
+                            </span>
+                          </td>
                         <td>
                           <div className="row-actions">
                             <button type="button" className="link-button" onClick={() => openStoryboardEditDialog(row)}>
@@ -2519,6 +2522,8 @@ function mapGeneratedStoryboardRow(row: GeneratedStoryboardRow): StoryboardWorkb
     dialogue: row.dialogue || "（无）",
     prompt: promptText || "prompt_text 未生成，等待主线镜头 grounding",
     durationSeconds: row.duration_seconds,
+    shotDurationSeconds: row.shot_duration_seconds || row.duration_seconds,
+    durationSource: row.duration_source,
     backendRow: row,
   };
 }
@@ -2573,6 +2578,8 @@ function toGeneratedStoryboardRows(rows: StoryboardWorkbenchRow[]): GeneratedSto
       prompt_text_compilation_warnings: backend?.prompt_text_compilation_warnings ?? [],
       prompt_text_source_row_id: backend?.prompt_text_source_row_id || shotId,
       duration_seconds: row.durationSeconds,
+      shot_duration_seconds: row.shotDurationSeconds ?? backend?.shot_duration_seconds ?? row.durationSeconds,
+      duration_source: row.durationSource ?? backend?.duration_source ?? "",
       scene_performance_projection: scenePerformanceProjection,
       external_reference_handle_candidates: backend?.external_reference_handle_candidates ?? [],
       sequence_grouping: sequenceGrouping,
@@ -2665,8 +2672,25 @@ function formatWarnings(warnings: ProductWarning[]) {
     return "无";
   }
 
-  const codes = warnings.slice(0, 3).map((warning) => warning.code).join(", ");
+  const codes = warnings.slice(0, 3).map((warning) => formatWarningCode(warning.code)).join(", ");
   return warnings.length > 3 ? `${codes} +${warnings.length - 3}` : codes;
+}
+
+function formatWarningCode(code: string) {
+  if (code === "role_action_grounding_incomplete") {
+    return "角色动作信息不完整，请重新生成或检查当前镜头脚本";
+  }
+  return code;
+}
+
+function formatDurationSource(source: string | null | undefined) {
+  if (!source) {
+    return "时长来源：当前镜头任务";
+  }
+  if (source === "storyboard_duration_plan.allocated_row_duration_seconds") {
+    return "时长来源：系统分镜时长分配";
+  }
+  return "时长来源：系统分镜时长分配";
 }
 
 function formatError(error: unknown) {
@@ -2717,7 +2741,7 @@ function formatExportBundleMessage(response: ExportBundleResponse) {
     ? ` / prompt_text=${primary.prompt_text_compilation_statuses.join(",")}`
     : "";
   const warnings = primary?.prompt_text_compilation_warning_codes?.length
-    ? ` / warnings=${primary.prompt_text_compilation_warning_codes.join(",")}`
+    ? ` / warnings=${primary.prompt_text_compilation_warning_codes.map(formatWarningCode).join(",")}`
     : "";
   const kbTrace = hasRetrievalTraceSummary(response)
     ? " / 导出已包含知识库匹配摘要和样本 ID 追溯"
@@ -2735,7 +2759,7 @@ function formatArtifact(artifact: ExportArtifactRecord) {
     ? ` prompt_text=${artifact.prompt_text_compilation_statuses.join(",")}`
     : "";
   const warningCodes = artifact.prompt_text_compilation_warning_codes?.length
-    ? ` warnings=${artifact.prompt_text_compilation_warning_codes.join(",")}`
+    ? ` warnings=${artifact.prompt_text_compilation_warning_codes.map(formatWarningCode).join(",")}`
     : "";
   return `${artifact.artifact_kind} ${ready}${path}${hash}${rows}${edited}${promptStatus}${warningCodes}`;
 }

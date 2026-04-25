@@ -558,6 +558,8 @@ pub fn generate_storyboard(
             prompt_text_compilation_warnings: prompt_compilation.2,
             prompt_text_source_row_id: draft.shot_id.clone(),
             duration_seconds: draft.duration_seconds,
+            shot_duration_seconds: draft.duration_seconds,
+            duration_source: "storyboard_duration_plan.allocated_row_duration_seconds".to_string(),
             scene_performance_projection: scene_projection.clone(),
             external_reference_handle_candidates: project_reference_handle_candidates(record),
             sequence_grouping: draft.sequence_grouping,
@@ -1570,9 +1572,60 @@ fn validate_live_storyboard_rows(
                     related_sample_id: Some(row.prompt_text_source_row_id.clone()),
                 });
             }
+            if contains_any_story_term(
+                field_value,
+                &[
+                    "not_specified_by_v120_bridge",
+                    "visual_scene_core",
+                    "fused_scene_performance_core_preserved",
+                ],
+            ) {
+                findings.push(ProductWarning {
+                    code: "internal_field_code_leaked".to_string(),
+                    message: format!(
+                        "第 {} 行包含内部占位字段，已回退到本地候选结果。",
+                        row.order
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
+            if field_name == "角色动作" && is_role_action_grounding_incomplete(field_value) {
+                findings.push(ProductWarning {
+                    code: "role_action_grounding_incomplete".to_string(),
+                    message: "角色动作信息不完整，请重新生成或检查当前镜头脚本。".to_string(),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
         }
     }
     findings
+}
+
+fn is_role_action_grounding_incomplete(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if contains_any_story_term(
+        trimmed,
+        &[
+            "保持连续性",
+            "执行关键动作",
+            "按镜头脚本执行",
+            "fused_scene_performance_core_preserved",
+            "not_specified_by_v120_bridge",
+            "待明确",
+        ],
+    ) {
+        return true;
+    }
+    if trimmed.chars().count() < 28 {
+        return true;
+    }
+    !(trimmed.contains("从")
+        && trimmed.contains("到")
+        && trimmed.contains("镜头捕捉")
+        && (trimmed.contains("对手") || trimmed.contains("环境") || trimmed.contains("全场")))
 }
 
 fn contains_forbidden_generation_terms(text: &str) -> bool {
@@ -2183,27 +2236,24 @@ fn derive_character_action_from_story(segment: &str, full_text: &str) -> String 
     } else {
         segment
     };
-    let mut actions = Vec::new();
-    for term in [
-        "格挡",
-        "震退七步",
-        "震退",
-        "焦土犁痕",
-        "心跳",
-        "低频鼓点",
-        "掌心银辉",
-        "银辉觉醒",
-        "沿手臂上升",
-        "交锋",
-    ] {
-        if source.contains(term) && !actions.contains(&term) {
-            actions.push(term);
-        }
-    }
-    if actions.is_empty() {
-        "按当前镜头脚本执行关键动作".to_string()
+    if contains_any_story_term(source, &["掌心银辉", "银辉觉醒", "沿手臂上升", "觉醒"]) {
+        "觉醒者从格挡后的短暂停滞开始，将掌心朝向当前对手，银辉自掌心亮起并沿手臂上升，到力量完全爬上前臂时结束，镜头捕捉银辉开始蔓延的觉醒瞬间。"
+            .to_string()
+    } else if contains_any_story_term(source, &["震退七步", "震退"]) {
+        "交锋双方从正面相抵的僵持状态开始，防守者以格挡余力反震当前对手，将对手震退七步，到对手脚步失衡后撤时结束，镜头捕捉第一步被震开的瞬间。"
+            .to_string()
+    } else if contains_any_story_term(source, &["焦土犁痕", "焦土", "犁痕"]) {
+        "被震退者从后撤失衡开始，双脚顶住焦土仍被冲击推远，在地面犁出焦黑拖痕，到身体重新找回重心时结束，镜头捕捉脚跟划开焦土的瞬间。"
+            .to_string()
+    } else if contains_any_story_term(source, &["心跳", "低频鼓点", "鼓点", "低频"]) {
+        "当前镜头主体从战斗后的凝滞呼吸开始，胸口随心跳和低频鼓点压低起伏，面向当前对手重新蓄力，到下一次爆发前的停顿时结束，镜头捕捉心跳压住全场节奏的瞬间。"
+            .to_string()
+    } else if contains_any_story_term(source, &["格挡", "交锋", "战", "击"]) {
+        "交锋双方从迎面冲突开始，前景角色抬臂格挡当前对手的攻击，以稳住重心的姿态抵住冲击，到攻防短暂相持时结束，镜头捕捉格挡接触的关键瞬间。"
+            .to_string()
     } else {
-        actions.join("、")
+        "当前镜头主体从上一动作余势中开始，面向当前对手或环境完成可见状态转变，到下一拍动作蓄势完成时结束，镜头捕捉状态发生变化的瞬间。"
+            .to_string()
     }
 }
 
@@ -2420,66 +2470,20 @@ fn compile_seedance_prompt_text(
     record: &GoldenSampleLibraryRecord,
     scene_projection: &ScenePerformanceProjection,
     duration_seconds: u16,
-    grounding: &StoryboardGroundingContext,
+    _grounding: &StoryboardGroundingContext,
     shot_script: &str,
-    kb_router_result: &KbRouterRuntimeResponse,
+    _kb_router_result: &KbRouterRuntimeResponse,
 ) -> (String, PromptTextCompilationStatus, Vec<ProductWarning>) {
-    let fallback_scene_label = record
-        .classification
-        .scene_tags
-        .first()
-        .cloned()
-        .unwrap_or_else(|| record.source_fields.scene_tag.clone());
-    let mut sections = vec![
-        format!("场景类型：{}", grounding.shot_scene_type),
-        format!(
-            "场景标签：{}",
-            non_blank_string(&grounding.shot_scene_label).unwrap_or(fallback_scene_label)
-        ),
+    let sections = vec![
+        "视频分镜提示词：以当前镜头脚本为准，输出单个镜头画面。".to_string(),
         format!("镜头脚本：{}", shot_script.trim()),
         format!("镜头标题：{}", scene_projection.source_sample_title),
         format!("景别：{}", scene_projection.scene_scale),
         format!("画面描述：{}", scene_projection.visual_description),
         format!("角色动作：{}", scene_projection.character_action),
         format!("时长：{}秒", duration_seconds),
-        format!(
-            "KB上下文：sample_id={}; scene_category={}; style_cluster={}",
-            record.sample_id,
-            record.source_fields.scene_category,
-            record.source_fields.style_cluster
-        ),
     ];
-
-    if !kb_router_result.kb_context_summary.trim().is_empty() {
-        sections.push(format!(
-            "KB摘要：{}",
-            kb_router_result.kb_context_summary.trim()
-        ));
-    }
-    let selected_rule_summaries = kb_router_result
-        .selected_kb_rules
-        .iter()
-        .take(3)
-        .map(|rule| rule.summary.trim())
-        .filter(|summary| !summary.is_empty())
-        .collect::<Vec<_>>();
-    if !selected_rule_summaries.is_empty() {
-        sections.push(format!("规则摘要：{}", selected_rule_summaries.join("；")));
-    }
-    if !record
-        .source_fields
-        .continuity_negative_core
-        .trim()
-        .is_empty()
-    {
-        sections.push(format!(
-            "连续性约束：{}",
-            record.source_fields.continuity_negative_core.trim()
-        ));
-    }
-    sections.push("目标适配：Seedance2.0 文本提示词".to_string());
-
-    let warnings = vec![
+    let mut warnings = vec![
         ProductWarning {
             code: "seedance_prompt_text_compilation_local".to_string(),
             message: "Seedance2.0 prompt_text 当前由本地结构化字段编译生成。".to_string(),
@@ -2499,6 +2503,13 @@ fn compile_seedance_prompt_text(
             related_sample_id: Some(record.sample_id.clone()),
         },
     ];
+    if is_role_action_grounding_incomplete(&scene_projection.character_action) {
+        warnings.push(ProductWarning {
+            code: "role_action_grounding_incomplete".to_string(),
+            message: "角色动作信息不完整，请重新生成或检查当前镜头脚本。".to_string(),
+            related_sample_id: Some(record.sample_id.clone()),
+        });
+    }
 
     (
         sections.join("；"),
@@ -2512,42 +2523,16 @@ fn compile_seedance_prompt_text_legacy(
     record: &GoldenSampleLibraryRecord,
     scene_projection: &ScenePerformanceProjection,
     duration_seconds: u16,
-    scene_type: &str,
+    _scene_type: &str,
 ) -> (String, PromptTextCompilationStatus, Vec<ProductWarning>) {
-    let scene_label = record
-        .classification
-        .scene_tags
-        .first()
-        .cloned()
-        .unwrap_or_else(|| record.source_fields.scene_tag.clone());
-    let mut sections = vec![
-        format!("场景类型：{}", scene_type),
-        format!("场景标签：{}", scene_label),
+    let sections = vec![
+        "视频分镜提示词：以当前镜头脚本为准，输出单个镜头画面。".to_string(),
         format!("镜头标题：{}", record.source_fields.sample_title),
         format!("景别：{}", scene_projection.scene_scale),
         format!("画面描述：{}", scene_projection.visual_description),
         format!("角色动作：{}", scene_projection.character_action),
         format!("时长：{}秒", duration_seconds),
-        format!(
-            "KB上下文：sample_id={}; scene_category={}; style_cluster={}",
-            record.sample_id,
-            record.source_fields.scene_category,
-            record.source_fields.style_cluster
-        ),
     ];
-
-    if !record
-        .source_fields
-        .continuity_negative_core
-        .trim()
-        .is_empty()
-    {
-        sections.push(format!(
-            "连续性约束：{}",
-            record.source_fields.continuity_negative_core.trim()
-        ));
-    }
-    sections.push("目标适配：Seedance2.0 文本提示词".to_string());
 
     let warnings = vec![
         ProductWarning {
@@ -2580,7 +2565,7 @@ fn serialize_storyboard_rows(rows: &[GeneratedStoryboardRow]) -> String {
     rows.iter()
         .map(|row| {
             format!(
-                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}|{}|{}",
                 row.shot_id,
                 row.order,
                 row.shot_script,
@@ -2601,6 +2586,8 @@ fn serialize_storyboard_rows(rows: &[GeneratedStoryboardRow]) -> String {
                 row.prompt_text_compilation_status,
                 row.prompt_text_source_row_id,
                 row.duration_seconds,
+                row.shot_duration_seconds,
+                row.duration_source,
                 row.prompt_text_compilation_warnings
                     .iter()
                     .map(|warning| warning.code.as_str())

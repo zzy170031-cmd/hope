@@ -403,6 +403,10 @@ pub struct GeneratedStoryboardRow {
     #[serde(default)]
     pub prompt_text_source_row_id: String,
     pub duration_seconds: u16,
+    #[serde(default)]
+    pub shot_duration_seconds: u16,
+    #[serde(default)]
+    pub duration_source: String,
     pub scene_performance_projection: ScenePerformanceProjection,
     pub external_reference_handle_candidates: Vec<ExternalReferenceHandleCandidate>,
     pub sequence_grouping: SequenceGrouping,

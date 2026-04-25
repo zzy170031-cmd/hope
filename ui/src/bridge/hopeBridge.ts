@@ -569,6 +569,10 @@ function normalizeGeneratedStoryboardRow(raw: unknown): GeneratedStoryboardRow {
       row.prompt_text_source_row_id ?? row.promptTextSourceRowId ?? "",
     ),
     duration_seconds: Number(row.duration_seconds ?? row.durationSeconds ?? 0),
+    shot_duration_seconds: Number(
+      row.shot_duration_seconds ?? row.shotDurationSeconds ?? row.duration_seconds ?? row.durationSeconds ?? 0,
+    ),
+    duration_source: String(row.duration_source ?? row.durationSource ?? ""),
     scene_performance_projection:
       row.scene_performance_projection ?? row.scenePerformanceProjection ?? {},
     external_reference_handle_candidates: Array.isArray(row.external_reference_handle_candidates)

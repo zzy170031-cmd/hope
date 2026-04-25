@@ -29,6 +29,8 @@ pub const V120_STORYBOARD_COLUMNS: &[&str] = &[
     "对白/旁白",
     "分镜提示词",
     "时长(秒)",
+    "shot_duration_seconds",
+    "duration_source",
 ];
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -257,6 +259,8 @@ fn v120_storyboard_row_cells(
         row.dialogue.clone(),
         row.prompt_text.clone(),
         row.duration_seconds.to_string(),
+        row.shot_duration_seconds.to_string(),
+        row.duration_source.clone(),
         format!("{:?}", row.prompt_text_compilation_status),
         row.prompt_text_compilation_warnings
             .iter()
@@ -831,6 +835,9 @@ mod tests {
                 }],
                 prompt_text_source_row_id: "GS-BRIDGE-001".to_string(),
                 duration_seconds: 8,
+                shot_duration_seconds: 8,
+                duration_source: "storyboard_duration_plan.allocated_row_duration_seconds"
+                    .to_string(),
                 scene_performance_projection: ScenePerformanceProjection {
                     source_sample_id: "GS-BRIDGE-001".to_string(),
                     source_sample_title: "Bridge dialogue sample".to_string(),

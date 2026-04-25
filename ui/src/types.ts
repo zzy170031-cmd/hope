@@ -58,6 +58,8 @@ export interface StoryboardWorkbenchRow {
   dialogue: string;
   prompt: string;
   durationSeconds: number;
+  shotDurationSeconds?: number;
+  durationSource?: string;
   backendRow?: GeneratedStoryboardRow;
 }
 
@@ -186,6 +188,8 @@ export interface GeneratedStoryboardRow {
   prompt_text_compilation_warnings?: ProductWarning[];
   prompt_text_source_row_id?: string;
   duration_seconds: number;
+  shot_duration_seconds?: number;
+  duration_source?: string;
   scene_performance_projection: unknown;
   external_reference_handle_candidates: unknown[];
   sequence_grouping: unknown;
