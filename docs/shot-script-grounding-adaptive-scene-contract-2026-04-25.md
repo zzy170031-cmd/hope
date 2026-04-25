@@ -59,6 +59,8 @@ shot_scene_label
 shot_intent
 adaptation_reason
 split_script_to_shot_tasks
+shot_duration_seconds
+duration_source
 ```
 
 ## Field Definitions
@@ -136,6 +138,26 @@ split_script_to_shot_tasks
 - does not call Seedance runtime
 - does not generate video
 - does not change the KB schema
+
+`shot_duration_seconds`
+
+- generated storyboard-row duration for one shot
+- belongs to `GeneratedStoryboardRow`
+- must mirror the allocated row duration from the accepted storyboard duration
+  plan
+- must not be inferred from KB samples, raw source rows, or prompt text
+
+`duration_source`
+
+- source marker explaining where `shot_duration_seconds` came from
+- belongs to `GeneratedStoryboardRow`
+- current allowed value:
+
+```text
+storyboard_duration_plan.allocated_row_duration_seconds
+```
+
+- any additional value requires a later contract gate
 
 ## split_script_to_shot_tasks Input
 
@@ -232,6 +254,41 @@ shot_scene_type == primary_scene_type
 selected_total_duration_seconds
 ```
 
+## GeneratedStoryboardRow Duration Fields
+
+`GeneratedStoryboardRow` must carry explicit row-duration fields when the
+runtime gate materializes this contract:
+
+```text
+shot_duration_seconds
+duration_source
+```
+
+`shot_duration_seconds` is the product-facing row duration.
+
+`duration_source` currently allows only:
+
+```text
+storyboard_duration_plan.allocated_row_duration_seconds
+```
+
+`shot_duration_seconds` must be duration-plan grounded. It must not be copied
+from:
+
+```text
+KB summary
+sample_id
+selected_sample_ids
+rule id
+retrieval trace
+grounding_source
+primary_scene_type
+shot_scene_type
+raw prompt_body
+source_register
+overlay JSON
+```
+
 ## generate_storyboard Input Priority
 
 `generate_storyboard` must resolve grounding in this order:
@@ -309,6 +366,8 @@ adaptation_reason
 selected_total_duration_seconds
 script_id
 shot_task_id
+shot_duration_seconds
+duration_source
 selected_sample_ids
 selected_kb_rules
 kb_context_summary
@@ -338,19 +397,29 @@ allowed only in their compressed Router contract form.
 Final `prompt_text` may only be compiled Seedance2.0 text-storyboard wording
 for the generated storyboard row.
 
-It may use:
+It may be informed by product-safe compiler inputs:
 
 ```text
 shot_script
 structured storyboard row
-selected_kb_rules
-kb_context_summary
 continuity constraints
 ```
+
+The final `prompt_text` must remain clean Seedance2.0 Chinese
+video-storyboard prompt text. It must not mix in internal routing, trace,
+schema, KB, or grounding metadata.
 
 It must not include:
 
 ```text
+KB summary
+sample_id
+selected_sample_ids
+rule id
+retrieval trace
+grounding_source
+primary_scene_type
+shot_scene_type
 raw prompt_body
 source_register
 overlay JSON
@@ -366,6 +435,32 @@ brand name
 debug information
 ```
 
+`selected_kb_rules` and `kb_context_summary` may guide compilation outside the
+final text, but their IDs, summaries, and trace labels must not appear inside
+`prompt_text`.
+
+## Role Action Quality Warning
+
+The role/action grounding warning name is:
+
+```text
+role_action_grounding_incomplete
+```
+
+This warning is allowed when a generated row has insufficient shot-grounded
+evidence for `role_action` or `character_action`.
+
+It may be emitted only as validator or quality metadata. It must not be copied
+into:
+
+```text
+prompt_text
+Seedance prompt payload
+raw product prose
+KB fields
+source rows
+```
+
 ## Validator Requirements
 
 A later implementation validator must check:
@@ -376,10 +471,16 @@ generate_storyboard grounding priority
 shot_scene_type adaptation evidence
 adaptation_reason required on scene-type changes
 duration conservation
+shot_duration_seconds source
+duration_source allowed value
+role_action_grounding_incomplete warning boundary
 forbidden terms
 no raw prompt_body leakage
 no source_register leakage
 no overlay JSON leakage
+no selected_sample_ids leakage into prompt_text
+no KB summary leakage into prompt_text
+no retrieval trace leakage into prompt_text
 no full raw KB rows leakage
 no API key or token leakage
 no user local path leakage
@@ -389,6 +490,12 @@ Duration conservation rule:
 
 ```text
 sum(shot_task.duration_seconds) == selected_total_duration_seconds
+```
+
+Storyboard row duration source rule:
+
+```text
+GeneratedStoryboardRow.duration_source == storyboard_duration_plan.allocated_row_duration_seconds
 ```
 
 The validator must fail if `shot_scene_type` changes without a non-empty
