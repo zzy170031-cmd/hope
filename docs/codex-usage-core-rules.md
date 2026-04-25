@@ -234,3 +234,18 @@ Rules:
   - `（待命）Hope桌面端-【等待主线镜头适配契约】`
   - `（结束）Hope契约层-【镜头强绑定与自适应场景契约】`
   - `（归档）Hope接入点-ContractSmokeReadiness【待命】`
+
+## Action-Only Thread Dispatch Rule
+
+When the controller replies to the user with thread instructions, include only
+threads that need an immediate action, such as `（运行）` or `（归档）` threads.
+
+Rules:
+
+- Omit `（待命）` threads unless their standby state changed or the user asks for
+  a full status review.
+- Omit `（结束）` threads unless they need reactivation, archival, or a final
+  user-facing note.
+- Do not repeat no-op standby instructions just to be exhaustive.
+- A short controller recap may mention omitted standby/end threads in one line
+  if it helps explain the overall plan.
