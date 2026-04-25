@@ -212,18 +212,25 @@ Rules:
 - If a controller response contains both recap and worker instructions, keep
   them in separate `text` blocks.
 
-## Standby Thread Naming Rule
+## Thread Status Prefix Rule
 
-When a Hope / Codex coordination thread is in standby, waiting, watch-only, or
-blocked-by-upstream state, prefix the visible thread name with `（待命）`.
+Hope / Codex coordination thread names must use a status prefix when the
+controller is assigning or summarizing thread state.
+
+Allowed status prefixes:
+
+- `（运行）`: the thread should actively execute the current task now.
+- `（待命）`: the thread should wait, watch, or stay blocked by an upstream gate.
+- `（结束）`: the thread's current task is complete, but the thread is not being archived yet.
+- `（归档）`: the thread should prepare to archive or can be archived.
 
 Rules:
 
-- Use the prefix only for threads that should not actively implement right now.
-- Remove the prefix when the controller explicitly reactivates the thread.
+- Put the status prefix at the very beginning of the visible thread name.
 - Keep the rest of the thread name in the normal Chinese target-action shape.
+- Change the prefix when the controller changes the next action.
 - Examples:
-  - Active: `Hope主线-【镜头强绑定与场景自动适配】`
-  - Standby: `（待命）Hope主线-【镜头强绑定与场景自动适配】`
-  - Active: `Hope桌面端-【等待主线镜头适配契约】`
-  - Standby: `（待命）Hope桌面端-【等待主线镜头适配契约】`
+  - `（运行）Hope主线-【镜头强绑定与场景自动适配】`
+  - `（待命）Hope桌面端-【等待主线镜头适配契约】`
+  - `（结束）Hope契约层-【镜头强绑定与自适应场景契约】`
+  - `（归档）Hope接入点-ContractSmokeReadiness【待命】`
