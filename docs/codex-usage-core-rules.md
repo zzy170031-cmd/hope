@@ -123,3 +123,61 @@ Instructions for <target thread>:
 
 The worker-thread instruction block must be copy-ready on its own. It should not
 depend on surrounding controller recap text to be actionable.
+
+## Proactive Controller Next-Step Dispatch
+
+When a worker thread reports back to the controller, the controller must verify
+the report against actual Git / file state when possible. After verification,
+the controller should proactively provide the corresponding next step based on
+the full current plan.
+
+Do not wait for the user to ask "next step" when the next action is clear.
+
+If other parallel threads can safely continue or synchronize at the same time,
+the controller should also issue separate copy-ready instruction blocks for
+those threads.
+
+Default controller response shape after a worker-thread report:
+
+```text
+Controller recap:
+
+- verified facts
+- decision
+- next overall gate
+```
+
+```text
+Instructions for <reporting thread>:
+
+- continue / archive / standby / fix / commit / verify
+```
+
+```text
+Instructions for <parallel thread if applicable>:
+
+- safe parallel action
+- scope boundary
+- report format
+```
+
+Only omit thread instruction blocks when there is genuinely no actionable next
+step or when the next step is blocked by a user decision.
+
+## Thread Naming Rule
+
+Hope / Codex coordination threads should use the visible naming shape:
+
+`<thread or module name>-【<Chinese target action>】`
+
+Rules:
+
+- Do not include English contract identifiers, implementation codenames, or
+  camel-case feature names in the visible thread name.
+- Keep the visible name focused on the target action in Chinese.
+- If an English identifier is useful for engineering traceability, put it inside
+  the instruction body, not in the thread title.
+- Use `Hope契约层-【镜头强绑定与自适应场景契约】` instead of
+  `Hope契约层-StoryboardShotGroundingContract【镜头强绑定与自适应场景契约】`.
+- Use `Hope桌面端-【等待主线镜头适配契约】` instead of
+  `Hope桌面端-ShotIntentAdaptiveUI【等待主线镜头适配契约】`.
