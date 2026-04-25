@@ -94,3 +94,32 @@ branch / HEAD：
 如果指令与实际 Git / 文件状态冲突，以实际状态为准，先回报冲突，不要盲目执行。
 
 不要回滚用户或其他线程改动，除非用户明确要求。
+
+## Separate Controller Review And Thread Instructions
+
+When a controller response contains both:
+
+- controller review / recap / decision record
+- instructions for a specific worker thread
+
+the two parts must be split into separate Markdown `text` code blocks.
+
+Do not put controller recap and worker-thread instructions in the same code
+block.
+
+Use this shape:
+
+```text
+Controller recap:
+
+...
+```
+
+```text
+Instructions for <target thread>:
+
+...
+```
+
+The worker-thread instruction block must be copy-ready on its own. It should not
+depend on surrounding controller recap text to be actionable.
