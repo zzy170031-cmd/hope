@@ -211,3 +211,19 @@ Rules:
 - The `目标线程：` line is mandatory in both instruction and report blocks.
 - If a controller response contains both recap and worker instructions, keep
   them in separate `text` blocks.
+
+## Standby Thread Naming Rule
+
+When a Hope / Codex coordination thread is in standby, waiting, watch-only, or
+blocked-by-upstream state, prefix the visible thread name with `（待命）`.
+
+Rules:
+
+- Use the prefix only for threads that should not actively implement right now.
+- Remove the prefix when the controller explicitly reactivates the thread.
+- Keep the rest of the thread name in the normal Chinese target-action shape.
+- Examples:
+  - Active: `Hope主线-【镜头强绑定与场景自动适配】`
+  - Standby: `（待命）Hope主线-【镜头强绑定与场景自动适配】`
+  - Active: `Hope桌面端-【等待主线镜头适配契约】`
+  - Standby: `（待命）Hope桌面端-【等待主线镜头适配契约】`
