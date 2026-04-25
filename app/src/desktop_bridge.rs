@@ -2,13 +2,14 @@ use std::{io, sync::OnceLock};
 
 use crate::{
     ipc::{
+        CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND, ConfigureTextModelProviderRequest,
         EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, ExpandScriptRequest, ExportBundleRequest,
         GENERATE_STORYBOARD_COMMAND, GenerateStoryboardRequest, PROJECT_CREATE_OR_SWITCH_COMMAND,
         ProjectCreateOrSwitchRequest, STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
+        StoryboardRenderSegmentCutPreviewSnapshotRequest, TextModelProviderStatus,
         UPDATE_STORYBOARD_ROWS_COMMAND, UpdateStoryboardRowsRequest,
-        StoryboardRenderSegmentCutPreviewSnapshotRequest, VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
-        ValidationExportPanelSnapshotRequest, WRITER_ENTRY_SNAPSHOT_COMMAND,
-        WriterEntrySnapshotRequest,
+        VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND, ValidationExportPanelSnapshotRequest,
+        WRITER_ENTRY_SNAPSHOT_COMMAND, WriterEntrySnapshotRequest,
     },
     runtime::{
         ProjectCreateOrSwitchSnapshot, StoryboardRenderSegmentCutPreviewSnapshot,
@@ -30,6 +31,7 @@ pub const DESKTOP_INVOKE_COMMANDS: &[&str] = &[
     GENERATE_STORYBOARD_COMMAND,
     UPDATE_STORYBOARD_ROWS_COMMAND,
     EXPORT_BUNDLE_COMMAND,
+    CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +44,7 @@ pub enum DesktopInvokeRequest {
     GenerateStoryboard(GenerateStoryboardRequest),
     UpdateStoryboardRows(UpdateStoryboardRowsRequest),
     ExportBundle(ExportBundleRequest),
+    ConfigureTextModelProvider(ConfigureTextModelProviderRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +57,7 @@ pub enum DesktopInvokeResponse {
     GenerateStoryboard(core_domain::GenerateStoryboardResponse),
     UpdateStoryboardRows(core_domain::GenerateStoryboardResponse),
     ExportBundle(core_domain::ExportBundleResponse),
+    ConfigureTextModelProvider(TextModelProviderStatus),
 }
 
 #[derive(Debug)]
@@ -114,6 +118,10 @@ fn command_accepts_request(command: &str, request: &DesktopInvokeRequest) -> boo
                 DesktopInvokeRequest::UpdateStoryboardRows(_)
             )
             | (EXPORT_BUNDLE_COMMAND, DesktopInvokeRequest::ExportBundle(_))
+            | (
+                CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND,
+                DesktopInvokeRequest::ConfigureTextModelProvider(_)
+            )
     )
 }
 
@@ -164,6 +172,12 @@ fn invoke_desktop_command_with_state(
         (EXPORT_BUNDLE_COMMAND, DesktopInvokeRequest::ExportBundle(request)) => Ok(
             DesktopInvokeResponse::ExportBundle(export_bundle(state, request)),
         ),
+        (
+            CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND,
+            DesktopInvokeRequest::ConfigureTextModelProvider(request),
+        ) => Ok(DesktopInvokeResponse::ConfigureTextModelProvider(
+            state.configure_text_model_provider(request),
+        )),
         _ => Err(DesktopInvokeError::UnsupportedCommand {
             command: command.to_string(),
         }),
@@ -200,6 +214,8 @@ pub fn invoke_desktop_command(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use core_domain::{
         ExpandScriptRequest, ExportBundleRequest, FailurePatternRecord, GenerateStoryboardRequest,
         KbRuntimeSummary, KbSnapshotRecord, ModelConfigSummary, PromptTemplateRecord,
@@ -210,6 +226,7 @@ mod tests {
     };
 
     use crate::ipc::{
+        CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND, ConfigureTextModelProviderRequest,
         EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, GENERATE_STORYBOARD_COMMAND,
         ProjectCreateOrSwitchRequest, StoryboardRenderSegmentCutPreviewSnapshotRequest,
         UPDATE_STORYBOARD_ROWS_COMMAND, ValidationExportPanelSnapshotRequest,
@@ -238,8 +255,98 @@ mod tests {
                 GENERATE_STORYBOARD_COMMAND,
                 UPDATE_STORYBOARD_ROWS_COMMAND,
                 EXPORT_BUNDLE_COMMAND,
+                CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND,
             ]
         );
+    }
+
+    #[test]
+    fn configure_text_model_provider_keeps_secret_session_only() {
+        let response = invoke_desktop_command_with_state(
+            &test_state(),
+            CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND,
+            DesktopInvokeRequest::ConfigureTextModelProvider(ConfigureTextModelProviderRequest {
+                provider: "qwen".to_string(),
+                model: "qwen-plus".to_string(),
+                base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
+                api_key: Some("test-secret-value".to_string()),
+                api_key_ref: None,
+                enabled: true,
+            }),
+        )
+        .expect("provider config should save into session state");
+
+        match response {
+            DesktopInvokeResponse::ConfigureTextModelProvider(status) => {
+                assert_eq!(status.provider, "qwen");
+                assert_eq!(status.storage, "session-only");
+                assert!(status.live_ready);
+                assert!(status.api_key_present);
+                assert!(!format!("{status:?}").contains("test-secret-value"));
+            }
+            _ => panic!("config invoke should return provider status"),
+        }
+    }
+
+    #[test]
+    fn enabled_qwen_without_session_key_falls_back_without_leaking_secret_fields() {
+        let state = test_state();
+        invoke_desktop_command_with_state(
+            &state,
+            CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND,
+            DesktopInvokeRequest::ConfigureTextModelProvider(ConfigureTextModelProviderRequest {
+                provider: "qwen".to_string(),
+                model: "qwen-plus".to_string(),
+                base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
+                api_key: None,
+                api_key_ref: None,
+                enabled: true,
+            }),
+        )
+        .expect("provider config without key should still save");
+
+        let expand = invoke_desktop_command_with_state(
+            &state,
+            EXPAND_SCRIPT_COMMAND,
+            DesktopInvokeRequest::ExpandScript(ExpandScriptRequest {
+                scene_type: "hot_blood_battle".to_string(),
+                scene_label: Some("热血战斗".to_string()),
+                scene_category: Some("基础动漫叙事".to_string()),
+                model_config_summary: Some(ModelConfigSummary {
+                    provider: "qwen".to_string(),
+                    model: "qwen-plus".to_string(),
+                    enabled: true,
+                    base_url_present: true,
+                    api_key_present: false,
+                }),
+                synopsis_text: "主角守住城门，等待援军抵达。".to_string(),
+            }),
+        )
+        .expect("expand_script should fallback instead of failing");
+
+        match expand {
+            DesktopInvokeResponse::ExpandScript(response) => {
+                assert!(
+                    response
+                        .expanded_script_text
+                        .contains("api_key_present: false")
+                );
+                assert!(
+                    response
+                        .warnings
+                        .iter()
+                        .any(|warning| warning.code == "text_model_api_key_missing")
+                );
+                assert!(
+                    response
+                        .warnings
+                        .iter()
+                        .any(|warning| warning.code == "text_model_live_expand_fallback")
+                );
+                assert!(!response.expanded_script_text.contains("api_key:"));
+            }
+            _ => panic!("expand_script should return expand response"),
+        }
     }
 
     #[test]
@@ -371,6 +478,19 @@ mod tests {
     fn v120_bridge_commands_smoke_against_desktop_runtime() {
         let state = AppState::load_desktop_runtime()
             .expect("desktop runtime with V120 package should load");
+        invoke_desktop_command_with_state(
+            &state,
+            CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND,
+            DesktopInvokeRequest::ConfigureTextModelProvider(ConfigureTextModelProviderRequest {
+                provider: "qwen".to_string(),
+                model: "qwen-plus".to_string(),
+                base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
+                api_key: Some("desktop-smoke-secret".to_string()),
+                api_key_ref: None,
+                enabled: false,
+            }),
+        )
+        .expect("desktop smoke should configure session-only Qwen provider");
 
         let expand = invoke_desktop_command_with_state(
             &state,
@@ -416,7 +536,12 @@ mod tests {
                         .expanded_script_text
                         .contains("api_key_present: true")
                 );
-                assert!(!response.expanded_script_text.contains("sk-"));
+                assert!(
+                    !response
+                        .expanded_script_text
+                        .contains("desktop-smoke-secret")
+                );
+                assert!(!format!("{:?}", response.warnings).contains("desktop-smoke-secret"));
                 assert!(!response.kb_router_result.selected_sample_ids.is_empty());
                 assert!(!response.kb_router_result.selected_kb_rules.is_empty());
                 assert_eq!(
@@ -517,7 +642,10 @@ mod tests {
                 assert_eq!(response.result_id, result_id);
                 assert!(response.dirty);
                 assert!(response.revision > base_revision);
-                assert_eq!(response.rows[0].prompt_text, "desktop smoke edited prompt_text");
+                assert_eq!(
+                    response.rows[0].prompt_text,
+                    "desktop smoke edited prompt_text"
+                );
                 println!(
                     "update_storyboard_rows smoke: result_id={} revision={} rows_hash={}",
                     response.result_id, response.revision, response.rows_hash
@@ -553,7 +681,10 @@ mod tests {
                     ready_artifact.content_hash.as_deref().unwrap_or_default(),
                     ready_artifact.row_count.unwrap_or_default()
                 );
-                assert_eq!(ready_artifact.source_result_id.as_deref(), Some(result_id.as_str()));
+                assert_eq!(
+                    ready_artifact.source_result_id.as_deref(),
+                    Some(result_id.as_str())
+                );
                 assert_eq!(ready_artifact.edited_rows_applied, true);
                 assert!(
                     ready_artifact
@@ -566,6 +697,15 @@ mod tests {
                 assert_eq!(ready_artifact.full_kb_rows_included, 0);
                 assert!(ready_artifact.kb_context_summary.is_some());
                 assert!(ready_artifact.retrieval_trace.is_some());
+                let artifact_text = fs::read_to_string(
+                    ready_artifact
+                        .artifact_path
+                        .as_deref()
+                        .expect("ready artifact path should exist"),
+                )
+                .expect("ready artifact should be readable text");
+                assert!(!artifact_text.contains("desktop-smoke-secret"));
+                assert!(!artifact_text.contains("api_key"));
             }
             _ => panic!("export_bundle should return export response"),
         }

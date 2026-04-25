@@ -6,6 +6,31 @@ pub type ExportBundleRequest = core_domain::ExportBundleRequest;
 pub type UpdateStoryboardRowsRequest = core_domain::UpdateStoryboardRowsRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ConfigureTextModelProviderRequest {
+    pub provider: String,
+    pub model: String,
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub api_key_ref: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TextModelProviderStatus {
+    pub provider: String,
+    pub model: String,
+    pub enabled: bool,
+    pub base_url_present: bool,
+    pub api_key_present: bool,
+    pub live_ready: bool,
+    pub status: String,
+    pub message: String,
+    pub storage: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ProjectCreateOrSwitchRequest {
     pub project_id: Option<String>,
     pub project_name: Option<String>,
@@ -42,6 +67,7 @@ pub const EXPAND_SCRIPT_COMMAND: &str = "expand_script";
 pub const GENERATE_STORYBOARD_COMMAND: &str = "generate_storyboard";
 pub const UPDATE_STORYBOARD_ROWS_COMMAND: &str = "update_storyboard_rows";
 pub const EXPORT_BUNDLE_COMMAND: &str = "export_bundle";
+pub const CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND: &str = "configure_text_model_provider";
 
 pub const IPC_COMMANDS: &[&str] = &[
     PROJECT_CREATE_OR_SWITCH_COMMAND,
@@ -52,4 +78,5 @@ pub const IPC_COMMANDS: &[&str] = &[
     GENERATE_STORYBOARD_COMMAND,
     UPDATE_STORYBOARD_ROWS_COMMAND,
     EXPORT_BUNDLE_COMMAND,
+    CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND,
 ];

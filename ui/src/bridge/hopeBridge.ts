@@ -1,6 +1,7 @@
 import type {
   AppShellReadonlyStatus,
   BridgeMode,
+  ConfigureTextModelProviderRequest,
   ExpandScriptRequest,
   ExpandScriptResponse,
   ExportBundleRequest,
@@ -17,6 +18,7 @@ import type {
   ProjectCreateOrSwitchRequest,
   ProjectSummary,
   StoryboardRenderSegmentCutPreviewSnapshotRequest,
+  TextModelProviderStatus,
   UpdateStoryboardRowsRequest,
   ValidationExportPanelSnapshot,
   ValidationExportPanelSnapshotRequest,
@@ -41,6 +43,7 @@ export const HOPE_TAURI_COMMANDS = {
   generateStoryboard: "generate_storyboard",
   updateStoryboardRows: "update_storyboard_rows",
   exportBundle: "export_bundle",
+  configureTextModelProvider: "configure_text_model_provider",
 } as const;
 
 type HopeCommandName = (typeof HOPE_TAURI_COMMANDS)[keyof typeof HOPE_TAURI_COMMANDS];
@@ -54,6 +57,7 @@ type HopeCommandPayload =
   | GenerateStoryboardRequest
   | UpdateStoryboardRowsRequest
   | ExportBundleRequest
+  | ConfigureTextModelProviderRequest
   | undefined;
 
 type DesktopInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -87,6 +91,7 @@ const PHASE1_REAL_COMMANDS = new Set<HopeCommandName>([
   HOPE_TAURI_COMMANDS.generateStoryboard,
   HOPE_TAURI_COMMANDS.updateStoryboardRows,
   HOPE_TAURI_COMMANDS.exportBundle,
+  HOPE_TAURI_COMMANDS.configureTextModelProvider,
 ]);
 
 function delay(ms: number) {
@@ -697,6 +702,21 @@ function normalizeExportBundleResponse(raw: unknown): ExportBundleResponse {
   };
 }
 
+function normalizeTextModelProviderStatus(raw: unknown): TextModelProviderStatus {
+  const status = readObject(raw, "text model provider status");
+  return {
+    provider: String(status.provider ?? "qwen") as TextModelProviderStatus["provider"],
+    model: String(status.model ?? "qwen-plus"),
+    enabled: Boolean(status.enabled),
+    base_url_present: Boolean(status.base_url_present ?? status.baseUrlPresent),
+    api_key_present: Boolean(status.api_key_present ?? status.apiKeyPresent),
+    live_ready: Boolean(status.live_ready ?? status.liveReady),
+    status: String(status.status ?? "unconfigured") as TextModelProviderStatus["status"],
+    message: String(status.message ?? ""),
+    storage: "session-only",
+  };
+}
+
 function fallbackForCommand<T>(command: HopeCommandName, payload?: HopeCommandPayload): T {
   switch (command) {
     case HOPE_TAURI_COMMANDS.projectCreateOrSwitch:
@@ -717,6 +737,33 @@ function fallbackForCommand<T>(command: HopeCommandName, payload?: HopeCommandPa
     case HOPE_TAURI_COMMANDS.updateStoryboardRows:
     case HOPE_TAURI_COMMANDS.exportBundle:
       throw new Error(`${command} requires the desktop bridge.`);
+    case HOPE_TAURI_COMMANDS.configureTextModelProvider: {
+      const request = payload as ConfigureTextModelProviderRequest | undefined;
+      const provider = request?.provider ?? "qwen";
+      const qwenEnabled = provider === "qwen" && Boolean(request?.enabled);
+      const apiKeyPresent =
+        Boolean(request?.api_key?.trim()) || Boolean(request?.api_key_ref?.trim());
+      const baseUrlPresent = Boolean(request?.base_url?.trim());
+      return {
+        provider,
+        model: request?.model || "qwen-plus",
+        enabled: qwenEnabled,
+        base_url_present: baseUrlPresent,
+        api_key_present: apiKeyPresent,
+        live_ready: qwenEnabled && apiKeyPresent && baseUrlPresent,
+        status:
+          provider !== "qwen"
+            ? "reserved"
+            : qwenEnabled && apiKeyPresent && baseUrlPresent
+              ? "enabled"
+              : "unconfigured",
+        message:
+          provider !== "qwen"
+            ? "该模型接口为预留状态，当前未启用真实调用。"
+            : "浏览器预览模式：配置仅在当前页面会话中模拟。",
+        storage: "session-only",
+      } as T;
+    }
     default:
       throw new Error(`Unmapped Hope UI command: ${command}`);
   }
@@ -823,4 +870,14 @@ export async function updateStoryboardRows(request: UpdateStoryboardRowsRequest)
 export async function exportBundle(request: ExportBundleRequest) {
   const raw = await invokeHopeCommand<unknown>(HOPE_TAURI_COMMANDS.exportBundle, request);
   return normalizeExportBundleResponse(raw);
+}
+
+export async function configureTextModelProvider(
+  request: ConfigureTextModelProviderRequest,
+) {
+  const raw = await invokeHopeCommand<unknown>(
+    HOPE_TAURI_COMMANDS.configureTextModelProvider,
+    request,
+  );
+  return normalizeTextModelProviderStatus(raw);
 }

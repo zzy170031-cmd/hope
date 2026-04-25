@@ -4,13 +4,14 @@ use core_domain::{ExpandScriptResponse, ExportBundleResponse, GenerateStoryboard
 use hope_app::{
     desktop_bridge::{DesktopInvokeRequest, DesktopInvokeResponse, invoke_desktop_command},
     ipc::{
+        CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND, ConfigureTextModelProviderRequest,
         EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, ExpandScriptRequest, ExportBundleRequest,
         GENERATE_STORYBOARD_COMMAND, GenerateStoryboardRequest, PROJECT_CREATE_OR_SWITCH_COMMAND,
         ProjectCreateOrSwitchRequest, STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
+        StoryboardRenderSegmentCutPreviewSnapshotRequest, TextModelProviderStatus,
         UPDATE_STORYBOARD_ROWS_COMMAND, UpdateStoryboardRowsRequest,
-        StoryboardRenderSegmentCutPreviewSnapshotRequest, VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
-        ValidationExportPanelSnapshotRequest, WRITER_ENTRY_SNAPSHOT_COMMAND,
-        WriterEntrySnapshotRequest,
+        VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND, ValidationExportPanelSnapshotRequest,
+        WRITER_ENTRY_SNAPSHOT_COMMAND, WriterEntrySnapshotRequest,
     },
     runtime::{
         ProjectCreateOrSwitchSnapshot, StoryboardRenderSegmentCutPreviewSnapshot,
@@ -46,7 +47,8 @@ fn run_native_host() {
             expand_script,
             generate_storyboard,
             update_storyboard_rows,
-            export_bundle
+            export_bundle,
+            configure_text_model_provider
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Hope desktop native host");
@@ -151,7 +153,9 @@ fn update_storyboard_rows(
     .map_err(|error| error.to_string())?
     {
         DesktopInvokeResponse::UpdateStoryboardRows(response) => Ok(response),
-        _ => Err("desktop invoke returned an unexpected update_storyboard_rows response".to_string()),
+        _ => {
+            Err("desktop invoke returned an unexpected update_storyboard_rows response".to_string())
+        }
     }
 }
 
@@ -165,5 +169,20 @@ fn export_bundle(request: ExportBundleRequest) -> Result<ExportBundleResponse, S
     {
         DesktopInvokeResponse::ExportBundle(response) => Ok(response),
         _ => Err("desktop invoke returned an unexpected export_bundle response".to_string()),
+    }
+}
+
+#[tauri::command]
+fn configure_text_model_provider(
+    request: ConfigureTextModelProviderRequest,
+) -> Result<TextModelProviderStatus, String> {
+    match invoke_desktop_command(
+        CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND,
+        DesktopInvokeRequest::ConfigureTextModelProvider(request),
+    )
+    .map_err(|error| error.to_string())?
+    {
+        DesktopInvokeResponse::ConfigureTextModelProvider(response) => Ok(response),
+        _ => Err("desktop invoke returned an unexpected model provider response".to_string()),
     }
 }

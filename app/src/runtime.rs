@@ -1,8 +1,9 @@
 use std::{
     collections::HashSet,
+    env,
     hash::{Hash, Hasher},
     io,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
@@ -18,14 +19,17 @@ use core_domain::{
     ExportBundleRequest, ExportBundleResponse, ExternalReferenceHandleCandidate,
     GenerateStoryboardRequest, GenerateStoryboardResponse, GeneratedStoryboardRow,
     GoldenSampleLibraryRecord, KbRouterExcludedCandidate, KbRouterRetrievalTrace,
-    KbRouterRuntimeRequest, KbRouterRuntimeResponse, KbRouterSelectedRule,
-    KbRouterSelectionReason, KbRouterTaskType, KbRouterTokenBudget, ModelConfigSummary,
-    ProductWarning, PromptBodyCandidate, PromptTextCompilationStatus, ScenePerformanceProjection,
-    SequenceFieldState, SequenceGrouping, StoryboardDurationPlan, StoryboardExportStatus,
-    StructureMode, UpdateStoryboardRowsRequest,
+    KbRouterRuntimeRequest, KbRouterRuntimeResponse, KbRouterSelectedRule, KbRouterSelectionReason,
+    KbRouterTaskType, KbRouterTokenBudget, ModelConfigSummary, ProductWarning, PromptBodyCandidate,
+    PromptTextCompilationStatus, ScenePerformanceProjection, SequenceFieldState, SequenceGrouping,
+    StoryboardDurationPlan, StoryboardExportStatus, StructureMode, TextGenerationOutputSchema,
+    TextGenerationRequest, TextGenerationResponse, TextGenerationTask, TextModelProvider,
+    TextModelProviderKind, UpdateStoryboardRowsRequest,
 };
 use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
-use serde::Serialize;
+use reqwest::blocking::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
 use validators::{
     RepairRecommendation, Week3SharedFixture, generate_week3_repair_recommendations,
@@ -130,6 +134,51 @@ pub struct ValidationRepairRecommendationItem {
     pub prompt_template_names: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct LiveStoryboardRowPatch {
+    #[serde(default)]
+    shot_title: String,
+    #[serde(default)]
+    person: String,
+    #[serde(default)]
+    scene_scale: String,
+    #[serde(default)]
+    visual_description: String,
+    #[serde(default)]
+    character_action: String,
+    #[serde(default)]
+    dialogue: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct LiveStoryboardRowsEnvelope {
+    rows: Vec<LiveStoryboardRowPatch>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QwenChatCompletionResponse {
+    choices: Vec<QwenChoice>,
+    #[serde(default)]
+    usage: Option<QwenUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QwenChoice {
+    message: QwenMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct QwenMessage {
+    #[serde(default)]
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct QwenUsage {
+    #[serde(default)]
+    total_tokens: Option<u32>,
+}
+
 pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandScriptResponse {
     let scene_label = request.scene_label.as_deref().unwrap_or_default().trim();
     let scene_category = request.scene_category.as_deref().unwrap_or_default().trim();
@@ -152,69 +201,81 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
     ));
     let script_id = format!("script-{}", &script_hash[..12]);
 
-    let mut warnings = vec![ProductWarning {
-        code: "qwen_live_generation_closed".to_string(),
-        message:
-            "Expanded script is a deterministic bridge envelope; live Qwen expansion remains gated."
-                .to_string(),
-        related_sample_id: None,
-    }];
-    warnings.extend(model_config_warnings(request.model_config_summary.as_ref()));
-
+    let mut v120_package_not_confirmed = false;
     let source_package = if let Some(package) = state.kb_golden_sample_runtime.as_ref() {
         if !package.manifest.seed_import_format.contains("v0.2") {
-            warnings.push(ProductWarning {
-                code: "v120_package_not_confirmed".to_string(),
-                message:
-                    "Loaded KB package does not advertise the accepted v0.2 seed import format."
-                        .to_string(),
-                related_sample_id: None,
-            });
+            v120_package_not_confirmed = true;
         }
         package.manifest.snapshot_name.clone()
     } else {
+        "missing_v120_runtime_package".to_string()
+    };
+    let kb_router_result = run_kb_router(state, router_request);
+    let (provider, session_api_key) = current_text_model_provider(state);
+    let generation_request = build_text_generation_request(
+        TextGenerationTask::ExpandScript,
+        Some(normalized_scene_type.clone()),
+        request.synopsis_text.trim().to_string(),
+        None,
+        kb_router_result.kb_context_summary.clone(),
+        kb_router_result.selected_sample_ids.clone(),
+        kb_router_result
+            .selected_kb_rules
+            .iter()
+            .map(|rule| format!("{}:{}", rule.rule_id, rule.summary))
+            .collect(),
+        TextGenerationOutputSchema::PlainText,
+        Some(700),
+    );
+    let generated_script =
+        run_text_generation(&provider, session_api_key.as_deref(), &generation_request);
+    let mut warnings = generated_script.warnings.clone();
+    warnings.extend(model_config_warnings(request.model_config_summary.as_ref()));
+    if v120_package_not_confirmed {
+        warnings.push(ProductWarning {
+            code: "v120_package_not_confirmed".to_string(),
+            message: "Loaded KB package does not advertise the accepted v0.2 seed import format."
+                .to_string(),
+            related_sample_id: None,
+        });
+    } else if source_package == "missing_v120_runtime_package" {
         warnings.push(ProductWarning {
             code: "v120_package_missing".to_string(),
             message: "V120 golden sample runtime package is not available to the desktop bridge."
                 .to_string(),
             related_sample_id: None,
         });
-        "missing_v120_runtime_package".to_string()
+    }
+
+    let live_text = if generated_script.warnings.is_empty() {
+        validate_generated_script_text(&generated_script.text)
+    } else {
+        None
     };
+    if live_text.is_none() {
+        warnings.push(ProductWarning {
+            code: "text_model_live_expand_fallback".to_string(),
+            message: "未启用千问或调用失败，已使用本地候选结果。".to_string(),
+            related_sample_id: None,
+        });
+    }
+    let expanded_script_text = build_expanded_script_text(
+        &request,
+        scene_label,
+        scene_category,
+        &source_package,
+        live_text.unwrap_or_else(|| request.synopsis_text.trim()),
+        generated_script.warnings.is_empty(),
+        &provider,
+        provider_api_key_present(&provider, session_api_key.as_deref()),
+    );
 
     let response = ExpandScriptResponse {
         script_id,
-        expanded_script_text: format!(
-            "scene_type: {}\nscene_label: {}\nscene_category: {}\nmodel_provider: {}\nmodel: {}\nmodel_enabled: {}\napi_key_present: {}\nsynopsis: {}\nsource_package: {}",
-            request.scene_type.trim(),
-            scene_label,
-            scene_category,
-            request
-                .model_config_summary
-                .as_ref()
-                .map(|item| item.provider.as_str())
-                .unwrap_or("qwen"),
-            request
-                .model_config_summary
-                .as_ref()
-                .map(|item| item.model.as_str())
-                .unwrap_or("qwen-plus"),
-            request
-                .model_config_summary
-                .as_ref()
-                .map(|item| item.enabled)
-                .unwrap_or(false),
-            request
-                .model_config_summary
-                .as_ref()
-                .map(|item| item.api_key_present)
-                .unwrap_or(false),
-            request.synopsis_text.trim(),
-            source_package
-        ),
+        expanded_script_text,
         script_hash,
         warnings,
-        kb_router_result: run_kb_router(state, router_request),
+        kb_router_result,
     };
     state.remember_script(response.clone());
     response
@@ -339,7 +400,39 @@ pub fn generate_storyboard(
     };
 
     let mut rows = Vec::new();
+    let mut deterministic_rows = Vec::new();
     let mut warnings = Vec::new();
+    let (provider, session_api_key) = current_text_model_provider(state);
+    let generation_request = build_text_generation_request(
+        TextGenerationTask::GenerateStoryboard,
+        Some(normalize_scene_type(&scene_type)),
+        script_text.clone(),
+        Some(StoryboardDurationPlan {
+            total_duration_seconds: request.selected_total_duration_seconds,
+            row_count: row_count as u32,
+            per_row_seconds: (request.selected_total_duration_seconds / row_count as u16).max(1),
+            allocated_seconds: request.selected_total_duration_seconds,
+        }),
+        kb_router_result.kb_context_summary.clone(),
+        kb_router_result.selected_sample_ids.clone(),
+        kb_router_result
+            .selected_kb_rules
+            .iter()
+            .map(|rule| format!("{}:{}", rule.rule_id, rule.summary))
+            .collect(),
+        TextGenerationOutputSchema::StoryboardRowsJson,
+        Some(1200),
+    );
+    let live_generation =
+        run_text_generation(&provider, session_api_key.as_deref(), &generation_request);
+    warnings.extend(live_generation.warnings.clone());
+    let live_row_patches = match extract_live_storyboard_row_patches(&live_generation) {
+        Ok(patches) => patches,
+        Err(warning) => {
+            warnings.push(warning);
+            Vec::new()
+        }
+    };
 
     for (index, record) in selected_records.iter().enumerate() {
         let failure_mapping = state.kb_golden_sample_runtime.as_ref().and_then(|package| {
@@ -380,7 +473,7 @@ pub fn generate_storyboard(
             });
         }
 
-        rows.push(GeneratedStoryboardRow {
+        let mut row = GeneratedStoryboardRow {
             shot_id: record.source_fields.shot_id.clone(),
             order: (index + 1) as u32,
             person: scene_projection.person.clone(),
@@ -398,16 +491,33 @@ pub fn generate_storyboard(
             scene_performance_projection: scene_projection.clone(),
             external_reference_handle_candidates: project_reference_handle_candidates(record),
             sequence_grouping: scene_projection.sequence_grouping,
-        });
+        };
+        deterministic_rows.push(row.clone());
+        if let Some(patch) = live_row_patches.get(index) {
+            apply_live_storyboard_patch(&mut row, patch);
+        }
+        rows.push(row);
     }
 
-    warnings.push(ProductWarning {
-        code: "model_generation_closed".to_string(),
-        message:
-            "Rows are V120 bridge projections; live model-generated storyboard text remains gated."
-                .to_string(),
-        related_sample_id: None,
-    });
+    if !live_row_patches.is_empty() {
+        let live_validator_findings =
+            validate_live_storyboard_rows(&rows, request.selected_total_duration_seconds);
+        if !live_validator_findings.is_empty() {
+            warnings.extend(live_validator_findings);
+            warnings.push(ProductWarning {
+                code: "text_model_live_storyboard_fallback".to_string(),
+                message: "千问生成的分镜内容未通过本地校验，已回退到本地候选结果。".to_string(),
+                related_sample_id: None,
+            });
+            rows = deterministic_rows;
+        }
+    } else if !live_generation.warnings.is_empty() {
+        warnings.push(ProductWarning {
+            code: "text_model_live_storyboard_fallback".to_string(),
+            message: "未启用千问或调用失败，已使用本地候选结果。".to_string(),
+            related_sample_id: None,
+        });
+    }
     warnings.extend(model_config_warnings(request.model_config_summary.as_ref()));
 
     let status = if !blockers.is_empty() {
@@ -699,52 +809,46 @@ pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBu
         rows: storyboard.rows.clone(),
     }) {
         Ok(bundle) => {
-            artifacts.extend(
-                bundle
-                    .artifacts
-                    .into_iter()
-                    .map(|artifact| ExportArtifactRecord {
-                        artifact_id: format!("{}-{}", export_manifest_id, artifact.artifact_kind),
-                        artifact_kind: artifact.artifact_kind.to_string(),
-                        export_format: artifact.export_format.to_string(),
-                        ready: true,
-                        blocked_reason: None,
-                        artifact_path: Some(artifact.path.display().to_string()),
-                        content_hash: Some(artifact.content_hash),
-                        byte_size: Some(artifact.byte_size),
-                        row_count: Some(artifact.row_count),
-                        selected_total_duration_seconds: Some(
-                            storyboard.selected_total_duration_seconds,
-                        ),
-                        source_result_id: Some(storyboard.result_id.clone()),
-                        edited_rows_applied: storyboard.dirty,
-                        prompt_text_compilation_statuses: collect_compilation_statuses(
-                            &storyboard.rows,
-                        ),
-                        prompt_text_compilation_warning_codes: collect_compilation_warning_codes(
-                            &storyboard.rows,
-                        ),
-                        selected_sample_ids: storyboard
-                            .kb_router_result
-                            .selected_sample_ids
-                            .clone(),
-                        selected_kb_rule_ids: storyboard
-                            .kb_router_result
-                            .selected_kb_rules
-                            .iter()
-                            .map(|rule| rule.rule_id.clone())
-                            .collect(),
-                        kb_context_summary: Some(
-                            storyboard.kb_router_result.kb_context_summary.clone(),
-                        ),
-                        retrieval_trace: Some(storyboard.kb_router_result.retrieval_trace.clone()),
-                        full_kb_rows_included: storyboard
-                            .kb_router_result
-                            .retrieval_trace
-                            .token_budget
-                            .full_kb_rows_included,
-                    }),
-            );
+            artifacts.extend(bundle.artifacts.into_iter().map(|artifact| {
+                ExportArtifactRecord {
+                    artifact_id: format!("{}-{}", export_manifest_id, artifact.artifact_kind),
+                    artifact_kind: artifact.artifact_kind.to_string(),
+                    export_format: artifact.export_format.to_string(),
+                    ready: true,
+                    blocked_reason: None,
+                    artifact_path: Some(artifact.path.display().to_string()),
+                    content_hash: Some(artifact.content_hash),
+                    byte_size: Some(artifact.byte_size),
+                    row_count: Some(artifact.row_count),
+                    selected_total_duration_seconds: Some(
+                        storyboard.selected_total_duration_seconds,
+                    ),
+                    source_result_id: Some(storyboard.result_id.clone()),
+                    edited_rows_applied: storyboard.dirty,
+                    prompt_text_compilation_statuses: collect_compilation_statuses(
+                        &storyboard.rows,
+                    ),
+                    prompt_text_compilation_warning_codes: collect_compilation_warning_codes(
+                        &storyboard.rows,
+                    ),
+                    selected_sample_ids: storyboard.kb_router_result.selected_sample_ids.clone(),
+                    selected_kb_rule_ids: storyboard
+                        .kb_router_result
+                        .selected_kb_rules
+                        .iter()
+                        .map(|rule| rule.rule_id.clone())
+                        .collect(),
+                    kb_context_summary: Some(
+                        storyboard.kb_router_result.kb_context_summary.clone(),
+                    ),
+                    retrieval_trace: Some(storyboard.kb_router_result.retrieval_trace.clone()),
+                    full_kb_rows_included: storyboard
+                        .kb_router_result
+                        .retrieval_trace
+                        .token_budget
+                        .full_kb_rows_included,
+                }
+            }));
         }
         Err(error) => {
             let reason = format!("v120_export_engine_error: {error:?}");
@@ -847,6 +951,525 @@ fn blocked_storyboard_export_artifacts(
             full_kb_rows_included: 0,
         })
         .collect()
+}
+
+fn current_text_model_provider(state: &AppState) -> (TextModelProvider, Option<String>) {
+    if let Some(session) = state.text_model_provider_session_config() {
+        let provider_kind = text_model_provider_kind_from_str(&session.provider);
+        let api_key = session.resolved_api_key();
+        return (
+            TextModelProvider {
+                provider: provider_kind,
+                model: if session.model.trim().is_empty() {
+                    "qwen-plus".to_string()
+                } else {
+                    session.model.trim().to_string()
+                },
+                base_url: session.base_url.clone(),
+                api_key_ref: session
+                    .api_key_ref
+                    .clone()
+                    .unwrap_or_else(|| "env:HOPE_TEXT_MODEL_API_KEY".to_string()),
+                enabled: session.enabled && provider_kind == TextModelProviderKind::Qwen,
+            },
+            api_key,
+        );
+    }
+
+    (default_text_model_provider(), None)
+}
+
+fn default_text_model_provider() -> TextModelProvider {
+    let provider = text_model_provider_kind_from_str(
+        &env::var("HOPE_TEXT_MODEL_PROVIDER").unwrap_or_else(|_| "qwen".to_string()),
+    );
+    TextModelProvider {
+        provider,
+        model: env::var("HOPE_TEXT_MODEL_MODEL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "qwen-plus".to_string()),
+        base_url: env::var("HOPE_TEXT_MODEL_BASE_URL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        api_key_ref: env::var("HOPE_TEXT_MODEL_API_KEY_REF")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "env:HOPE_TEXT_MODEL_API_KEY".to_string()),
+        enabled: parse_bool_env("HOPE_TEXT_MODEL_ENABLED"),
+    }
+}
+
+fn build_text_generation_request(
+    task_type: TextGenerationTask,
+    scene_type: Option<String>,
+    story_input: String,
+    duration_plan: Option<StoryboardDurationPlan>,
+    kb_context_summary: String,
+    selected_sample_ids: Vec<String>,
+    selected_kb_rules: Vec<String>,
+    output_schema: TextGenerationOutputSchema,
+    max_tokens: Option<u32>,
+) -> TextGenerationRequest {
+    TextGenerationRequest {
+        task_type,
+        scene_type,
+        story_input,
+        duration_plan,
+        kb_context_summary,
+        selected_sample_ids,
+        selected_kb_rules,
+        output_schema,
+        temperature: Some(0.2),
+        max_tokens,
+    }
+}
+
+fn run_text_generation(
+    provider: &TextModelProvider,
+    session_api_key: Option<&str>,
+    request: &TextGenerationRequest,
+) -> TextGenerationResponse {
+    if !provider.enabled {
+        return run_text_generation_stub(
+            provider,
+            request,
+            ProductWarning {
+                code: "text_model_live_call_closed".to_string(),
+                message: format!(
+                    "{} 未启用，已使用本地候选结果。",
+                    provider_kind_display_name(provider.provider)
+                ),
+                related_sample_id: request.selected_sample_ids.first().cloned(),
+            },
+        );
+    }
+
+    if provider.provider != TextModelProviderKind::Qwen {
+        return run_text_generation_stub(
+            provider,
+            request,
+            ProductWarning {
+                code: "text_model_provider_not_supported".to_string(),
+                message: "当前只有千问 Qwen 文本生成可启用，其他模型接口仍为预留。".to_string(),
+                related_sample_id: request.selected_sample_ids.first().cloned(),
+            },
+        );
+    }
+
+    let Some(api_key) = session_api_key
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| resolve_provider_api_key(provider))
+    else {
+        return run_text_generation_stub(
+            provider,
+            request,
+            ProductWarning {
+                code: "text_model_api_key_missing".to_string(),
+                message: "千问已启用，但当前会话缺少 API Key，已使用本地候选结果。".to_string(),
+                related_sample_id: request.selected_sample_ids.first().cloned(),
+            },
+        );
+    };
+
+    let Some(endpoint) = resolve_qwen_endpoint(provider) else {
+        return run_text_generation_stub(
+            provider,
+            request,
+            ProductWarning {
+                code: "text_model_base_url_missing".to_string(),
+                message: "千问已启用，但 base_url 未配置，已使用本地候选结果。".to_string(),
+                related_sample_id: request.selected_sample_ids.first().cloned(),
+            },
+        );
+    };
+
+    match run_qwen_text_generation_with_transport(
+        provider,
+        request,
+        &endpoint,
+        &api_key,
+        qwen_http_transport,
+    ) {
+        Ok(response) => response,
+        Err(warning) => run_text_generation_stub(provider, request, warning),
+    }
+}
+
+fn run_text_generation_stub(
+    provider: &TextModelProvider,
+    request: &TextGenerationRequest,
+    warning: ProductWarning,
+) -> TextGenerationResponse {
+    let scene_type = request.scene_type.as_deref().unwrap_or("unspecified_scene");
+    let text = format!(
+        "task={:?}\nscene_type={}\nselected_samples={}\nselected_kb_rules={}\nkb_context={}",
+        request.task_type,
+        scene_type,
+        request.selected_sample_ids.join(","),
+        request.selected_kb_rules.join(" | "),
+        request.kb_context_summary
+    );
+
+    TextGenerationResponse {
+        text,
+        structured_json: None,
+        usage_tokens: None,
+        latency_ms: Some(0),
+        warnings: vec![warning],
+        provider: provider.provider,
+        model: provider.model.clone(),
+    }
+}
+
+fn run_qwen_text_generation_with_transport<F>(
+    provider: &TextModelProvider,
+    request: &TextGenerationRequest,
+    endpoint: &str,
+    api_key: &str,
+    transport: F,
+) -> Result<TextGenerationResponse, ProductWarning>
+where
+    F: Fn(&str, &str, &Value) -> Result<(Value, u64), ProductWarning>,
+{
+    let payload = build_qwen_request_payload(provider, request);
+    let started = Instant::now();
+    let (body, transport_latency_ms) = transport(endpoint, api_key, &payload)?;
+    let response: QwenChatCompletionResponse =
+        serde_json::from_value(body).map_err(|_| ProductWarning {
+            code: "text_model_response_invalid".to_string(),
+            message: "千问返回结构无法解析，已使用本地候选结果。".to_string(),
+            related_sample_id: request.selected_sample_ids.first().cloned(),
+        })?;
+    let content = response
+        .choices
+        .first()
+        .map(|choice| choice.message.content.trim())
+        .filter(|content| !content.is_empty())
+        .ok_or_else(|| ProductWarning {
+            code: "text_model_response_invalid".to_string(),
+            message: "千问返回为空，已使用本地候选结果。".to_string(),
+            related_sample_id: request.selected_sample_ids.first().cloned(),
+        })?;
+    let structured_json = match request.output_schema {
+        TextGenerationOutputSchema::StoryboardRowsJson
+        | TextGenerationOutputSchema::RepairPlanJson => serde_json::from_str::<Value>(content).ok(),
+        _ => None,
+    };
+
+    Ok(TextGenerationResponse {
+        text: content.to_string(),
+        structured_json,
+        usage_tokens: response.usage.and_then(|usage| usage.total_tokens),
+        latency_ms: Some(transport_latency_ms.max(started.elapsed().as_millis() as u64)),
+        warnings: vec![],
+        provider: provider.provider,
+        model: provider.model.clone(),
+    })
+}
+
+fn build_qwen_request_payload(
+    provider: &TextModelProvider,
+    request: &TextGenerationRequest,
+) -> Value {
+    let scene_type = request.scene_type.as_deref().unwrap_or("unspecified_scene");
+    let duration_seconds = request
+        .duration_plan
+        .as_ref()
+        .map(|plan| plan.total_duration_seconds)
+        .unwrap_or_default();
+    let output_schema = match request.output_schema {
+        TextGenerationOutputSchema::PlainText => "plain_text",
+        TextGenerationOutputSchema::StoryboardRowsJson => "storyboard_rows_json",
+        TextGenerationOutputSchema::RepairPlanJson => "repair_plan_json",
+        TextGenerationOutputSchema::SeedancePromptText => "seedance_prompt_text",
+    };
+    let system_prompt = "你是 Hope 的受控文本生成层。只能使用收到的压缩知识库摘要和样本/规则 ID，不得扩展为全量知识库，不得输出真实导演/IP/品牌名。";
+    let user_prompt = format!(
+        "task_type={:?}\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema={}\nconstraints=保持总时长守恒；不要输出 full KB rows；不要把 raw prompt_body 当最终 prompt_text；不要输出 source_register 或 overlay JSON。",
+        request.task_type,
+        scene_type,
+        duration_seconds,
+        request.story_input,
+        request.kb_context_summary,
+        request.selected_sample_ids.join(","),
+        request.selected_kb_rules.join(" | "),
+        output_schema,
+    );
+
+    let mut payload = json!({
+        "model": provider.model.clone(),
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": request.temperature.unwrap_or(0.2),
+        "max_tokens": request.max_tokens.unwrap_or(800)
+    });
+    if matches!(
+        request.output_schema,
+        TextGenerationOutputSchema::StoryboardRowsJson | TextGenerationOutputSchema::RepairPlanJson
+    ) {
+        payload["response_format"] = json!({ "type": "json_object" });
+    }
+    payload
+}
+
+fn qwen_http_transport(
+    endpoint: &str,
+    api_key: &str,
+    payload: &Value,
+) -> Result<(Value, u64), ProductWarning> {
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|_| ProductWarning {
+            code: "text_model_network_error".to_string(),
+            message: "千问 HTTP 客户端初始化失败，已使用本地候选结果。".to_string(),
+            related_sample_id: None,
+        })?;
+    let started = Instant::now();
+    let response = client
+        .post(endpoint)
+        .bearer_auth(api_key)
+        .json(payload)
+        .send()
+        .map_err(|_| ProductWarning {
+            code: "text_model_network_error".to_string(),
+            message: "无法连接千问接口，已使用本地候选结果。".to_string(),
+            related_sample_id: None,
+        })?;
+    let status = response.status();
+    let body: Value = response.json().map_err(|_| ProductWarning {
+        code: "text_model_response_invalid".to_string(),
+        message: "千问返回非 JSON 内容，已使用本地候选结果。".to_string(),
+        related_sample_id: None,
+    })?;
+    if !status.is_success() {
+        return Err(ProductWarning {
+            code: "text_model_network_error".to_string(),
+            message: format!(
+                "千问接口返回 HTTP {}，已使用本地候选结果。",
+                status.as_u16()
+            ),
+            related_sample_id: None,
+        });
+    }
+    Ok((body, started.elapsed().as_millis() as u64))
+}
+
+fn resolve_provider_api_key(provider: &TextModelProvider) -> Option<String> {
+    provider
+        .api_key_ref
+        .strip_prefix("env:")
+        .and_then(|name| env::var(name).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn resolve_qwen_endpoint(provider: &TextModelProvider) -> Option<String> {
+    let base = provider.base_url.as_deref()?.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return None;
+    }
+    if base.ends_with("/chat/completions") {
+        Some(base.to_string())
+    } else {
+        Some(format!("{base}/chat/completions"))
+    }
+}
+
+fn parse_bool_env(name: &str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn text_model_provider_kind_from_str(value: &str) -> TextModelProviderKind {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "doubao" => TextModelProviderKind::Doubao,
+        "custom" => TextModelProviderKind::Custom,
+        _ => TextModelProviderKind::Qwen,
+    }
+}
+
+fn provider_kind_label(kind: TextModelProviderKind) -> &'static str {
+    match kind {
+        TextModelProviderKind::Qwen => "qwen",
+        TextModelProviderKind::Doubao => "doubao",
+        TextModelProviderKind::Custom => "custom",
+    }
+}
+
+fn provider_kind_display_name(kind: TextModelProviderKind) -> &'static str {
+    match kind {
+        TextModelProviderKind::Qwen => "千问 Qwen",
+        TextModelProviderKind::Doubao => "豆包 Doubao",
+        TextModelProviderKind::Custom => "自定义模型",
+    }
+}
+
+fn provider_api_key_present(provider: &TextModelProvider, session_api_key: Option<&str>) -> bool {
+    session_api_key.is_some_and(|value| !value.trim().is_empty())
+        || resolve_provider_api_key(provider).is_some()
+}
+
+fn validate_generated_script_text(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || contains_forbidden_generation_terms(trimmed) {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn build_expanded_script_text(
+    request: &core_domain::ExpandScriptRequest,
+    scene_label: &str,
+    scene_category: &str,
+    source_package: &str,
+    body_text: &str,
+    live_used: bool,
+    provider: &TextModelProvider,
+    api_key_present: bool,
+) -> String {
+    format!(
+        "scene_type: {}\nscene_label: {}\nscene_category: {}\nmodel_provider: {}\nmodel: {}\nmodel_enabled: {}\napi_key_present: {}\ntext_generation: {}\nsynopsis: {}\nsource_package: {}\nexpanded_script: {}",
+        request.scene_type.trim(),
+        scene_label,
+        scene_category,
+        provider_kind_label(provider.provider),
+        provider.model,
+        provider.enabled,
+        api_key_present,
+        if live_used {
+            "qwen_live"
+        } else {
+            "deterministic_fallback"
+        },
+        request.synopsis_text.trim(),
+        source_package,
+        body_text.trim(),
+    )
+}
+
+fn extract_live_storyboard_row_patches(
+    generation_response: &TextGenerationResponse,
+) -> Result<Vec<LiveStoryboardRowPatch>, ProductWarning> {
+    let Some(structured_json) = generation_response.structured_json.as_ref() else {
+        if generation_response.warnings.is_empty()
+            && generation_response.provider == TextModelProviderKind::Qwen
+        {
+            return Err(ProductWarning {
+                code: "text_model_response_invalid".to_string(),
+                message: "千问分镜返回不是有效 rows JSON，已使用本地候选结果。".to_string(),
+                related_sample_id: None,
+            });
+        }
+        return Ok(Vec::new());
+    };
+    if let Ok(envelope) =
+        serde_json::from_value::<LiveStoryboardRowsEnvelope>(structured_json.clone())
+    {
+        return Ok(envelope.rows);
+    }
+    if let Ok(rows) = serde_json::from_value::<Vec<LiveStoryboardRowPatch>>(structured_json.clone())
+    {
+        return Ok(rows);
+    }
+    Err(ProductWarning {
+        code: "text_model_response_invalid".to_string(),
+        message: "千问分镜返回不是有效 rows JSON，已使用本地候选结果。".to_string(),
+        related_sample_id: None,
+    })
+}
+
+fn apply_live_storyboard_patch(row: &mut GeneratedStoryboardRow, patch: &LiveStoryboardRowPatch) {
+    if let Some(value) = non_blank_string(&patch.shot_title) {
+        row.shot_title = value;
+    }
+    if let Some(value) = non_blank_string(&patch.person) {
+        row.person = value;
+    }
+    if let Some(value) = non_blank_string(&patch.scene_scale) {
+        row.scene_scale = value;
+    }
+    if let Some(value) = non_blank_string(&patch.visual_description) {
+        row.visual_description = value;
+    }
+    if let Some(value) = non_blank_string(&patch.character_action) {
+        row.character_action = value;
+    }
+    if let Some(value) = non_blank_string(&patch.dialogue) {
+        row.dialogue = value;
+    }
+}
+
+fn validate_live_storyboard_rows(
+    rows: &[GeneratedStoryboardRow],
+    expected_duration_seconds: u16,
+) -> Vec<ProductWarning> {
+    let mut findings = Vec::new();
+    if rows.iter().map(|row| row.duration_seconds).sum::<u16>() != expected_duration_seconds {
+        findings.push(ProductWarning {
+            code: "duration_conservation_failed".to_string(),
+            message: "千问返回后分镜总时长不守恒，已使用本地候选结果。".to_string(),
+            related_sample_id: None,
+        });
+    }
+    for row in rows {
+        for (field_name, field_value) in [
+            ("人物", row.person.as_str()),
+            ("镜头", row.shot_title.as_str()),
+            ("景别", row.scene_scale.as_str()),
+            ("画面描述", row.visual_description.as_str()),
+            ("角色动作", row.character_action.as_str()),
+        ] {
+            if field_value.trim().is_empty() {
+                findings.push(ProductWarning {
+                    code: "text_model_validator_failed".to_string(),
+                    message: format!(
+                        "千问返回的第 {} 行缺少{}，已使用本地候选结果。",
+                        row.order, field_name
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
+            if contains_forbidden_generation_terms(field_value) {
+                findings.push(ProductWarning {
+                    code: "text_model_validator_failed".to_string(),
+                    message: format!(
+                        "千问返回的第 {} 行包含受限真实名称，已使用本地候选结果。",
+                        row.order
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
+        }
+    }
+    findings
+}
+
+fn contains_forbidden_generation_terms(text: &str) -> bool {
+    const FORBIDDEN_TERMS: &[&str] = &[
+        "宫崎骏",
+        "新海诚",
+        "迪士尼",
+        "漫威",
+        "星球大战",
+        "哈利波特",
+        "宝可梦",
+        "三国志战略版",
+    ];
+    FORBIDDEN_TERMS.iter().any(|term| text.contains(term))
 }
 
 fn model_config_hash_input(model_config: Option<&ModelConfigSummary>) -> String {
@@ -1432,7 +2055,12 @@ fn compile_seedance_prompt_text(
         ),
     ];
 
-    if !record.source_fields.continuity_negative_core.trim().is_empty() {
+    if !record
+        .source_fields
+        .continuity_negative_core
+        .trim()
+        .is_empty()
+    {
         sections.push(format!(
             "连续性约束：{}",
             record.source_fields.continuity_negative_core.trim()
@@ -1442,16 +2070,13 @@ fn compile_seedance_prompt_text(
 
     let warnings = vec![
         ProductWarning {
-            code: "text_model_live_call_closed".to_string(),
-            message: "Text generation stays deterministic in MVP; live provider calls remain gated."
-                .to_string(),
+            code: "seedance_prompt_text_compilation_local".to_string(),
+            message: "Seedance2.0 prompt_text 当前由本地结构化字段编译生成。".to_string(),
             related_sample_id: Some(record.sample_id.clone()),
         },
         ProductWarning {
-            code: "seedance_video_generation_closed".to_string(),
-            message:
-                "Seedance2.0 is a prompt_text adaptation target in MVP; in-app video generation remains gated."
-                    .to_string(),
+            code: "seedance_runtime_adapter_closed".to_string(),
+            message: "Seedance2.0 仅作为文本提示词适配目标；当前不接运行时接口。".to_string(),
             related_sample_id: Some(record.sample_id.clone()),
         },
         ProductWarning {

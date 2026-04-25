@@ -13,8 +13,9 @@ pub use contracts::{
     KbRouterTokenBudget, ModelChannel, ModelConfigSummary, ModelRequest, ModelResponse,
     ProductWarning, PromptBodyCandidate, PromptPackageRecord, PromptTextCompilationStatus,
     ScenePerformanceProjection, SequenceFieldState, SequenceGrouping, StoryboardDurationPlan,
-    StoryboardExportStatus, StructureMode, TextModelProviderKind, UpdateStoryboardRowsRequest,
-    ValidationSummary,
+    StoryboardExportStatus, StructureMode, TextGenerationOutputSchema, TextGenerationRequest,
+    TextGenerationResponse, TextGenerationTask, TextModelProvider, TextModelProviderKind,
+    UpdateStoryboardRowsRequest, ValidationSummary,
 };
 pub use domain::{
     CutRecord, DirectorCutSampleRecord, DirectorProfileRecord, EpisodeRecord, HandoffZoneRecord,

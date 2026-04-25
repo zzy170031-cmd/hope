@@ -75,6 +75,34 @@ export interface ModelConfigSummary {
   api_key_present: boolean;
 }
 
+export type TextModelProviderUiStatus =
+  | "unconfigured"
+  | "configured_disabled"
+  | "enabled"
+  | "fallback"
+  | "reserved";
+
+export interface ConfigureTextModelProviderRequest {
+  provider: WorkbenchModelId;
+  model: string;
+  base_url: string;
+  api_key?: string | null;
+  api_key_ref?: string | null;
+  enabled: boolean;
+}
+
+export interface TextModelProviderStatus {
+  provider: WorkbenchModelId;
+  model: string;
+  enabled: boolean;
+  base_url_present: boolean;
+  api_key_present: boolean;
+  live_ready: boolean;
+  status: TextModelProviderUiStatus;
+  message: string;
+  storage: "session-only";
+}
+
 export interface ExpandScriptResponse {
   script_id: string;
   expanded_script_text: string;

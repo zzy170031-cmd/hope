@@ -1,10 +1,11 @@
 use std::{
     collections::HashMap,
-    io,
+    env, io,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
 
+use crate::ipc::{ConfigureTextModelProviderRequest, TextModelProviderStatus};
 use core_domain::{ExpandScriptResponse, GenerateStoryboardResponse, KbGoldenSampleRuntimePackage};
 use project_store::{
     DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeError, KbRuntimeHandle, StoreSkeleton,
@@ -153,6 +154,102 @@ impl ValidationFeedbackReadonlyState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextModelProviderSessionConfig {
+    pub provider: String,
+    pub model: String,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub api_key_ref: Option<String>,
+    pub enabled: bool,
+}
+
+impl TextModelProviderSessionConfig {
+    pub fn from_request(request: ConfigureTextModelProviderRequest) -> Self {
+        let provider = normalize_provider_id(&request.provider);
+        let enabled = provider == "qwen" && request.enabled;
+        Self {
+            provider,
+            model: request.model.trim().to_string(),
+            base_url: non_empty_trimmed(request.base_url),
+            api_key: request
+                .api_key
+                .and_then(non_empty_trimmed)
+                .map(|value| value.trim().to_string()),
+            api_key_ref: request.api_key_ref.and_then(non_empty_trimmed),
+            enabled,
+        }
+    }
+
+    pub fn has_api_key(&self) -> bool {
+        self.api_key
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            || self.resolve_api_key_ref().is_some()
+    }
+
+    pub fn resolved_api_key(&self) -> Option<String> {
+        self.api_key
+            .as_deref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .or_else(|| self.resolve_api_key_ref())
+    }
+
+    fn resolve_api_key_ref(&self) -> Option<String> {
+        self.api_key_ref
+            .as_deref()
+            .and_then(|value| value.strip_prefix("env:"))
+            .and_then(|name| env::var(name).ok())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn to_status(&self) -> TextModelProviderStatus {
+        let base_url_present = self
+            .base_url
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+        let api_key_present = self.has_api_key();
+        let model_present = !self.model.trim().is_empty();
+        let live_ready = self.provider == "qwen"
+            && self.enabled
+            && model_present
+            && base_url_present
+            && api_key_present;
+        let (status, message) = if self.provider != "qwen" {
+            ("reserved", "该模型接口为预留状态，当前未启用真实调用。")
+        } else if !model_present || !base_url_present || !api_key_present {
+            (
+                "unconfigured",
+                "千问：未配置，缺少 model/base_url/API Key 中的一项。",
+            )
+        } else if !self.enabled {
+            (
+                "configured_disabled",
+                "千问：已配置未启用，当前仍使用本地候选结果。",
+            )
+        } else {
+            (
+                "enabled",
+                "千问：已启用，扩写和生成会优先尝试 live 文本生成。",
+            )
+        };
+
+        TextModelProviderStatus {
+            provider: self.provider.clone(),
+            model: self.model.clone(),
+            enabled: self.enabled,
+            base_url_present,
+            api_key_present,
+            live_ready,
+            status: status.to_string(),
+            message: message.to_string(),
+            storage: "session-only".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub store: StoreSkeleton,
@@ -165,6 +262,7 @@ pub struct AppState {
     bridge_scripts: Arc<Mutex<HashMap<String, ExpandScriptResponse>>>,
     bridge_storyboards: Arc<Mutex<HashMap<String, GenerateStoryboardResponse>>>,
     storyboard_tasks: Arc<Mutex<HashMap<String, String>>>,
+    text_model_provider_session: Arc<Mutex<Option<TextModelProviderSessionConfig>>>,
 }
 
 impl AppState {
@@ -208,6 +306,7 @@ impl AppState {
             bridge_scripts: Arc::new(Mutex::new(HashMap::new())),
             bridge_storyboards: Arc::new(Mutex::new(HashMap::new())),
             storyboard_tasks: Arc::new(Mutex::new(HashMap::new())),
+            text_model_provider_session: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -327,6 +426,26 @@ impl AppState {
 
         self.find_storyboard(&result_id)
     }
+
+    pub fn configure_text_model_provider(
+        &self,
+        request: ConfigureTextModelProviderRequest,
+    ) -> TextModelProviderStatus {
+        let config = TextModelProviderSessionConfig::from_request(request);
+        let status = config.to_status();
+        self.text_model_provider_session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .replace(config);
+        status
+    }
+
+    pub fn text_model_provider_session_config(&self) -> Option<TextModelProviderSessionConfig> {
+        self.text_model_provider_session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
 }
 
 pub fn load_desktop_shared_fixture() -> io::Result<Week3SharedFixture> {
@@ -381,6 +500,23 @@ fn load_shared_fixture_from_path(path: &PathBuf) -> io::Result<Week3SharedFixtur
             ),
         )
     })
+}
+
+fn normalize_provider_id(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "doubao" => "doubao".to_string(),
+        "custom" => "custom".to_string(),
+        _ => "qwen".to_string(),
+    }
+}
+
+fn non_empty_trimmed(value: impl AsRef<str>) -> Option<String> {
+    let trimmed = value.as_ref().trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 #[cfg(test)]

@@ -172,11 +172,39 @@ textarea {
 }
 
 .top-select__meta,
+.top-select__status,
 .model-reserved-warning {
   color: var(--text-soft);
   font-size: 11px;
   font-weight: 500;
   line-height: 1.25;
+}
+
+.top-select__status {
+  padding: 2px 7px;
+  border: 1px solid rgba(93, 214, 220, 0.32);
+  border-radius: 999px;
+  background: #f7ffff;
+  color: #25636c;
+}
+
+.top-select__status--enabled {
+  border-color: rgba(55, 132, 82, 0.32);
+  background: #f4fff7;
+  color: #28623d;
+}
+
+.top-select__status--fallback,
+.top-select__status--unconfigured {
+  border-color: rgba(221, 178, 69, 0.45);
+  background: #fffaf0;
+  color: #7a5b14;
+}
+
+.top-select__status--reserved {
+  border-color: rgba(191, 74, 70, 0.24);
+  background: #fff7f6;
+  color: #93423f;
 }
 
 .model-reserved-warning {

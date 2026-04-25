@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Shell } from "./components/Shell";
 import logoUrl from "./assets/hope-desktop-logo.png";
 import {
+  configureTextModelProvider,
   expandScript as invokeExpandScript,
   exportBundle as invokeExportBundle,
   generateStoryboard as invokeGenerateStoryboard,
@@ -20,6 +21,7 @@ import type {
   SceneFusionOption,
   StoryboardExportStatus,
   StoryboardWorkbenchRow,
+  TextModelProviderStatus,
   ViewId,
   WorkbenchModelId,
 } from "./types";
@@ -136,6 +138,7 @@ const MODEL_DEFAULTS: Record<WorkbenchModelId, Pick<ModelConfigState, "model" | 
 
 const API_KEY_REF_OPTIONS = [
   { value: "", label: "不使用引用" },
+  { value: "env:HOPE_TEXT_MODEL_API_KEY", label: "env:HOPE_TEXT_MODEL_API_KEY" },
   { value: "env:QWEN_API_KEY", label: "env:QWEN_API_KEY" },
   { value: "env:DOUBAO_API_KEY", label: "env:DOUBAO_API_KEY" },
   { value: "env:CUSTOM_MODEL_API_KEY", label: "env:CUSTOM_MODEL_API_KEY" },
@@ -149,6 +152,18 @@ const DEFAULT_MODEL_CONFIG: ModelConfigState = {
   apiKeyRef: "",
   enabled: true,
   apiKeyPresent: false,
+};
+
+const DEFAULT_MODEL_PROVIDER_STATUS: TextModelProviderStatus = {
+  provider: "qwen",
+  model: MODEL_DEFAULTS.qwen.model,
+  enabled: false,
+  base_url_present: true,
+  api_key_present: false,
+  live_ready: false,
+  status: "unconfigured",
+  message: "千问：未配置，请在 API 接口中输入 API Key 并保存。本次会话有效。",
+  storage: "session-only",
 };
 
 const SCENE_OPTIONS: SceneOption[] = [
@@ -187,9 +202,9 @@ const API_DOC_SECTIONS = [
   {
     title: "模型配置边界",
     items: [
-      "千问 Qwen 是默认文本模型目标；豆包 Doubao 和自定义模型当前为预留入口。",
-      "本轮不发起真实 Qwen、Doubao 或 Seedance 网络请求，Seedance2.0 仅作为提示词适配目标。",
-      "API Key 只记录 api_key_present，不写入 payload、日志或仓库，也不会在保存后显示明文。",
+      "千问 Qwen 是当前唯一可启用的文本模型；豆包 Doubao 和自定义模型为预留入口。",
+      "千问未配置、未启用或调用失败时会自动回退到本地候选结果；Seedance2.0 仅作为提示词适配目标。",
+      "API Key 只在桌面会话内保存，业务 payload、日志和导出 artifact 只记录 api_key_present，不显示明文。",
     ],
   },
   {
@@ -233,6 +248,9 @@ export function App() {
     ...DEFAULT_MODEL_CONFIG,
     apiKeyInput: "",
   });
+  const [modelProviderStatus, setModelProviderStatus] = useState<TextModelProviderStatus>(
+    DEFAULT_MODEL_PROVIDER_STATUS,
+  );
   const [selectedScene, setSelectedScene] = useState<SceneFusionOption>(DEFAULT_SCENE);
   const [synopsis, setSynopsis] = useState(DEFAULT_SYNOPSIS);
   const [expandedScript, setExpandedScript] = useState("");
@@ -313,8 +331,12 @@ export function App() {
     ? ""
     : "该模型接口已配置为预留状态，当前仍使用本地文本生成桥接。";
   const modelConfigSummary = useMemo(
-    () => buildModelConfigSummary(modelConfig),
-    [modelConfig],
+    () => buildModelConfigSummary(modelConfig, modelProviderStatus),
+    [modelConfig, modelProviderStatus],
+  );
+  const modelRuntimeLabel = useMemo(
+    () => formatModelProviderStatus(modelConfig, modelProviderStatus),
+    [modelConfig, modelProviderStatus],
   );
   const activeKbRouterResult = storyboardResult?.kb_router_result ?? expandedScriptResult?.kb_router_result ?? null;
 
@@ -430,6 +452,18 @@ export function App() {
     return persistCurrentRows(dirtySourceNote);
   };
 
+  const syncModelProviderStatusFromWarnings = (warnings: ProductWarning[]) => {
+    if (!hasTextModelFallback(warnings)) {
+      return;
+    }
+    setModelProviderStatus((current) => ({
+      ...current,
+      status: "fallback",
+      live_ready: false,
+      message: "千问：调用失败已回退，本次已使用本地候选结果。",
+    }));
+  };
+
   const handleModelSelect = (provider: WorkbenchModelId) => {
     const defaults = MODEL_DEFAULTS[provider];
     const nextConfig: ModelConfigState = {
@@ -442,10 +476,23 @@ export function App() {
     setSelectedModel(provider);
     setModelConfig(nextConfig);
     setModelConfigDraft({ ...nextConfig, apiKeyInput: "" });
+    setModelProviderStatus({
+      ...DEFAULT_MODEL_PROVIDER_STATUS,
+      provider,
+      model: nextConfig.model,
+      enabled: false,
+      live_ready: false,
+      api_key_present: provider === modelConfig.provider && modelProviderStatus.api_key_present,
+      status: provider === "qwen" ? "unconfigured" : "reserved",
+      message:
+        provider === "qwen"
+          ? "千问：未配置，请在 API 接口中保存本次会话 Key。"
+          : "该模型接口为预留状态，当前未启用真实调用。",
+    });
     setExportMessage(
       provider === "qwen"
-        ? "已选择千问 Qwen，当前仍使用本地文本生成桥接。"
-        : "该模型接口已配置为预留状态，当前仍使用本地文本生成桥接。",
+        ? "已选择千问 Qwen，请在 API 接口保存配置；未配置时会自动使用本地候选结果。"
+        : "该模型接口为预留状态，当前未启用真实调用。",
     );
   };
 
@@ -472,34 +519,50 @@ export function App() {
     });
   };
 
-  const handleSaveModelConfig = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSaveModelConfig = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const provider = modelConfigDraft.provider;
     const apiKeyRef = normalizeApiKeyRef(modelConfigDraft.apiKeyRef);
     const hadRawValueInRef = modelConfigDraft.apiKeyRef.trim().length > 0 && !apiKeyRef;
-    const nextConfig: ModelConfigState = {
-      provider,
-      model: modelConfigDraft.model.trim() || MODEL_DEFAULTS[provider].model,
-      baseUrl: modelConfigDraft.baseUrl.trim(),
-      apiKeyRef,
-      enabled: modelConfigDraft.enabled,
-      apiKeyPresent:
-        modelConfigDraft.apiKeyInput.trim().length > 0 ||
-        apiKeyRef.length > 0 ||
-        hadRawValueInRef ||
-        (provider === modelConfig.provider && modelConfig.apiKeyPresent),
-    };
-    setSelectedModel(provider);
-    setModelConfig(nextConfig);
-    setModelConfigDraft({ ...nextConfig, apiKeyInput: "" });
-    setActivePanel("none");
-    setExportMessage(
-      hadRawValueInRef
-        ? "检测到密钥引用栏疑似填入了明文 Key，已清空该栏；只记录 api_key_present，不保留明文。"
-        : provider === "qwen"
-        ? `已保存 ${resolveModelLabel(provider)} 本地配置；本轮不会发起真实模型请求。`
-        : "已保存预留模型配置；当前仍使用本地文本生成桥接。",
-    );
+    const requestedModel = modelConfigDraft.model.trim() || MODEL_DEFAULTS[provider].model;
+    const requestedBaseUrl = modelConfigDraft.baseUrl.trim();
+    const requestedEnabled = provider === "qwen" && modelConfigDraft.enabled;
+
+    try {
+      const status = await configureTextModelProvider({
+        provider,
+        model: requestedModel,
+        base_url: requestedBaseUrl,
+        api_key:
+          provider === "qwen" && !hadRawValueInRef
+            ? modelConfigDraft.apiKeyInput.trim() || null
+            : null,
+        api_key_ref: apiKeyRef || null,
+        enabled: requestedEnabled,
+      });
+      const nextConfig: ModelConfigState = {
+        provider,
+        model: status.model || requestedModel,
+        baseUrl: requestedBaseUrl,
+        apiKeyRef,
+        enabled: status.enabled,
+        apiKeyPresent: status.api_key_present,
+      };
+      setSelectedModel(provider);
+      setModelConfig(nextConfig);
+      setModelConfigDraft({ ...nextConfig, apiKeyInput: "" });
+      setModelProviderStatus(status);
+      setActivePanel("none");
+      setExportMessage(
+        hadRawValueInRef
+          ? "检测到密钥引用栏疑似填入了明文 Key，已清空该栏；请把真实 Key 填在 API Key 输入框。本次未保存明文。"
+          : status.status === "enabled"
+          ? "已启用千问文本生成；扩写和生成会优先尝试 live Qwen，失败时自动回退本地候选结果。"
+          : `${status.message} 配置仅在本次会话有效。`,
+      );
+    } catch (error) {
+      setExportMessage(`API 配置保存失败：${formatProductError(error)}`);
+    }
   };
 
   const openSynopsisDialog = () => {
@@ -614,7 +677,10 @@ export function App() {
       setRows([]);
       setRowsDirty(false);
       setCurrentPage(1);
-      setExportMessage(`expand_script 完成：${response.script_id}`);
+      syncModelProviderStatusFromWarnings(response.warnings);
+      setExportMessage(
+        `expand_script 完成：${response.script_id}；${formatTextModelRunMessage(response.warnings)}`,
+      );
     } catch (error) {
       setExportMessage(`expand_script 失败：${formatError(error)}`);
     } finally {
@@ -904,8 +970,11 @@ export function App() {
       }
       setCurrentPage(1);
       closeStoryboardEditDialog();
+      syncModelProviderStatusFromWarnings(response.export_status.warnings);
       setExportMessage(
-        formatGenerateStoryboardMessage(response, nextRows.length),
+        `${formatGenerateStoryboardMessage(response, nextRows.length)}；${formatTextModelRunMessage(
+          response.export_status.warnings,
+        )}`,
       );
     } catch (error) {
       setExportMessage(`generate_storyboard 失败：${formatError(error)}`);
@@ -1140,6 +1209,9 @@ export function App() {
                 <small className="top-select__meta">
                   {selectedModelLabel} · {modelConfig.model}
                 </small>
+                <small className={`top-select__status top-select__status--${modelProviderStatus.status}`}>
+                  {modelRuntimeLabel}
+                </small>
               </label>
               <button
                 type="button"
@@ -1194,12 +1266,23 @@ export function App() {
   enabled: true,
   base_url_present: true,
   api_key_present: true
+}
+
+qwen_request: {
+  task_type,
+  scene_type,
+  duration_seconds,
+  story_input,
+  kb_context_summary,
+  selected_sample_ids,
+  selected_kb_rules,
+  output_schema
 }`}</pre>
                 </div>
               ) : (
                 <form className="api-config" onSubmit={handleSaveModelConfig}>
                   <div className="api-config__notice">
-                    当前为本地配置预留，本轮不发起真实模型请求；Seedance2.0 仅作为提示词适配目标，不是当前运行时视频接口。
+                    当前只启用千问文本生成配置；API Key 仅保存在本次桌面会话中。未配置或调用失败时会自动使用本地候选结果；Seedance2.0 仍只是提示词适配目标。
                   </div>
                   <div className="api-config__rows">
                     <div className="api-config__row api-config__row--primary">
@@ -1247,11 +1330,11 @@ export function App() {
                           type="password"
                           value={modelConfigDraft.apiKeyInput}
                           onChange={(event) => handleModelConfigDraftChange("apiKeyInput", event.target.value)}
-                          placeholder={modelConfigDraft.apiKeyPresent ? "已配置，保存时不显示明文" : "仅用于本地 presence 标记"}
+                          placeholder={modelConfigDraft.apiKeyPresent ? "已配置，本次会话有效；保存时不显示明文" : "在这里输入千问 API Key"}
                           autoComplete="new-password"
                           data-lpignore="true"
                         />
-                        <small>保存后只记录 api_key_present，不显示、不发送明文。</small>
+                        <small>保存后清空输入框；业务 payload、日志和导出物只记录 api_key_present，不带明文。</small>
                       </label>
                       <label>
                         <span>api_key_ref（可选引用）</span>
@@ -1283,9 +1366,9 @@ export function App() {
                       </button>
                     </div>
                     <div className="api-config__summary">
-                      payload 仅发送 provider / model / enabled / api_key_present，不发送明文 api_key。
+                      当前状态：{modelRuntimeLabel}。业务 payload 仅发送 provider / model / enabled / base_url_present / api_key_present，不发送明文 api_key。
                       {modelConfigDraft.provider !== "qwen" ? (
-                        <strong>该模型接口已配置为预留状态，当前仍使用本地文本生成桥接。</strong>
+                        <strong>该模型接口为预留状态，当前未启用真实调用。</strong>
                       ) : null}
                     </div>
                   </div>
@@ -1963,14 +2046,59 @@ function resolveModelLabel(value: WorkbenchModelId) {
   return MODEL_OPTIONS.find((option) => option.value === value)?.label ?? value;
 }
 
-function buildModelConfigSummary(config: ModelConfigState): ModelConfigSummary {
+function buildModelConfigSummary(
+  config: ModelConfigState,
+  status: TextModelProviderStatus,
+): ModelConfigSummary {
   return {
     provider: config.provider,
     model: config.model.trim() || MODEL_DEFAULTS[config.provider].model,
-    enabled: config.enabled,
+    enabled: config.provider === "qwen" && status.enabled,
     base_url_present: config.baseUrl.trim().length > 0,
-    api_key_present: config.apiKeyPresent,
+    api_key_present: status.api_key_present,
   };
+}
+
+function formatModelProviderStatus(
+  config: ModelConfigState,
+  status: TextModelProviderStatus,
+) {
+  if (config.provider !== "qwen") {
+    return "预留，当前未启用";
+  }
+  if (status.status === "fallback") {
+    return "千问：调用失败已回退";
+  }
+  if (status.live_ready) {
+    return "千问：已启用";
+  }
+  if (status.enabled && !status.live_ready) {
+    return "千问：未配置";
+  }
+  if (status.api_key_present || status.base_url_present) {
+    return "千问：已配置未启用";
+  }
+  return "千问：未配置";
+}
+
+function hasTextModelFallback(warnings: ProductWarning[]) {
+  return warnings.some((warning) =>
+    /^text_model_/.test(warning.code) &&
+    (
+      warning.code.includes("fallback") ||
+      warning.code.includes("missing") ||
+      warning.code.includes("closed") ||
+      warning.code.includes("network") ||
+      warning.code.includes("invalid") ||
+      warning.code.includes("not_supported")
+    ),
+  );
+}
+
+function formatTextModelRunMessage(warnings: ProductWarning[]) {
+  return hasTextModelFallback(warnings)
+    ? "未启用千问或调用失败，已使用本地候选结果"
+    : "千问文本生成已完成";
 }
 
 function normalizeApiKeyRef(value: string) {
