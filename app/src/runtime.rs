@@ -1604,6 +1604,8 @@ fn build_generated_storyboard_row(
         prompt_text_compilation_warnings: prompt_compilation.warnings.clone(),
         prompt_text_source_row_id: prompt_compilation.source_row_id.clone(),
         duration_seconds: draft.duration_seconds,
+        shot_duration_seconds: draft.duration_seconds,
+        duration_source: "storyboard_duration_plan.allocated_row_duration_seconds".to_string(),
         scene_performance_projection: draft.scene_performance_projection.clone(),
         external_reference_handle_candidates: vec![],
         sequence_grouping: draft.sequence_grouping.clone(),
@@ -1632,6 +1634,8 @@ fn restore_shot_grounded_row(
     row.dialogue = draft.dialogue.clone();
     row.scene_performance_projection = draft.scene_performance_projection.clone();
     row.external_reference_handle_candidates.clear();
+    row.shot_duration_seconds = draft.duration_seconds;
+    row.duration_source = "storyboard_duration_plan.allocated_row_duration_seconds".to_string();
     row.sequence_grouping = draft.sequence_grouping.clone();
 }
 
@@ -1737,27 +1741,25 @@ fn derive_character_action_from_story(segment: &str, full_text: &str) -> String 
     } else {
         segment
     };
-    let mut actions = Vec::new();
-    for term in [
-        "格挡",
-        "震退七步",
-        "震退",
-        "焦土犁痕",
-        "心跳",
-        "低频鼓点",
-        "掌心银辉",
-        "银辉觉醒",
-        "沿手臂上升",
-        "交锋",
-    ] {
-        if source.contains(term) && !actions.contains(&term) {
-            actions.push(term);
-        }
-    }
-    if actions.is_empty() {
-        "按当前镜头脚本执行关键动作".to_string()
+    if contains_any_story_term(source, &["掌心银辉", "银辉觉醒", "沿手臂上升", "觉醒"])
+    {
+        "觉醒者从格挡后的短暂停滞开始，将掌心朝向当前对手，银辉自掌心亮起并沿手臂上升，到力量完全爬上前臂时结束，镜头捕捉银辉开始蔓延的觉醒瞬间。"
+            .to_string()
+    } else if contains_any_story_term(source, &["震退七步", "震退"]) {
+        "交锋双方从正面相抵的僵持状态开始，防守者以格挡余力反震当前对手，将对手震退七步，到对手脚步失衡后撤时结束，镜头捕捉第一步被震开的瞬间。"
+            .to_string()
+    } else if contains_any_story_term(source, &["焦土犁痕", "焦土", "犁痕"]) {
+        "被震退者从后撤失衡开始，双脚顶住焦土仍被冲击推远，在地面犁出焦黑拖痕，到身体重新找回重心时结束，镜头捕捉脚跟划开焦土的瞬间。"
+            .to_string()
+    } else if contains_any_story_term(source, &["心跳", "低频鼓点", "鼓点", "低频"]) {
+        "当前镜头主体从战斗后的凝滞呼吸开始，胸口随心跳和低频鼓点压低起伏，面向当前对手重新蓄力，到下一次爆发前的停顿时结束，镜头捕捉心跳压住全场节奏的瞬间。"
+            .to_string()
+    } else if contains_any_story_term(source, &["格挡", "交锋", "战", "击"]) {
+        "交锋双方从迎面冲突开始，前景角色抬臂格挡当前对手的攻击，以稳住重心的姿态抵住冲击，到攻防短暂相持时结束，镜头捕捉格挡接触的关键瞬间。"
+            .to_string()
     } else {
-        actions.join("、")
+        "当前镜头主体从上一动作余势中开始，面向当前对手或环境完成待明确的可见状态转变，到下一拍动作蓄势完成时结束，镜头捕捉状态发生变化的瞬间。"
+            .to_string()
     }
 }
 
@@ -2332,9 +2334,47 @@ fn validate_storyboard_rows(
                     related_sample_id: Some(row.prompt_text_source_row_id.clone()),
                 });
             }
+            if field_name == "character_action" && is_role_action_grounding_incomplete(field_value)
+            {
+                findings.push(ProductWarning {
+                    code: "role_action_grounding_incomplete".to_string(),
+                    message: format!(
+                        "Storyboard row {} has an incomplete role action; it must describe who acts, what changes, the target, start/end state, and the captured moment.",
+                        row.shot_id
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
         }
     }
     findings
+}
+
+fn is_role_action_grounding_incomplete(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if contains_any_story_term(
+        trimmed,
+        &[
+            "保持连续性",
+            "执行关键动作",
+            "按镜头脚本执行",
+            "fused_scene_performance_core_preserved",
+            "not_specified_by_v120_bridge",
+            "待明确",
+        ],
+    ) {
+        return true;
+    }
+    if trimmed.chars().count() < 28 {
+        return true;
+    }
+    !(trimmed.contains("从")
+        && trimmed.contains("到")
+        && trimmed.contains("镜头捕捉")
+        && (trimmed.contains("对手") || trimmed.contains("环境") || trimmed.contains("全场")))
 }
 
 fn contains_forbidden_generation_terms(text: &str) -> bool {
@@ -2432,10 +2472,8 @@ fn compile_seedance_prompt_text(
         &generation_request,
     );
 
-    let mut prompt_sections = vec![
-        format!("场景类型：{}", request.scene_type),
-        format!("场景标签：{}", request.scene_label),
-    ];
+    let mut prompt_sections =
+        vec!["视频分镜提示词：以当前镜头脚本为准，输出单个镜头画面。".to_string()];
     if let Some(shot_script) = request
         .shot_script
         .as_deref()
@@ -2453,23 +2491,18 @@ fn compile_seedance_prompt_text(
     if !request.row.dialogue.trim().is_empty() {
         prompt_sections.push(format!("对白/旁白：{}", request.row.dialogue.trim()));
     }
-    prompt_sections.push(format!("时长：{}秒", request.row.duration_seconds));
-    if !request.selected_kb_rules.is_empty() {
-        prompt_sections.push(format!(
-            "KB摘要：{}",
-            sanitize_selected_kb_rule_summaries(&request.selected_kb_rules).join("；")
-        ));
-    }
-    prompt_sections.push(format!("KB上下文：{}", request.kb_context_summary));
-    if !request.continuity_negative_core.trim().is_empty() {
-        prompt_sections.push(format!(
-            "连续性约束：{}",
-            request.continuity_negative_core.trim()
-        ));
-    }
-    prompt_sections.push("目标适配：Seedance2.0 文本提示词".to_string());
+    prompt_sections.push(format!("镜头时长：{}秒", request.row.duration_seconds));
 
     let mut warnings = stub_response.warnings;
+    if is_role_action_grounding_incomplete(&request.row.character_action) {
+        warnings.push(ProductWarning {
+            code: "role_action_grounding_incomplete".to_string(),
+            message:
+                "角色动作未能完整说明主体、动作、对象、起止状态与镜头捕捉瞬间，已保留产品态占位。"
+                    .to_string(),
+            related_sample_id: Some(request.row.shot_id.clone()),
+        });
+    }
     warnings.push(ProductWarning {
         code: "seedance_video_generation_closed".to_string(),
         message:
@@ -2506,18 +2539,6 @@ fn build_prompt_compilation_story_input(request: &PromptTextCompilationRequest) 
         request.row.character_action,
         request.row.dialogue,
     )
-}
-
-fn sanitize_selected_kb_rule_summaries(rules: &[String]) -> Vec<String> {
-    rules
-        .iter()
-        .map(|rule| {
-            rule.split_once(':')
-                .map(|(_, summary)| summary.trim().to_string())
-                .unwrap_or_else(|| rule.trim().to_string())
-        })
-        .filter(|rule| !rule.is_empty())
-        .collect()
 }
 
 fn select_prompt_compilation_rules(
@@ -2792,7 +2813,7 @@ fn serialize_storyboard_rows(rows: &[GeneratedStoryboardRow]) -> String {
     rows.iter()
         .map(|row| {
             format!(
-                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}|{}|{}",
                 row.shot_id,
                 row.order,
                 row.shot_script,
@@ -2813,6 +2834,8 @@ fn serialize_storyboard_rows(rows: &[GeneratedStoryboardRow]) -> String {
                 row.prompt_text_compilation_status,
                 row.prompt_text_source_row_id,
                 row.duration_seconds,
+                row.shot_duration_seconds,
+                row.duration_source,
                 row.prompt_text_compilation_warnings
                     .iter()
                     .map(|warning| warning.code.as_str())
@@ -3789,16 +3812,24 @@ mod tests {
         assert_eq!(response.provider, TextModelProviderKind::Qwen);
         assert_eq!(response.model, "qwen-default-text");
         assert!(response.prompt_text.contains("镜头标题"));
-        assert!(
-            response
-                .prompt_text
-                .contains("目标适配：Seedance2.0 文本提示词")
-        );
-        assert!(
-            response
-                .prompt_text
-                .contains("连续性约束：Do not drift eyeline or prop handoff.")
-        );
+        assert!(response.prompt_text.contains("视频分镜提示词"));
+        assert!(response.prompt_text.contains("镜头时长：8秒"));
+        assert!(!response.prompt_text.contains("目标适配"));
+        assert!(!response.prompt_text.contains("连续性约束"));
+        assert!(!response.prompt_text.contains("KB摘要"));
+        assert!(!response.prompt_text.contains("KB上下文"));
+        assert!(!response.prompt_text.contains("sample_id"));
+        assert!(!response.prompt_text.contains("scene_category"));
+        assert!(!response.prompt_text.contains("style_cluster"));
+        assert!(!response.prompt_text.contains("selected_sample_ids"));
+        assert!(!response.prompt_text.contains("rule_id"));
+        assert!(!response.prompt_text.contains("duration_guard"));
+        assert!(!response.prompt_text.contains("reserve_gate"));
+        assert!(!response.prompt_text.contains("grounding_source"));
+        assert!(!response.prompt_text.contains("primary_scene_type"));
+        assert!(!response.prompt_text.contains("shot_scene_type"));
+        assert!(!response.prompt_text.contains("retrieval trace"));
+        assert!(!response.prompt_text.contains("retrieval_trace"));
         assert!(
             !response
                 .prompt_text
@@ -3815,6 +3846,12 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|warning| warning.code == "seedance_video_generation_closed")
+        );
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "role_action_grounding_incomplete")
         );
     }
 
@@ -3999,16 +4036,45 @@ mod tests {
         for row in &storyboard.rows {
             assert_eq!(row.grounding_source, ShotGroundingSource::ShotScript);
             assert_eq!(row.shot_scene_type, "action_beat");
+            assert_eq!(row.shot_duration_seconds, row.duration_seconds);
+            assert_eq!(
+                row.duration_source,
+                "storyboard_duration_plan.allocated_row_duration_seconds"
+            );
             assert!(!row.adaptation_reason.trim().is_empty());
             assert!(!row.person.contains("not_specified_by_v120_bridge"));
             assert!(
                 !row.character_action
                     .contains("fused_scene_performance_core_preserved")
             );
+            assert!(!row.character_action.contains("按镜头脚本执行"));
+            assert!(!row.character_action.contains("执行关键动作"));
+            assert!(row.character_action.contains("从"));
+            assert!(row.character_action.contains("到"));
+            assert!(row.character_action.contains("镜头捕捉"));
             assert!(row.prompt_text.contains(&row.shot_script));
+            assert!(!row.prompt_text.contains("KB摘要"));
+            assert!(!row.prompt_text.contains("KB上下文"));
+            assert!(!row.prompt_text.contains("sample_id"));
+            assert!(!row.prompt_text.contains("scene_category"));
+            assert!(!row.prompt_text.contains("style_cluster"));
+            assert!(!row.prompt_text.contains("selected_sample_ids"));
+            assert!(!row.prompt_text.contains("rule_id"));
+            assert!(!row.prompt_text.contains("duration_guard"));
+            assert!(!row.prompt_text.contains("reserve_gate"));
+            assert!(!row.prompt_text.contains("grounding_source"));
+            assert!(!row.prompt_text.contains("primary_scene_type"));
+            assert!(!row.prompt_text.contains("shot_scene_type"));
+            assert!(!row.prompt_text.contains("retrieval trace"));
+            assert!(!row.prompt_text.contains("retrieval_trace"));
             assert!(
                 !row.prompt_text
                     .contains("Compose a restrained dialogue shot")
+            );
+            assert!(
+                !row.prompt_text_compilation_warnings
+                    .iter()
+                    .any(|warning| warning.code == "role_action_grounding_incomplete")
             );
             assert!(row.external_reference_handle_candidates.is_empty());
         }
@@ -4118,11 +4184,31 @@ mod tests {
             storyboard.rows[0].prompt_text_source_row_id,
             storyboard.rows[0].shot_id
         );
+        assert!(storyboard.rows[0].prompt_text.contains("视频分镜提示词"));
+        assert!(storyboard.rows[0].prompt_text.contains("镜头时长"));
+        assert!(!storyboard.rows[0].prompt_text.contains("目标适配"));
+        assert!(!storyboard.rows[0].prompt_text.contains("KB摘要"));
+        assert!(!storyboard.rows[0].prompt_text.contains("KB上下文"));
+        assert!(!storyboard.rows[0].prompt_text.contains("sample_id"));
+        assert!(!storyboard.rows[0].prompt_text.contains("scene_category"));
+        assert!(!storyboard.rows[0].prompt_text.contains("style_cluster"));
         assert!(
-            storyboard.rows[0]
+            !storyboard.rows[0]
                 .prompt_text
-                .contains("目标适配：Seedance2.0 文本提示词")
+                .contains("selected_sample_ids")
         );
+        assert!(!storyboard.rows[0].prompt_text.contains("rule_id"));
+        assert!(!storyboard.rows[0].prompt_text.contains("duration_guard"));
+        assert!(!storyboard.rows[0].prompt_text.contains("reserve_gate"));
+        assert!(!storyboard.rows[0].prompt_text.contains("grounding_source"));
+        assert!(
+            !storyboard.rows[0]
+                .prompt_text
+                .contains("primary_scene_type")
+        );
+        assert!(!storyboard.rows[0].prompt_text.contains("shot_scene_type"));
+        assert!(!storyboard.rows[0].prompt_text.contains("retrieval trace"));
+        assert!(!storyboard.rows[0].prompt_text.contains("retrieval_trace"));
         assert!(
             !storyboard.rows[0]
                 .prompt_text
