@@ -183,19 +183,24 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
     let scene_label = request.scene_label.as_deref().unwrap_or_default().trim();
     let scene_category = request.scene_category.as_deref().unwrap_or_default().trim();
     let normalized_scene_type = normalize_scene_type(&request.scene_type);
+    let target_duration_seconds = request
+        .selected_total_duration_seconds
+        .filter(|duration| is_supported_storyboard_duration(*duration))
+        .unwrap_or(15);
     let router_request = KbRouterRuntimeRequest {
         scene_type: normalized_scene_type.clone(),
         synopsis_text: request.synopsis_text.clone(),
-        duration_seconds: 0,
+        duration_seconds: target_duration_seconds,
         task_type: KbRouterTaskType::ExpandScript,
         shot_intent: None,
         structure_type: None,
     };
     let script_hash = stable_hash_hex(&format!(
-        "{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}",
         request.scene_type.trim(),
         scene_label,
         scene_category,
+        target_duration_seconds,
         model_config_hash_input(request.model_config_summary.as_ref()),
         request.synopsis_text.trim()
     ));
@@ -216,7 +221,12 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
         TextGenerationTask::ExpandScript,
         Some(normalized_scene_type.clone()),
         request.synopsis_text.trim().to_string(),
-        None,
+        Some(StoryboardDurationPlan {
+            total_duration_seconds: target_duration_seconds,
+            row_count: 1,
+            per_row_seconds: target_duration_seconds,
+            allocated_seconds: target_duration_seconds,
+        }),
         kb_router_result.kb_context_summary.clone(),
         kb_router_result.selected_sample_ids.clone(),
         kb_router_result
@@ -259,16 +269,15 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
             related_sample_id: None,
         });
     }
-    let expanded_script_text = build_expanded_script_text(
-        &request,
+    let fallback_script = build_deterministic_expanded_story_script(
+        &request.synopsis_text,
         scene_label,
-        scene_category,
-        &source_package,
-        live_text.unwrap_or_else(|| request.synopsis_text.trim()),
-        generated_script.warnings.is_empty(),
-        &provider,
-        provider_api_key_present(&provider, session_api_key.as_deref()),
+        target_duration_seconds,
     );
+    let expanded_script_text = live_text
+        .unwrap_or(fallback_script.as_str())
+        .trim()
+        .to_string();
 
     let response = ExpandScriptResponse {
         script_id,
@@ -286,20 +295,28 @@ pub fn generate_storyboard(
     request: GenerateStoryboardRequest,
 ) -> GenerateStoryboardResponse {
     let now_ms = now_epoch_ms();
+    let stored_script = request
+        .script_id
+        .as_deref()
+        .and_then(|script_id| state.find_script(script_id));
     let script_text = request
         .expanded_script_text
         .clone()
+        .filter(|text| !text.trim().is_empty())
         .or_else(|| {
-            request
-                .script_id
-                .as_deref()
-                .and_then(|script_id| state.find_script(script_id))
-                .map(|script| script.expanded_script_text)
+            stored_script
+                .as_ref()
+                .map(|script| script.expanded_script_text.clone())
         })
         .unwrap_or_default();
-    let scene_type = extract_scene_type(&script_text);
+    let scene_type = request
+        .scene_type
+        .as_deref()
+        .map(normalize_scene_type)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default();
     let router_request = KbRouterRuntimeRequest {
-        scene_type: normalize_scene_type(&scene_type),
+        scene_type: scene_type.clone(),
         synopsis_text: script_text.clone(),
         duration_seconds: request.selected_total_duration_seconds,
         task_type: KbRouterTaskType::GenerateStoryboard,
@@ -311,7 +328,7 @@ pub fn generate_storyboard(
     if script_text.trim().is_empty() {
         blockers.push(ProductWarning {
             code: "task_script_required".to_string(),
-            message: "请先完成脚本扩写或提供有效脚本内容，再生成分镜。".to_string(),
+            message: "请先完成剧本扩写或提供有效镜头剧本内容，再生成分镜。".to_string(),
             related_sample_id: None,
         });
     }
@@ -332,7 +349,7 @@ pub fn generate_storyboard(
     if scene_type.trim().is_empty() {
         blockers.push(ProductWarning {
             code: "scene_type_required".to_string(),
-            message: "脚本中缺少有效场景类型，无法生成分镜。".to_string(),
+            message: "镜头任务缺少结构化场景类型，无法生成分镜。".to_string(),
             related_sample_id: None,
         });
     } else if resolve_scene_taxonomy(state, Some(&scene_type)).is_none()
@@ -340,7 +357,7 @@ pub fn generate_storyboard(
     {
         blockers.push(ProductWarning {
             code: "scene_type_invalid".to_string(),
-            message: "脚本中的场景类型无效，无法生成分镜。".to_string(),
+            message: "镜头任务的结构化场景类型无效，无法生成分镜。".to_string(),
             related_sample_id: None,
         });
     }
@@ -1186,18 +1203,46 @@ fn build_qwen_request_payload(
         TextGenerationOutputSchema::RepairPlanJson => "repair_plan_json",
         TextGenerationOutputSchema::SeedancePromptText => "seedance_prompt_text",
     };
-    let system_prompt = "你是 Hope 的受控文本生成层。只能使用收到的压缩知识库摘要和样本/规则 ID，不得扩展为全量知识库，不得输出真实导演/IP/品牌名。";
-    let user_prompt = format!(
-        "task_type={:?}\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema={}\nconstraints=保持总时长守恒；不要输出 full KB rows；不要把 raw prompt_body 当最终 prompt_text；不要输出 source_register 或 overlay JSON。",
-        request.task_type,
-        scene_type,
-        duration_seconds,
-        request.story_input,
-        request.kb_context_summary,
-        request.selected_sample_ids.join(","),
-        request.selected_kb_rules.join(" | "),
-        output_schema,
-    );
+    let system_prompt = match (request.task_type, request.output_schema) {
+        (TextGenerationTask::ExpandScript, TextGenerationOutputSchema::PlainText) => {
+            "你是 Hope 的受控剧本扩写层。只把用户的故事梗概扩写为连续、可读的剧情剧本正文；只能参考压缩知识库摘要和样本/规则 ID，不得输出全量知识库，不得输出真实导演/IP/品牌名。"
+        }
+        (TextGenerationTask::GenerateStoryboard, TextGenerationOutputSchema::StoryboardRowsJson) => {
+            "你是 Hope 的受控分镜生成层。根据剧本片段生成结构化分镜 rows 和当前文本提示词；只能使用压缩知识库摘要和样本/规则 ID，不得输出全量知识库，不得输出真实导演/IP/品牌名。"
+        }
+        _ => "你是 Hope 的受控文本生成层。只能使用收到的压缩知识库摘要和样本/规则 ID，不得扩展为全量知识库，不得输出真实导演/IP/品牌名。",
+    };
+    let user_prompt = match (request.task_type, request.output_schema) {
+        (TextGenerationTask::ExpandScript, TextGenerationOutputSchema::PlainText) => format!(
+            "任务=扩写剧本\nscene_type={}\ntarget_duration_seconds={}\nstory_synopsis={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=story_script_plain_text\nconstraints=只输出连续剧情剧本正文；不要输出镜头编号、分镜表、景别、画面描述、角色动作、prompt_text、Seedance 提示词、时间码或 JSON；不要输出 full KB rows、source_register、overlay JSON 或 raw prompt_body；剧本需要服务后续镜头拆解，但本步不要提前拆分镜头。",
+            scene_type,
+            duration_seconds,
+            request.story_input,
+            request.kb_context_summary,
+            request.selected_sample_ids.join(","),
+            request.selected_kb_rules.join(" | "),
+        ),
+        (TextGenerationTask::GenerateStoryboard, TextGenerationOutputSchema::StoryboardRowsJson) => format!(
+            "任务=生成分镜提示词\nscene_type={}\nduration_seconds={}\nshot_script={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=storyboard_rows_json\nconstraints=输出 JSON object，包含 rows 数组；每行必须包含人物、镜头、景别、画面描述、角色动作、对话/旁白、分镜提示词 prompt_text、duration_seconds；总时长必须守恒；不要输出 full KB rows；不要把 raw prompt_body 当最终 prompt_text；不要输出 source_register 或 overlay JSON。",
+            scene_type,
+            duration_seconds,
+            request.story_input,
+            request.kb_context_summary,
+            request.selected_sample_ids.join(","),
+            request.selected_kb_rules.join(" | "),
+        ),
+        _ => format!(
+            "task_type={:?}\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema={}\nconstraints=保持总时长守恒；不要输出 full KB rows；不要把 raw prompt_body 当最终 prompt_text；不要输出 source_register 或 overlay JSON。",
+            request.task_type,
+            scene_type,
+            duration_seconds,
+            request.story_input,
+            request.kb_context_summary,
+            request.selected_sample_ids.join(","),
+            request.selected_kb_rules.join(" | "),
+            output_schema,
+        ),
+    };
 
     let mut payload = json!({
         "model": provider.model.clone(),
@@ -1301,14 +1346,6 @@ fn text_model_provider_kind_from_str(value: &str) -> TextModelProviderKind {
     }
 }
 
-fn provider_kind_label(kind: TextModelProviderKind) -> &'static str {
-    match kind {
-        TextModelProviderKind::Qwen => "qwen",
-        TextModelProviderKind::Doubao => "doubao",
-        TextModelProviderKind::Custom => "custom",
-    }
-}
-
 fn provider_kind_display_name(kind: TextModelProviderKind) -> &'static str {
     match kind {
         TextModelProviderKind::Qwen => "千问 Qwen",
@@ -1317,47 +1354,62 @@ fn provider_kind_display_name(kind: TextModelProviderKind) -> &'static str {
     }
 }
 
-fn provider_api_key_present(provider: &TextModelProvider, session_api_key: Option<&str>) -> bool {
-    session_api_key.is_some_and(|value| !value.trim().is_empty())
-        || resolve_provider_api_key(provider).is_some()
-}
-
 fn validate_generated_script_text(text: &str) -> Option<&str> {
     let trimmed = text.trim();
-    if trimmed.is_empty() || contains_forbidden_generation_terms(trimmed) {
+    if trimmed.is_empty()
+        || contains_forbidden_generation_terms(trimmed)
+        || looks_like_storyboard_or_prompt_text(trimmed)
+    {
         None
     } else {
         Some(trimmed)
     }
 }
 
-fn build_expanded_script_text(
-    request: &core_domain::ExpandScriptRequest,
+fn looks_like_storyboard_or_prompt_text(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let markers = [
+        "prompt_text",
+        "prompt body",
+        "分镜提示词",
+        "画面描述",
+        "角色动作",
+        "对话/旁白",
+        "景别",
+        "shot_id",
+        "scene_scale",
+        "duration_seconds",
+        "seedance",
+        "ws |",
+        "ms |",
+        "cu |",
+        "ecu |",
+        "ls |",
+    ];
+    let marker_count = markers
+        .iter()
+        .filter(|marker| lower.contains(**marker))
+        .count();
+    marker_count >= 2
+        || ["0-3s", "3-6s", "6-9s", "9-15s", "0–3s", "3–6s", "6–9s", "9–15s"]
+            .iter()
+            .any(|marker| lower.contains(marker))
+}
+
+fn build_deterministic_expanded_story_script(
+    synopsis: &str,
     scene_label: &str,
-    scene_category: &str,
-    source_package: &str,
-    body_text: &str,
-    live_used: bool,
-    provider: &TextModelProvider,
-    api_key_present: bool,
+    target_duration_seconds: u16,
 ) -> String {
+    let synopsis = synopsis.trim();
+    let scene_label = if scene_label.trim().is_empty() {
+        "当前场景"
+    } else {
+        scene_label.trim()
+    };
     format!(
-        "scene_type: {}\nscene_label: {}\nscene_category: {}\nmodel_provider: {}\nmodel: {}\nmodel_enabled: {}\napi_key_present: {}\ntext_generation: {}\nsynopsis: {}\nsource_package: {}\nexpanded_script: {}",
-        request.scene_type.trim(),
-        scene_label,
-        scene_category,
-        provider_kind_label(provider.provider),
-        provider.model,
-        provider.enabled,
-        api_key_present,
-        if live_used {
-            "qwen_live"
-        } else {
-            "deterministic_fallback"
-        },
-        request.synopsis_text.trim(),
-        source_package,
-        body_text.trim(),
+        "在{}的叙事方向中，故事从“{}”展开。开场先建立人物所处的环境和压力，让主角的目标、阻碍和情绪动机变得清晰；随后冲突逐步升级，人物在行动中暴露犹豫、判断和选择。中段让关键阻力逼近，主角必须在短时间内作出反应，场景节奏随情绪和动作推进而收紧。结尾让主角完成一次明确的转折或确认，为后续镜头拆解留下连续的动作线、情绪线和空间线。整段剧本目标时长约 {} 秒，适合继续拆解为若干镜头任务。",
+        scene_label, synopsis, target_duration_seconds
     )
 }
 
@@ -1953,18 +2005,6 @@ fn now_epoch_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
         .unwrap_or(0)
-}
-
-fn extract_scene_type(script_text: &str) -> String {
-    script_text
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("scene_type:")
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_default()
 }
 
 fn normalize_scene_type(scene_type: &str) -> String {

@@ -90,6 +90,11 @@ interface SceneTaskRecord {
   candidateId: string;
   segmentTitle: string;
   scriptText: string;
+  scriptId?: string | null;
+  sourceSceneType?: SceneFusionOption | string | null;
+  sourceSceneLabel?: string | null;
+  sourceSceneCategory?: string | null;
+  sourceDurationSeconds?: number | null;
   status: "draft" | "generated";
   taskId?: string | null;
   resultId?: string;
@@ -194,9 +199,9 @@ const API_DOC_SECTIONS = [
   {
     title: "当前已接 Bridge",
     items: [
-      "expand_script：读取场景类型、故事梗概、model_config_summary，返回 script_id / expanded_script_text / warnings。",
-      "generate_storyboard：读取真实扩写脚本或 script_id、时长选择和模型摘要，返回主线 rows 与 export_status。",
-      "export_bundle：导出分镜词或完整脚本，只有主线返回 artifact_path / content_hash / row_count 时才显示导出成功。",
+      "expand_script：读取场景类型、目标时长、故事梗概和 model_config_summary，只返回连续剧情剧本正文。",
+      "generate_storyboard：读取镜头剧本、script_id、结构化场景字段、目标时长和模型摘要，返回主线 rows 与 export_status。",
+      "export_bundle：导出分镜词或完整剧本，只有主线返回 artifact_path / content_hash / row_count 时才显示导出成功。",
     ],
   },
   {
@@ -256,6 +261,12 @@ export function App() {
   const [expandedScript, setExpandedScript] = useState("");
   const [expandedScriptResult, setExpandedScriptResult] = useState<ExpandScriptResponse | null>(null);
   const [showExpandedScriptStatus, setShowExpandedScriptStatus] = useState(false);
+  const [expandedScriptDurationSeconds, setExpandedScriptDurationSeconds] = useState<number | null>(null);
+  const [expandedScriptScene, setExpandedScriptScene] = useState<SceneOption | null>(null);
+  const [acceptedScript, setAcceptedScript] = useState("");
+  const [acceptedScriptId, setAcceptedScriptId] = useState<string | null>(null);
+  const [acceptedScriptDurationSeconds, setAcceptedScriptDurationSeconds] = useState<number | null>(null);
+  const [acceptedScriptScene, setAcceptedScriptScene] = useState<SceneOption | null>(null);
   const [taskName, setTaskName] = useState(DEFAULT_TASK_NAME);
   const [taskSourceScript, setTaskSourceScript] = useState("");
   const [taskScriptId, setTaskScriptId] = useState<string | null>(null);
@@ -298,19 +309,34 @@ export function App() {
     setJumpPage(String(currentPage));
   }, [currentPage]);
 
-  const canImportScript = expandedScript.trim().length > 0;
+  const currentSceneTask = useMemo(
+    () => sceneTasks.find((task) => task.id === currentTaskId) ?? null,
+    [currentTaskId, sceneTasks],
+  );
+  const selectedSceneOption = useMemo(() => resolveSceneOption(selectedScene), [selectedScene]);
+  const canImportScript = acceptedScript.trim().length > 0;
   const hasTaskScript = taskSourceScript.trim().length > 0;
   const canGenerate = taskName.trim().length > 0 && hasTaskScript;
+  const expandedScriptAccepted = Boolean(
+    expandedScriptResult?.script_id && acceptedScriptId === expandedScriptResult.script_id,
+  );
+  const currentTaskDuration = normalizeDurationOption(
+    currentSceneTask?.sourceDurationSeconds ?? durationSeconds,
+    durationSeconds,
+  );
+  const currentTaskSceneLabel = currentSceneTask?.sourceSceneLabel ?? acceptedScriptScene?.label ?? selectedSceneOption.label;
   const taskSourceLabel = hasTaskScript
     ? `${taskSegmentTitle || "自定义镜头片段"} · ${
-        taskScriptId ? `来源 ${taskScriptId}` : "来源扩写脚本正文"
+        taskScriptId ? `来源 ${taskScriptId}` : "来源扩写剧本正文"
       }`
     : sceneTasks.length
-    ? `已新建 ${sceneTasks.length} 个镜头任务，请在分镜产出区导入镜头任务。`
+      ? `已新建 ${sceneTasks.length} 个镜头任务，请在分镜产出区导入镜头任务。`
     : canImportScript
-    ? "扩写脚本已生成，请点击“新建分镜任务”选择镜头片段。"
-    : "先在脚本区完成扩写，再新建分镜任务。";
-  const shotCandidates = useMemo(() => buildShotCandidates(expandedScript), [expandedScript]);
+    ? `已确认扩写剧本${acceptedScriptId ? ` ${acceptedScriptId}` : ""}，可拆解镜头。`
+    : expandedScript.trim()
+    ? "扩写剧本已生成，请先点击“确定使用”再拆解镜头。"
+    : "先在剧本区完成扩写，再拆解镜头。";
+  const shotCandidates = useMemo(() => buildShotCandidates(acceptedScript), [acceptedScript]);
   const usedCandidateIds = useMemo(
     () => new Set(sceneTasks.filter((task) => task.candidateId !== "custom").map((task) => task.candidateId)),
     [sceneTasks],
@@ -319,12 +345,7 @@ export function App() {
     () => sceneTasks.filter((task) => task.status === "generated").length,
     [sceneTasks],
   );
-  const currentSceneTask = useMemo(
-    () => sceneTasks.find((task) => task.id === currentTaskId) ?? null,
-    [currentTaskId, sceneTasks],
-  );
   const pageTokens = useMemo(() => buildPageTokens(pageCount, currentPage), [pageCount, currentPage]);
-  const selectedSceneOption = useMemo(() => resolveSceneOption(selectedScene), [selectedScene]);
   const sceneOptionGroups = useMemo(() => groupSceneOptions(SCENE_OPTIONS), []);
   const selectedModelLabel = useMemo(() => resolveModelLabel(modelConfig.provider), [modelConfig.provider]);
   const modelReservedWarning = modelConfig.provider === "qwen"
@@ -374,11 +395,20 @@ export function App() {
   };
 
   const restoreSceneTaskState = (task: SceneTaskRecord) => {
+    const restoredDuration = normalizeDurationOption(
+      task.sourceDurationSeconds ?? task.selectedTotalDurationSeconds,
+      durationSeconds,
+    );
     setCurrentTaskId(task.id);
     setTaskName(task.name);
     setTaskSourceScript(task.scriptText);
-    setTaskScriptId(expandedScriptResult?.script_id ?? null);
+    setTaskScriptId(task.scriptId ?? acceptedScriptId ?? null);
     setTaskSegmentTitle(task.segmentTitle);
+    const restoredScene = findSceneOption(task.sourceSceneType ?? null);
+    if (restoredScene) {
+      setSelectedScene(restoredScene.value);
+    }
+    setDurationSeconds(restoredDuration);
     setStoryboardResult(task.storyboardResult ?? null);
     setLastExportResult(null);
     setRows(cloneWorkbenchRows(task.rowsSnapshot ?? []));
@@ -568,9 +598,11 @@ export function App() {
   const openSynopsisDialog = () => {
     setTextDialog({
       kind: "synopsis",
-      title: "编辑故事梗概",
+      title: expandedScriptAccepted ? "编辑扩写剧本" : "编辑故事梗概",
       value: synopsis,
-      helper: "适合输入更长的故事梗概；保存后同步回脚本区，页面布局不会被撑开。",
+      helper: expandedScriptAccepted
+        ? "这里编辑当前已确认的扩写剧本；保存后会同步给镜头拆解，不会撑开主界面。"
+        : "适合输入更长的故事梗概；保存后同步回剧本区，页面布局不会被撑开。",
       editable: true,
     });
   };
@@ -578,9 +610,9 @@ export function App() {
   const openExpandedScriptDialog = () => {
     setTextDialog({
       kind: "expandedScript",
-      title: "查看扩写脚本",
+      title: "查看扩写剧本",
       value: expandedScript || "等待 expanded_script_text",
-      helper: "这里展示主线 bridge 返回的 expanded_script_text。",
+      helper: "这里展示主线 bridge 返回的 expanded_script_text；确认使用后才会进入镜头拆解。",
       editable: false,
     });
   };
@@ -619,6 +651,10 @@ export function App() {
 
     if (textDialog.kind === "synopsis") {
       setSynopsis(textDialog.value);
+      if (expandedScriptAccepted) {
+        setExpandedScript(textDialog.value);
+        setAcceptedScript(textDialog.value);
+      }
     }
 
     if (textDialog.kind === "storyboardCell" && textDialog.rowId && textDialog.field) {
@@ -648,7 +684,13 @@ export function App() {
     if (bridgeBusy) {
       return;
     }
-    if (!confirmDiscardDirty("重新扩写脚本")) {
+    if (!confirmDiscardDirty("重新扩写剧本")) {
+      return;
+    }
+
+    const storyInput = synopsis.trim();
+    if (!storyInput) {
+      setExportMessage("请先输入故事梗概，再扩写剧本。");
       return;
     }
 
@@ -659,11 +701,20 @@ export function App() {
         scene_label: selectedSceneOption.label,
         scene_category: selectedSceneOption.group,
         model_config_summary: modelConfigSummary,
-        synopsis_text: synopsis,
+        selected_total_duration_seconds: durationSeconds,
+        synopsis_text: storyInput,
       });
+      const scriptBody = extractScriptBody(response.expanded_script_text) || response.expanded_script_text.trim();
       setExpandedScriptResult(response);
-      setExpandedScript(response.expanded_script_text);
-      setShowExpandedScriptStatus(true);
+      setExpandedScript(scriptBody);
+      setSynopsis(scriptBody);
+      setExpandedScriptDurationSeconds(durationSeconds);
+      setExpandedScriptScene(selectedSceneOption);
+      setShowExpandedScriptStatus(false);
+      setAcceptedScript("");
+      setAcceptedScriptId(null);
+      setAcceptedScriptDurationSeconds(null);
+      setAcceptedScriptScene(null);
       setTaskSourceScript("");
       setTaskScriptId(null);
       setTaskSegmentTitle("");
@@ -679,10 +730,10 @@ export function App() {
       setCurrentPage(1);
       syncModelProviderStatusFromWarnings(response.warnings);
       setExportMessage(
-        `expand_script 完成：${response.script_id}；${formatTextModelRunMessage(response.warnings)}`,
+        `扩写剧本完成：${response.script_id}；目标时长 ${durationSeconds} 秒。剧本正文已进入剧本区，请确认使用后进入镜头拆解。${formatTextModelRunMessage(response.warnings)}`,
       );
     } catch (error) {
-      setExportMessage(`expand_script 失败：${formatError(error)}`);
+      setExportMessage(`扩写剧本失败：${formatError(error)}`);
     } finally {
       setBridgeBusy(null);
     }
@@ -693,11 +744,11 @@ export function App() {
       return;
     }
     if (!canImportScript) {
-      setExportMessage("请先扩写脚本，生成 expanded_script_text 后再新建分镜任务。");
+      setExportMessage("请先扩写剧本并点击“确定使用”，再新建镜头任务。");
       return;
     }
 
-    if (!confirmDiscardDirty(mode === "create" ? "新建分镜任务" : "更新当前任务")) {
+    if (!confirmDiscardDirty(mode === "create" ? "新建镜头任务" : "更新当前镜头")) {
       return;
     }
 
@@ -706,8 +757,8 @@ export function App() {
     const defaultTaskName = mode === "create"
       ? currentName && currentName !== DEFAULT_TASK_NAME && !hasTaskScript
         ? currentName
-        : `第 ${nextSerial} 个分镜任务`
-      : currentName || `第 ${Math.max(nextSerial, 1)} 个分镜任务`;
+        : `第 ${nextSerial} 个镜头任务`
+      : currentName || `第 ${Math.max(nextSerial, 1)} 个镜头任务`;
     const nextUnusedCandidate =
       mode === "create"
         ? shotCandidates.find((candidate) => !usedCandidateIds.has(candidate.id) && candidate.id !== "full-script") ??
@@ -716,8 +767,8 @@ export function App() {
     const firstCandidate = nextUnusedCandidate ?? shotCandidates[0] ?? {
       id: "custom",
       title: "自定义镜头片段",
-      text: expandedScript.trim(),
-      preview: expandedScript.trim(),
+      text: acceptedScript.trim(),
+      preview: acceptedScript.trim(),
     };
     const existingTaskScript = mode === "update" && taskSourceScript.trim()
       ? taskSourceScript.trim()
@@ -755,14 +806,15 @@ export function App() {
 
     const selectedText = taskDraft.scriptText.trim();
     if (!selectedText) {
-      setExportMessage("请先选择或编辑一个镜头片段，再创建分镜任务。");
+      setExportMessage("请先选择或编辑一个镜头片段，再创建镜头任务。");
       return;
     }
 
     const candidate = shotCandidates.find((item) => item.id === taskDraft.selectedCandidateId);
-    const nextTaskName = taskDraft.taskName.trim() || `第 ${taskSerial + 1} 个分镜任务`;
+    const nextTaskName = taskDraft.taskName.trim() || `第 ${taskSerial + 1} 个镜头任务`;
     const nextTaskId = taskDraft.mode === "create" || !currentTaskId ? createTaskRecordId() : currentTaskId;
     const nextSegmentTitle = candidate?.title ?? "自定义镜头片段";
+    const taskScene = acceptedScriptScene ?? selectedSceneOption;
 
     if (taskDraft.mode === "create") {
       setTaskSerial((value) => value + 1);
@@ -770,7 +822,7 @@ export function App() {
 
     setTaskName(nextTaskName);
     setTaskSourceScript(selectedText);
-    setTaskScriptId(expandedScriptResult?.script_id ?? null);
+    setTaskScriptId(acceptedScriptId);
     setTaskSegmentTitle(nextSegmentTitle);
     setCurrentTaskId(nextTaskId);
     setSceneTasks((current) => {
@@ -780,6 +832,11 @@ export function App() {
         candidateId: taskDraft.selectedCandidateId,
         segmentTitle: nextSegmentTitle,
         scriptText: selectedText,
+        scriptId: acceptedScriptId,
+        sourceSceneType: taskScene.value,
+        sourceSceneLabel: taskScene.label,
+        sourceSceneCategory: taskScene.group,
+        sourceDurationSeconds: acceptedScriptDurationSeconds ?? durationSeconds,
         status: "draft",
         dirty: false,
         hadRowEdits: false,
@@ -831,14 +888,14 @@ export function App() {
 
       setTaskDraft({
         mode: "create",
-        taskName: `第 ${nextQueueIndex} 个分镜任务`,
+        taskName: `第 ${nextQueueIndex} 个镜头任务`,
         selectedCandidateId: nextCandidate?.id ?? "custom",
         scriptText: nextCandidate?.text ?? "",
       });
       setExportMessage(
         nextCandidate
-          ? `已创建分镜任务“${nextTaskName}”，继续选择“${nextCandidate.title}”创建下一个任务。`
-          : `已创建分镜任务“${nextTaskName}”。系统候选已用完，可手动输入下一段镜头任务。`,
+          ? `已创建镜头任务“${nextTaskName}”，继续选择“${nextCandidate.title}”创建下一个任务。`
+          : `已创建镜头任务“${nextTaskName}”。系统候选已用完，可手动输入下一段镜头任务。`,
       );
       return;
     }
@@ -846,8 +903,8 @@ export function App() {
     setTaskDraft(null);
     setExportMessage(
       taskDraft.mode === "create"
-        ? `已创建分镜任务“${nextTaskName}”，当前镜头片段为“${nextSegmentTitle}”。生成后可继续新建下一个未使用片段。`
-        : `已更新当前分镜任务“${nextTaskName}”，当前镜头片段为“${nextSegmentTitle}”。下一步点击开始生成。`,
+        ? `已创建镜头任务“${nextTaskName}”，当前镜头片段为“${nextSegmentTitle}”。生成后可继续新建下一个未使用片段。`
+        : `已更新当前镜头任务“${nextTaskName}”，当前镜头片段为“${nextSegmentTitle}”。下一步点击开始生成。`,
     );
   };
 
@@ -860,7 +917,7 @@ export function App() {
       return;
     }
     if (!sceneTasks.length) {
-      setExportMessage("请先在任务条新建分镜任务，再从这里导入镜头任务。");
+      setExportMessage("请先在镜头拆解中新建镜头任务，再从这里导入镜头任务。");
       return;
     }
 
@@ -889,7 +946,7 @@ export function App() {
       return;
     }
     if (!canGenerate) {
-      setExportMessage("请先用扩写脚本创建分镜任务，再开始生成分镜提示词。");
+      setExportMessage("请先用扩写剧本创建镜头任务，再开始生成分镜提示词。");
       return;
     }
     if (!confirmDiscardDirty("重新生成当前镜头任务")) {
@@ -897,13 +954,23 @@ export function App() {
     }
 
     const source = taskSourceScript.trim();
+    const taskDurationSeconds = normalizeDurationOption(
+      currentSceneTask?.sourceDurationSeconds ?? durationSeconds,
+      durationSeconds,
+    );
+    const taskSceneOption = findSceneOption(currentSceneTask?.sourceSceneType ?? null) ?? acceptedScriptScene ?? selectedSceneOption;
+    setDurationSeconds(taskDurationSeconds);
+    setSelectedScene(taskSceneOption.value);
     setBridgeBusy("generate");
     try {
       const response = await invokeGenerateStoryboard({
         task_name: taskName,
         script_id: taskScriptId,
+        scene_type: taskSceneOption.value,
+        scene_label: currentSceneTask?.sourceSceneLabel ?? taskSceneOption.label,
+        scene_category: currentSceneTask?.sourceSceneCategory ?? taskSceneOption.group,
         expanded_script_text: source,
-        selected_total_duration_seconds: durationSeconds,
+        selected_total_duration_seconds: taskDurationSeconds,
         model_config_summary: modelConfigSummary,
       });
       const nextRows = response.rows.map(mapGeneratedStoryboardRow);
@@ -924,7 +991,7 @@ export function App() {
         const nextTask: GeneratedSceneTask = {
           resultId: response.result_id,
           taskId: response.task_id,
-          taskName: taskName.trim() || "未命名分镜任务",
+          taskName: taskName.trim() || "未命名镜头任务",
           segmentTitle: taskSegmentTitle || "自定义镜头片段",
           rowCount: nextRows.length,
         };
@@ -955,6 +1022,7 @@ export function App() {
                   promptTextStatus: collectPromptStatuses(response.rows),
                   promptTextWarnings: collectPromptWarningCodes(response.rows),
                   selectedTotalDurationSeconds: response.selected_total_duration_seconds,
+                  sourceDurationSeconds: response.selected_total_duration_seconds,
                   rowsHash: response.rows_hash,
                   updatedAtMs: response.updated_at_ms,
                   baseRevision: response.revision,
@@ -1030,6 +1098,35 @@ export function App() {
     } finally {
       setBridgeBusy(null);
     }
+  };
+
+  const handleAcceptExpandedScript = () => {
+    const scriptText = (synopsis.trim() || expandedScript.trim());
+    if (!scriptText || !expandedScriptResult) {
+      setExportMessage("请先完成扩写剧本，再确认使用。");
+      return false;
+    }
+    if (!confirmDiscardDirty("确认使用新的扩写剧本")) {
+      return false;
+    }
+
+    const scriptDuration = expandedScriptDurationSeconds ?? durationSeconds;
+    const scriptScene = expandedScriptScene ?? selectedSceneOption;
+    setAcceptedScript(scriptText);
+    setAcceptedScriptId(expandedScriptResult.script_id);
+    setAcceptedScriptDurationSeconds(scriptDuration);
+    setAcceptedScriptScene(scriptScene);
+    setExpandedScript(scriptText);
+    setSynopsis(scriptText);
+    setDurationSeconds(scriptDuration);
+    setTaskSourceScript("");
+    setTaskScriptId(null);
+    setTaskSegmentTitle("");
+    setShowExpandedScriptStatus(false);
+    setExportMessage(
+      `已确认使用扩写剧本 ${expandedScriptResult.script_id}，场景为${scriptScene.label}，目标时长 ${scriptDuration} 秒。下一步进入镜头拆解。`,
+    );
+    return true;
   };
 
   const handleDuplicate = async (rowId: string) => {
@@ -1131,20 +1228,20 @@ export function App() {
       return;
     }
     if (!storyboardResult || !rows.length) {
-      setExportMessage("当前没有可导出的完整脚本结果。");
+      setExportMessage("当前没有可导出的完整剧本结果。");
       return;
     }
 
     if (sceneTasks.length > generatedSceneTaskCount) {
       setExportMessage(
-        `完整脚本需要所有镜头任务都完成生成；当前已生成 ${generatedSceneTaskCount}/${sceneTasks.length} 个，未完成任务不会被伪造成导出结果。`,
+        `完整剧本需要所有镜头任务都完成生成；当前已生成 ${generatedSceneTaskCount}/${sceneTasks.length} 个，未完成任务不会被伪造成导出结果。`,
       );
       return;
     }
 
     if (generatedSceneTaskCount > 1 || generatedSceneTasks.length > 1) {
       setExportMessage(
-        `完整脚本应汇总 ${generatedSceneTaskCount || generatedSceneTasks.length} 个已生成场景；当前 bridge 仍只支持单 result_id 导出，多场景完整提示词导出为 gated。`,
+        `完整剧本应汇总 ${generatedSceneTaskCount || generatedSceneTasks.length} 个已生成场景；当前 bridge 仍只支持单 result_id 导出，多场景完整提示词导出为 gated。`,
       );
       return;
     }
@@ -1161,7 +1258,7 @@ export function App() {
         export_format: "full_script",
       });
       if (currentSceneTask?.hadRowEdits && hasEditedRowsNotApplied(response)) {
-        setExportMessage("完整脚本导出已阻断：本地编辑未被主线 snapshot 应用，请先保存修改后再导出。");
+        setExportMessage("完整剧本导出已阻断：本地编辑未被主线 snapshot 应用，请先保存修改后再导出。");
         return;
       }
       setLastExportResult(response);
@@ -1172,10 +1269,10 @@ export function App() {
         exportContentHash: readyArtifact?.content_hash ?? null,
       });
       setExportMessage(
-        `完整脚本提示词：${formatExportBundleMessage(response)}；当前仅有 1 个已生成场景，按当前场景导出。`,
+        `完整剧本提示词：${formatExportBundleMessage(response)}；当前仅有 1 个已生成场景，按当前场景导出。`,
       );
     } catch (error) {
-      setExportMessage(`导出完整脚本失败：${formatProductError(error)}`);
+      setExportMessage(`导出完整剧本失败：${formatProductError(error)}`);
     } finally {
       setBridgeBusy(null);
     }
@@ -1379,74 +1476,88 @@ qwen_request: {
           ) : null}
 
           <section className="panel-section">
-            <div className="section-name">脚本区</div>
+            <div className="section-name">剧本区</div>
             <div className="script-row">
-              <label className="scene-select">
-                <span>场景类型选择：</span>
-                <select
-                  value={selectedScene}
-                  onChange={(event) => setSelectedScene(event.target.value as SceneFusionOption)}
-                >
-                  {sceneOptionGroups.map(([group, options]) => (
-                    <optgroup key={group} label={group}>
-                      {options.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-                <small className="scene-select__meta">
-                  {selectedSceneOption.group} · {selectedSceneOption.value}
-                </small>
-              </label>
+              <div className="script-settings">
+                <label className="scene-select">
+                  <span>场景类型：</span>
+                  <select
+                    value={selectedScene}
+                    onChange={(event) => setSelectedScene(event.target.value as SceneFusionOption)}
+                  >
+                    {sceneOptionGroups.map(([group, options]) => (
+                      <optgroup key={group} label={group}>
+                        {options.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                  <small className="scene-select__meta">
+                    {selectedSceneOption.group} · {selectedSceneOption.value}
+                  </small>
+                </label>
+                <label className="duration-select duration-select--script">
+                  <span>目标时长</span>
+                  <select
+                    value={durationSeconds}
+                    onChange={(event) => setDurationSeconds(Number(event.target.value))}
+                  >
+                    {DURATION_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option} 秒
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
               <div className="text-control">
                 <textarea
                   className="synopsis-input"
                   value={synopsis}
-                  onChange={(event) => setSynopsis(event.target.value)}
+                  onChange={(event) => {
+                    setSynopsis(event.target.value);
+                    if (expandedScriptAccepted) {
+                      setExpandedScript(event.target.value);
+                      setAcceptedScript(event.target.value);
+                    }
+                  }}
                   placeholder="请输入故事梗概"
                 />
                 <button type="button" className="text-control__expand" onClick={openSynopsisDialog}>
                   放大编辑
                 </button>
               </div>
-              <button
-                type="button"
-                className="action-button action-button--dark"
-                onClick={handleExpandScript}
-                disabled={bridgeBusy !== null}
-              >
-                {bridgeBusy === "expand" ? "扩写中" : "扩写脚本"}
-              </button>
+              <div className="script-actions">
+                <button
+                  type="button"
+                  className="action-button action-button--dark"
+                  onClick={handleExpandScript}
+                  disabled={bridgeBusy !== null}
+                >
+                  {bridgeBusy === "expand" ? "扩写中" : "扩写剧本"}
+                </button>
+                {expandedScriptResult && !expandedScriptAccepted ? (
+                  <button
+                    type="button"
+                    className="action-button action-button--light"
+                    onClick={handleAcceptExpandedScript}
+                    disabled={!(synopsis.trim() || expandedScript.trim()) || bridgeBusy !== null}
+                  >
+                    确定使用
+                  </button>
+                ) : null}
+              </div>
             </div>
             <div className="kb-router-hint">
-              将根据场景类型、镜头意图、结构和时长自动匹配少量知识库规则，不会全量调用知识库。
+              剧本导演会按场景类型、目标时长和故事梗概匹配少量 KB 摘要扩写剧情；分镜导演会在镜头生成阶段再次匹配摘要，不会全量调用知识库。
             </div>
-            {showExpandedScriptStatus && (expandedScriptResult || expandedScript) ? (
-              <div className="bridge-status bridge-status--script">
-                <div className="bridge-status__meta">
-                  <strong>script_id</strong>
-                  <span>{expandedScriptResult?.script_id ?? "expanded_script_text"}</span>
-                  <strong>warnings</strong>
-                  <span>{formatWarnings(expandedScriptResult?.warnings ?? [])}</span>
-                  <button type="button" className="link-button" onClick={openExpandedScriptDialog}>
-                    查看全文
-                  </button>
-                  <button type="button" className="link-button" onClick={() => setShowExpandedScriptStatus(false)}>
-                    关闭
-                  </button>
-                </div>
-                <div className="bridge-status__preview">
-                  {expandedScript || "等待 expanded_script_text"}
-                </div>
-              </div>
-            ) : null}
           </section>
 
           <section className="panel-section panel-section--task">
-            <div className="section-name">任务条</div>
+            <div className="section-name">镜头拆解</div>
             <div className="task-row">
               <input
                 className="task-name-input"
@@ -1455,16 +1566,16 @@ qwen_request: {
                 placeholder="请输入任务名称（如：第一集分镜生成）"
               />
               <div className={hasTaskScript ? "task-source task-source--ready" : "task-source"}>
-                <strong>{hasTaskScript ? "任务脚本" : "任务状态"}</strong>
+                <strong>{hasTaskScript ? "镜头剧本" : "拆解状态"}</strong>
                 <span>{taskSourceLabel}</span>
               </div>
               <button
                 type="button"
                 className="action-button action-button--light"
                 onClick={handleNewTask}
-                disabled={bridgeBusy !== null}
+                disabled={bridgeBusy !== null || !canImportScript}
               >
-                新建分镜任务
+                新建镜头任务
               </button>
             </div>
           </section>
@@ -1481,19 +1592,10 @@ qwen_request: {
                 导入镜头任务
               </button>
 
-              <label className="duration-select">
-                <span>时长选择</span>
-                <select
-                  value={durationSeconds}
-                  onChange={(event) => setDurationSeconds(Number(event.target.value))}
-                >
-                  {DURATION_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option} 秒
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="duration-pill">
+                <strong>镜头时长</strong>
+                <span>{currentTaskDuration} 秒</span>
+              </div>
 
               <button
                 type="button"
@@ -1690,7 +1792,7 @@ qwen_request: {
                 onClick={handleExportScript}
                 disabled={!storyboardResult || bridgeBusy !== null}
               >
-                {bridgeBusy === "export_script" ? "导出中" : "导出完整脚本"}
+                {bridgeBusy === "export_script" ? "导出中" : "导出完整剧本"}
               </button>
             </div>
           </section>
@@ -1701,9 +1803,9 @@ qwen_request: {
             <div className="task-draft-dialog" onClick={(event) => event.stopPropagation()}>
               <div className="edit-dialog__header">
                 <div>
-                  <strong>{taskDraft.mode === "create" ? "新建分镜任务" : "更新任务脚本"}</strong>
+                  <strong>{taskDraft.mode === "create" ? "新建镜头任务" : "更新镜头剧本"}</strong>
                   <span>
-                    先把扩写脚本拆成镜头任务队列；下方“导入镜头任务”再选择当前要生成的任务。
+                    先把扩写剧本拆成镜头任务队列；下方“导入镜头任务”再选择当前要生成的任务。
                   </span>
                 </div>
                 <button type="button" className="toolbar-button" onClick={() => setTaskDraft(null)}>
@@ -1748,7 +1850,7 @@ qwen_request: {
                     }) : (
                       <div className="shot-candidate shot-candidate--empty">
                         <strong>暂无可拆分内容</strong>
-                        <span>请先扩写脚本，或在右侧直接输入自定义片段。</span>
+                        <span>请先扩写剧本，或在右侧直接输入自定义片段。</span>
                       </div>
                     )}
                   </div>
@@ -1772,7 +1874,7 @@ qwen_request: {
                 </div>
                 <div className="task-draft-editor">
                   <label>
-                    <span>任务名称</span>
+                    <span>镜头任务名称</span>
                     <input
                       value={taskDraft.taskName}
                       onChange={(event) =>
@@ -1783,7 +1885,7 @@ qwen_request: {
                     />
                   </label>
                   <label className="task-draft-editor__text">
-                    <span>本次分镜任务使用的脚本片段</span>
+                    <span>本次镜头任务使用的剧本片段</span>
                     <textarea
                       value={taskDraft.scriptText}
                       onChange={(event) =>
@@ -1816,7 +1918,7 @@ qwen_request: {
                         className="action-button action-button--dark"
                         onClick={() => handleConfirmTaskDraft(false)}
                       >
-                        {taskDraft.mode === "create" ? "确认创建任务" : "确认更新任务"}
+                        {taskDraft.mode === "create" ? "确认创建镜头" : "确认更新镜头"}
                       </button>
                     </div>
                   </div>
@@ -1883,6 +1985,20 @@ qwen_request: {
                 />
                 <div className="text-dialog__actions">
                   <span>Enter 可换行，右下角可拖拽放大。</span>
+                  {textDialog.kind === "expandedScript" ? (
+                    <button
+                      type="button"
+                      className="action-button action-button--light"
+                      onClick={() => {
+                        if (handleAcceptExpandedScript()) {
+                          setTextDialog(null);
+                        }
+                      }}
+                      disabled={!(synopsis.trim() || expandedScript.trim()) || bridgeBusy !== null || expandedScriptAccepted}
+                    >
+                      {expandedScriptAccepted ? "已确认使用" : "确定使用"}
+                    </button>
+                  ) : null}
                   {textDialog.editable ? (
                     <button
                       type="button"
@@ -2024,8 +2140,12 @@ function KbRouterSummary({
   );
 }
 
-function resolveSceneOption(value: SceneFusionOption) {
-  return SCENE_OPTIONS.find((option) => option.value === value) ?? SCENE_OPTIONS[0];
+function findSceneOption(value: SceneFusionOption | string | null | undefined) {
+  return value ? SCENE_OPTIONS.find((option) => option.value === value) ?? null : null;
+}
+
+function resolveSceneOption(value: SceneFusionOption | string | null | undefined) {
+  return findSceneOption(value) ?? SCENE_OPTIONS[0];
 }
 
 function groupSceneOptions(options: SceneOption[]) {
@@ -2106,6 +2226,12 @@ function normalizeApiKeyRef(value: string) {
   return API_KEY_REF_OPTIONS.some((option) => option.value === cleanValue) ? cleanValue : "";
 }
 
+function normalizeDurationOption(value: number | null | undefined, fallback = 15) {
+  const fallbackDuration = DURATION_OPTIONS.includes(fallback) ? fallback : 15;
+  const duration = Number(value);
+  return DURATION_OPTIONS.includes(duration) ? duration : fallbackDuration;
+}
+
 function buildShotCandidates(expandedScript: string): ShotCandidate[] {
   const scriptBody = extractScriptBody(expandedScript);
   if (!scriptBody) {
@@ -2124,7 +2250,7 @@ function buildShotCandidates(expandedScript: string): ShotCandidate[] {
   if (candidates.length > 1) {
     candidates.push({
       id: "full-script",
-      title: "完整扩写脚本",
+      title: "完整扩写剧本",
       text: scriptBody,
       preview: truncatePreview(scriptBody),
     });
@@ -2148,15 +2274,22 @@ function extractScriptBody(source: string) {
     return "";
   }
 
+  const expandedMatch = text.match(/expanded_script[:：]\s*([\s\S]*)$/i);
+  if (expandedMatch?.[1]?.trim()) {
+    return normalizeScriptText(expandedMatch[1]);
+  }
+
+  const metaKeys =
+    "source_package|scene_type|scene_label|scene_category|target_duration_seconds|model_provider|model|model_enabled|api_key_present|text_generation|script_id|warnings|expanded_script";
   const synopsisMatch = text.match(
-    /synopsis[:：]\s*([\s\S]*?)(?=\s+(?:source_package|scene_type|scene_label|scene_category|model_provider|model|model_enabled|api_key_present|script_id|warnings)[:：]|$)/i,
+    new RegExp(`synopsis[:：]\\s*([\\s\\S]*?)(?=\\s+(?:${metaKeys})[:：]|$)`, "i"),
   );
   if (synopsisMatch?.[1]?.trim()) {
     return normalizeScriptText(synopsisMatch[1]);
   }
 
   const withoutMeta = text.replace(
-    /\b(?:source_package|scene_type|scene_label|scene_category|model_provider|model|model_enabled|api_key_present|script_id|warnings)[:：]\s*\S+/gi,
+    new RegExp(`\\b(?:${metaKeys})[:：]\\s*\\S+`, "gi"),
     " ",
   );
   return normalizeScriptText(withoutMeta);
@@ -2332,7 +2465,7 @@ function isBlockedStoryboardResponse(response: GenerateStoryboardResponse) {
 
 function formatBlockedStoryboardResponse(response: GenerateStoryboardResponse) {
   const blockers = response.export_status.blockers.map((warning) => warning.message || warning.code);
-  const fallback = blockers.length ? blockers.join("；") : "主线桥接阻断了本次操作，请检查故事梗概、场景类型、任务脚本和时长。";
+  const fallback = blockers.length ? blockers.join("；") : "主线桥接阻断了本次操作，请检查故事梗概、场景类型、镜头剧本和时长。";
   return `本次操作未完成：${fallback}`;
 }
 
@@ -2376,7 +2509,7 @@ function formatProductError(error: unknown) {
     return "当前场景类型暂未被主线契约接受，请换一个场景类型后重试。";
   }
   if (/script|synopsis/i.test(raw)) {
-    return "脚本内容为空或不可用，请先完成扩写并创建镜头任务。";
+    return "镜头剧本为空或不可用，请先完成扩写并创建镜头任务。";
   }
   return raw || "操作未完成，请稍后重试。";
 }

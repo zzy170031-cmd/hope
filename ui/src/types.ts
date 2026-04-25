@@ -64,6 +64,7 @@ export interface ExpandScriptRequest {
   scene_label?: string;
   scene_category?: string;
   model_config_summary?: ModelConfigSummary;
+  selected_total_duration_seconds?: number;
   synopsis_text: string;
 }
 
@@ -129,6 +130,9 @@ export interface KbRouterRuntimeResponse {
 export interface GenerateStoryboardRequest {
   task_name: string;
   script_id?: string | null;
+  scene_type?: string | null;
+  scene_label?: string | null;
+  scene_category?: string | null;
   expanded_script_text?: string | null;
   selected_total_duration_seconds: number;
   model_config_summary?: ModelConfigSummary;

@@ -319,6 +319,7 @@ mod tests {
                     base_url_present: true,
                     api_key_present: false,
                 }),
+                selected_total_duration_seconds: Some(15),
                 synopsis_text: "主角守住城门，等待援军抵达。".to_string(),
             }),
         )
@@ -327,10 +328,11 @@ mod tests {
         match expand {
             DesktopInvokeResponse::ExpandScript(response) => {
                 assert!(
-                    response
+                    !response
                         .expanded_script_text
-                        .contains("api_key_present: false")
+                        .contains("api_key_present")
                 );
+                assert!(!response.expanded_script_text.contains("prompt_text"));
                 assert!(
                     response
                         .warnings
@@ -506,6 +508,7 @@ mod tests {
                     base_url_present: true,
                     api_key_present: true,
                 }),
+                selected_total_duration_seconds: Some(30),
                 synopsis_text: "主公在沙盘上观察敌军行军轨迹，调度两翼完成合围。".to_string(),
             }),
         )
@@ -514,27 +517,25 @@ mod tests {
         let (script_id, expanded_script_text) = match expand {
             DesktopInvokeResponse::ExpandScript(response) => {
                 assert!(response.script_id.starts_with("script-"));
-                assert!(response.expanded_script_text.contains("source_package"));
                 assert!(
-                    response
+                    !response
                         .expanded_script_text
-                        .contains("scene_type: slg_sandbox_view")
+                        .contains("source_package")
                 );
                 assert!(
-                    response
+                    !response
                         .expanded_script_text
-                        .contains("scene_label: 沙盘战略视口")
+                        .contains("scene_type:")
                 );
                 assert!(
-                    response
+                    !response
                         .expanded_script_text
-                        .contains("model_provider: qwen")
+                        .contains("prompt_text")
                 );
-                assert!(response.expanded_script_text.contains("model: qwen-plus"));
                 assert!(
-                    response
+                    !response
                         .expanded_script_text
-                        .contains("api_key_present: true")
+                        .contains("0-3s")
                 );
                 assert!(
                     !response
@@ -570,6 +571,9 @@ mod tests {
             DesktopInvokeRequest::GenerateStoryboard(GenerateStoryboardRequest {
                 task_name: "desktop bridge smoke".to_string(),
                 script_id: Some(script_id),
+                scene_type: Some("slg_sandbox_view".to_string()),
+                scene_label: Some("沙盘战略视口".to_string()),
+                scene_category: Some("三国 / 国战 / SLG".to_string()),
                 expanded_script_text: Some(expanded_script_text),
                 selected_total_duration_seconds: 30,
                 model_config_summary: Some(ModelConfigSummary {

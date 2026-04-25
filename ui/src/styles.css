@@ -480,7 +480,15 @@ textarea {
 }
 
 .script-row {
-  grid-template-columns: minmax(290px, 0.95fr) minmax(0, 3.3fr) minmax(164px, 0.72fr);
+  grid-template-columns: minmax(430px, 1.12fr) minmax(0, 3.25fr) minmax(238px, 0.82fr);
+  padding: 8px 10px;
+}
+
+.script-settings {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(128px, 0.48fr);
+  gap: 8px;
+  align-items: center;
 }
 
 .scene-select {
@@ -561,6 +569,16 @@ textarea {
 .text-control__expand:hover {
   border-color: rgba(93, 214, 220, 0.62);
   background: #f7ffff;
+}
+
+.script-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  gap: 8px;
+}
+
+.script-actions .action-button {
+  width: 100%;
 }
 
 .bridge-status {
@@ -686,8 +704,9 @@ textarea {
 }
 
 .storyboard-toolbar {
-  grid-template-columns: minmax(176px, 192px) minmax(196px, 214px) minmax(116px, 132px) minmax(152px, 176px);
+  grid-template-columns: minmax(176px, 192px) minmax(120px, 136px) minmax(116px, 132px) minmax(152px, 176px) minmax(152px, 176px);
   justify-content: end;
+  padding: 8px 10px;
 }
 
 .duration-select {
@@ -695,6 +714,32 @@ textarea {
   grid-template-columns: auto minmax(0, 1fr);
   gap: 10px;
   align-items: center;
+}
+
+.duration-pill {
+  display: grid;
+  height: var(--control-height);
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fffdf8;
+  color: var(--navy);
+  font-size: 13px;
+}
+
+.duration-pill strong {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.duration-pill span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .action-button {
@@ -872,6 +917,19 @@ textarea {
 
 .link-button--danger {
   color: var(--danger);
+}
+
+.link-button--primary {
+  padding: 4px 9px;
+  border: 1px solid rgba(93, 214, 220, 0.58);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--navy);
+  font-weight: 800;
+}
+
+.link-button--primary:hover {
+  background: #f7ffff;
 }
 
 .pagination-row {
@@ -1430,7 +1488,8 @@ textarea {
   }
 
   .scene-select,
-  .duration-select {
+  .duration-select,
+  .script-settings {
     grid-template-columns: 1fr;
   }
 
@@ -1488,7 +1547,7 @@ textarea {
   }
 
   .script-row {
-    grid-template-columns: minmax(320px, 0.92fr) minmax(0, 3.8fr) minmax(176px, 0.78fr);
+    grid-template-columns: minmax(470px, 1.14fr) minmax(0, 3.85fr) minmax(250px, 0.78fr);
   }
 
   .task-row {

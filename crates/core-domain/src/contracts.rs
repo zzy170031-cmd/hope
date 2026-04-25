@@ -222,6 +222,8 @@ pub struct ExpandScriptRequest {
     pub scene_category: Option<String>,
     #[serde(default)]
     pub model_config_summary: Option<ModelConfigSummary>,
+    #[serde(default)]
+    pub selected_total_duration_seconds: Option<u16>,
     pub synopsis_text: String,
 }
 
@@ -327,6 +329,12 @@ pub struct ExpandScriptResponse {
 pub struct GenerateStoryboardRequest {
     pub task_name: String,
     pub script_id: Option<String>,
+    #[serde(default)]
+    pub scene_type: Option<String>,
+    #[serde(default)]
+    pub scene_label: Option<String>,
+    #[serde(default)]
+    pub scene_category: Option<String>,
     pub expanded_script_text: Option<String>,
     pub selected_total_duration_seconds: u16,
     #[serde(default)]
