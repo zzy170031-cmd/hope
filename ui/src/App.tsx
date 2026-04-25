@@ -67,6 +67,7 @@ interface ShotCandidate {
   title: string;
   text: string;
   preview: string;
+  durationSeconds: number;
 }
 
 interface TaskDraftState {
@@ -74,6 +75,7 @@ interface TaskDraftState {
   taskName: string;
   selectedCandidateId: string;
   scriptText: string;
+  durationSeconds: number;
 }
 
 interface GeneratedSceneTask {
@@ -320,6 +322,7 @@ export function App() {
   const expandedScriptAccepted = Boolean(
     expandedScriptResult?.script_id && acceptedScriptId === expandedScriptResult.script_id,
   );
+  const shotCandidateBaseDuration = normalizeDurationOption(acceptedScriptDurationSeconds ?? durationSeconds, durationSeconds);
   const currentTaskDuration = normalizeDurationOption(
     currentSceneTask?.sourceDurationSeconds ?? durationSeconds,
     durationSeconds,
@@ -336,7 +339,10 @@ export function App() {
     : expandedScript.trim()
     ? "扩写剧本已生成，请先点击“确定使用”再拆解镜头。"
     : "先在剧本区完成扩写，再拆解镜头。";
-  const shotCandidates = useMemo(() => buildShotCandidates(acceptedScript), [acceptedScript]);
+  const shotCandidates = useMemo(
+    () => buildShotCandidates(acceptedScript, shotCandidateBaseDuration),
+    [acceptedScript, shotCandidateBaseDuration],
+  );
   const usedCandidateIds = useMemo(
     () => new Set(sceneTasks.filter((task) => task.candidateId !== "custom").map((task) => task.candidateId)),
     [sceneTasks],
@@ -770,16 +776,24 @@ export function App() {
       title: "自定义镜头片段",
       text: acceptedScript.trim(),
       preview: acceptedScript.trim(),
+      durationSeconds: shotCandidateBaseDuration,
     };
     const existingTaskScript = mode === "update" && taskSourceScript.trim()
       ? taskSourceScript.trim()
       : "";
+    const draftDuration = existingTaskScript
+      ? normalizeDurationOption(
+          currentSceneTask?.sourceDurationSeconds ?? currentSceneTask?.selectedTotalDurationSeconds ?? firstCandidate.durationSeconds,
+          firstCandidate.durationSeconds,
+        )
+      : firstCandidate.durationSeconds;
 
     setTaskDraft({
       mode,
       taskName: defaultTaskName,
       selectedCandidateId: existingTaskScript ? currentSceneTask?.candidateId ?? "custom" : firstCandidate.id,
       scriptText: existingTaskScript || firstCandidate.text,
+      durationSeconds: draftDuration,
     });
   };
 
@@ -795,6 +809,7 @@ export function App() {
             ...current,
             selectedCandidateId: candidate.id,
             scriptText: candidate.text,
+            durationSeconds: candidate.durationSeconds,
           }
         : current,
     );
@@ -816,6 +831,7 @@ export function App() {
     const nextTaskId = taskDraft.mode === "create" || !currentTaskId ? createTaskRecordId() : currentTaskId;
     const nextSegmentTitle = candidate?.title ?? "自定义镜头片段";
     const taskScene = acceptedScriptScene ?? selectedSceneOption;
+    const taskDurationSeconds = normalizeDurationOption(taskDraft.durationSeconds, shotCandidateBaseDuration);
 
     if (taskDraft.mode === "create") {
       setTaskSerial((value) => value + 1);
@@ -826,6 +842,7 @@ export function App() {
     setTaskScriptId(acceptedScriptId);
     setTaskSegmentTitle(nextSegmentTitle);
     setCurrentTaskId(nextTaskId);
+    setDurationSeconds(taskDurationSeconds);
     setSceneTasks((current) => {
       const nextRecord: SceneTaskRecord = {
         id: nextTaskId,
@@ -837,7 +854,7 @@ export function App() {
         sourceSceneType: taskScene.value,
         sourceSceneLabel: taskScene.label,
         sourceSceneCategory: taskScene.group,
-        sourceDurationSeconds: acceptedScriptDurationSeconds ?? durationSeconds,
+        sourceDurationSeconds: taskDurationSeconds,
         status: "draft",
         dirty: false,
         hadRowEdits: false,
@@ -892,6 +909,7 @@ export function App() {
         taskName: `第 ${nextQueueIndex} 个镜头任务`,
         selectedCandidateId: nextCandidate?.id ?? "custom",
         scriptText: nextCandidate?.text ?? "",
+        durationSeconds: nextCandidate?.durationSeconds ?? shotCandidateBaseDuration,
       });
       setExportMessage(
         nextCandidate
@@ -1595,68 +1613,75 @@ qwen_request: {
           <section className="panel-section panel-section--storyboard">
             <div className="section-name">分镜产出区</div>
             <div className="storyboard-toolbar">
-              <button
-                type="button"
-                className="action-button action-button--light"
-                onClick={handleImportScript}
-                disabled={!sceneTasks.length || bridgeBusy !== null}
-              >
-                导入镜头任务
-              </button>
+              <div className={isKbSummaryExpanded ? "storyboard-summary-panel storyboard-summary-panel--expanded" : "storyboard-summary-panel"}>
+                {activeKbRouterResult ? (
+                  <KbRouterSummary
+                    router={activeKbRouterResult}
+                    expanded={isKbSummaryExpanded}
+                    onToggle={() => setIsKbSummaryExpanded((value) => !value)}
+                  />
+                ) : (
+                  <div className="storyboard-summary-empty">
+                    生成后在这里显示知识库匹配与镜头强绑定摘要。
+                  </div>
+                )}
 
-              <div className="duration-pill">
-                <strong>镜头时长</strong>
-                <span>{currentTaskDuration} 秒</span>
+                {rows.length ? (
+                  <div className="grounding-note grounding-note--compact">
+                    当前人物/动作若显示为占位文案，表示桌面端仅做显示层产品化；主线仍需补全人物/动作 grounding。
+                  </div>
+                ) : null}
+
+                {shotGroundingSummary ? (
+                  <div className="grounding-note grounding-note--details grounding-note--compact">
+                    <strong>镜头强绑定</strong>
+                    <span>镜头意图：{shotGroundingSummary.intent}</span>
+                    <span>局部场景：{shotGroundingSummary.scene}</span>
+                    <span>适配说明：{shotGroundingSummary.reason}</span>
+                  </div>
+                ) : null}
               </div>
+              <div className="storyboard-toolbar__actions">
+                <button
+                  type="button"
+                  className="action-button action-button--light"
+                  onClick={handleImportScript}
+                  disabled={!sceneTasks.length || bridgeBusy !== null}
+                >
+                  导入镜头任务
+                </button>
 
-              <button
-                type="button"
-                className="action-button action-button--light"
-                onClick={handleClear}
-                disabled={bridgeBusy !== null}
-              >
-                清空
-              </button>
-              <button
-                type="button"
-                className="action-button action-button--light"
-                onClick={handleSaveRows}
-                disabled={!rowsDirty || bridgeBusy !== null}
-              >
-                {bridgeBusy === "save_rows" ? "保存中" : "保存修改"}
-              </button>
-              <button
-                type="button"
-                className="action-button action-button--dark"
-                onClick={handleGenerate}
-                disabled={!canGenerate || bridgeBusy !== null}
-              >
-                {bridgeBusy === "generate" ? "生成中" : "开始生成"}
-              </button>
+                <div className="duration-pill">
+                  <strong>镜头时长</strong>
+                  <span>{currentTaskDuration} 秒</span>
+                </div>
+
+                <button
+                  type="button"
+                  className="action-button action-button--light"
+                  onClick={handleClear}
+                  disabled={bridgeBusy !== null}
+                >
+                  清空
+                </button>
+                <button
+                  type="button"
+                  className="action-button action-button--light"
+                  onClick={handleSaveRows}
+                  disabled={!rowsDirty || bridgeBusy !== null}
+                >
+                  {bridgeBusy === "save_rows" ? "保存中" : "保存修改"}
+                </button>
+                <button
+                  type="button"
+                  className="action-button action-button--dark"
+                  onClick={handleGenerate}
+                  disabled={!canGenerate || bridgeBusy !== null}
+                >
+                  {bridgeBusy === "generate" ? "生成中" : "开始生成"}
+                </button>
+              </div>
             </div>
-
-            {activeKbRouterResult ? (
-              <KbRouterSummary
-                router={activeKbRouterResult}
-                expanded={isKbSummaryExpanded}
-                onToggle={() => setIsKbSummaryExpanded((value) => !value)}
-              />
-            ) : null}
-
-            {rows.length ? (
-              <div className="grounding-note">
-                当前人物/动作若显示为占位文案，表示桌面端仅做显示层产品化；主线仍需补全人物/动作 grounding。
-              </div>
-            ) : null}
-
-            {shotGroundingSummary ? (
-              <div className="grounding-note grounding-note--details">
-                <strong>镜头强绑定</strong>
-                <span>镜头意图：{shotGroundingSummary.intent}</span>
-                <span>局部场景：{shotGroundingSummary.scene}</span>
-                <span>适配说明：{shotGroundingSummary.reason}</span>
-              </div>
-            ) : null}
 
             <div className="table-wrapper">
               <table className="storyboard-table">
@@ -1888,6 +1913,7 @@ qwen_request: {
                             <em>{candidateStatus}</em>
                           </span>
                           <span>{candidate.preview}</span>
+                          <small>预计 {candidate.durationSeconds} 秒</small>
                         </button>
                       );
                     }) : (
@@ -1908,7 +1934,9 @@ qwen_request: {
                         onClick={() => handleImportSceneTask(task)}
                       >
                         <strong>{index + 1}. {task.name}</strong>
-                        <span>{task.segmentTitle} · {task.status === "generated" ? `${task.rowCount ?? 0} 行已生成` : "待生成"}</span>
+                        <span>
+                          {task.segmentTitle} · 预计 {normalizeDurationOption(task.sourceDurationSeconds ?? task.selectedTotalDurationSeconds, durationSeconds)} 秒 · {task.status === "generated" ? `${task.rowCount ?? 0} 行已生成` : "待生成"}
+                        </span>
                       </button>
                     )) : (
                       <div className="task-queue__empty">还没有镜头任务，确认创建后会出现在这里。</div>
@@ -1926,6 +1954,23 @@ qwen_request: {
                         )
                       }
                     />
+                  </label>
+                  <label className="task-draft-editor__duration">
+                    <span>预计镜头时长</span>
+                    <select
+                      value={taskDraft.durationSeconds}
+                      onChange={(event) =>
+                        setTaskDraft((current) =>
+                          current ? { ...current, durationSeconds: Number(event.target.value) } : current,
+                        )
+                      }
+                    >
+                      {DURATION_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option} 秒
+                        </option>
+                      ))}
+                    </select>
                   </label>
                   <label className="task-draft-editor__text">
                     <span>本次镜头任务使用的剧本片段</span>
@@ -1993,7 +2038,9 @@ qwen_request: {
                   >
                     <div>
                       <strong>{index + 1}. {task.name}</strong>
-                      <span>{task.segmentTitle}</span>
+                      <span>
+                        {task.segmentTitle} · 预计 {normalizeDurationOption(task.sourceDurationSeconds ?? task.selectedTotalDurationSeconds, durationSeconds)} 秒
+                      </span>
                     </div>
                     <em>{task.status === "generated" ? `${task.rowCount ?? 0} 行已生成，可重新导入` : "待生成"}</em>
                     <p>{truncatePreview(task.scriptText, 140)}</p>
@@ -2275,7 +2322,24 @@ function normalizeDurationOption(value: number | null | undefined, fallback = 15
   return DURATION_OPTIONS.includes(duration) ? duration : fallbackDuration;
 }
 
-function buildShotCandidates(expandedScript: string): ShotCandidate[] {
+function nearestDurationOption(value: number, fallback = 15) {
+  const fallbackDuration = normalizeDurationOption(fallback, 15);
+  const target = Number.isFinite(value) ? value : fallbackDuration;
+
+  return DURATION_OPTIONS.reduce((best, option) => {
+    const bestDelta = Math.abs(best - target);
+    const optionDelta = Math.abs(option - target);
+    return optionDelta < bestDelta || (optionDelta === bestDelta && option > best) ? option : best;
+  }, fallbackDuration);
+}
+
+function estimateShotDuration(totalDurationSeconds: number, segmentCount: number) {
+  const totalDuration = normalizeDurationOption(totalDurationSeconds, 15);
+  const count = Math.max(1, segmentCount);
+  return nearestDurationOption(Math.max(5, totalDuration / count), totalDuration);
+}
+
+function buildShotCandidates(expandedScript: string, totalDurationSeconds: number): ShotCandidate[] {
   const scriptBody = extractScriptBody(expandedScript);
   if (!scriptBody) {
     return [];
@@ -2283,11 +2347,14 @@ function buildShotCandidates(expandedScript: string): ShotCandidate[] {
 
   const sentences = splitScriptBody(scriptBody);
   const segments = mergeScriptSegments(sentences.length ? sentences : [scriptBody]);
+  const segmentDuration = estimateShotDuration(totalDurationSeconds, segments.length);
+  const fullDuration = normalizeDurationOption(totalDurationSeconds, 15);
   const candidates = segments.slice(0, 8).map((segment, index) => ({
     id: `candidate-${index + 1}`,
     title: `场景候选 ${index + 1}`,
     text: segment,
     preview: truncatePreview(segment),
+    durationSeconds: segmentDuration,
   }));
 
   if (candidates.length > 1) {
@@ -2296,6 +2363,7 @@ function buildShotCandidates(expandedScript: string): ShotCandidate[] {
       title: "完整扩写剧本",
       text: scriptBody,
       preview: truncatePreview(scriptBody),
+      durationSeconds: fullDuration,
     });
   }
 
@@ -2307,6 +2375,7 @@ function buildShotCandidates(expandedScript: string): ShotCandidate[] {
           title: "自定义镜头片段",
           text: scriptBody,
           preview: truncatePreview(scriptBody),
+          durationSeconds: fullDuration,
         },
       ];
 }
@@ -2543,9 +2612,9 @@ function formatUserKbSummary(router: KbRouterRuntimeResponse) {
 
 function cleanKbDisplayText(value: string) {
   return value
-    .replace(/source_register/gi, "来源内部字段")
+    .replace(/source[_-]register/gi, "来源内部字段")
     .replace(/provenance/gi, "来源内部字段")
-    .replace(/overlay JSON/gi, "内部配置")
+    .replace(/overlay\s+json/gi, "内部配置")
     .replace(/prompt_body/gi, "候选提示词")
     .replace(/teaching_note/gi, "教学说明")
     .replace(/content_cache_key/gi, "缓存标记")

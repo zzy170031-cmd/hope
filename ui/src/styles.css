@@ -688,6 +688,13 @@ textarea {
   color: var(--navy);
 }
 
+.grounding-note--compact {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  line-height: 1.28;
+}
+
 .bridge-status--compact {
   margin-top: 8px;
 }
@@ -728,9 +735,63 @@ textarea {
 }
 
 .storyboard-toolbar {
-  grid-template-columns: minmax(176px, 192px) minmax(120px, 136px) minmax(116px, 132px) minmax(152px, 176px) minmax(152px, 176px);
-  justify-content: end;
+  grid-template-columns: minmax(320px, 1fr) auto;
+  align-items: stretch;
+  justify-content: stretch;
   padding: 8px 10px;
+}
+
+.storyboard-toolbar__actions {
+  display: grid;
+  grid-template-columns: minmax(176px, 192px) minmax(120px, 136px) minmax(116px, 132px) minmax(152px, 176px) minmax(152px, 176px);
+  gap: 10px;
+  align-items: center;
+  justify-content: end;
+}
+
+.storyboard-summary-panel {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  height: 60px;
+  overflow: hidden;
+  padding: 6px 8px;
+  border: 1px solid rgba(93, 214, 220, 0.34);
+  border-radius: var(--radius-sm);
+  background: #f7ffff;
+}
+
+.storyboard-summary-panel--expanded {
+  max-height: 118px;
+  height: auto;
+  overflow: auto;
+}
+
+.storyboard-summary-empty {
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.storyboard-summary-panel .kb-router-summary {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.storyboard-summary-panel .kb-router-summary__line {
+  gap: 4px 10px;
+}
+
+.storyboard-summary-panel .kb-router-summary__detail {
+  max-height: 44px;
+  margin-top: 4px;
+}
+
+.storyboard-summary-panel .grounding-note {
+  margin: 0;
 }
 
 .duration-select {
@@ -1301,6 +1362,12 @@ textarea {
   -webkit-line-clamp: 3;
 }
 
+.shot-candidate small {
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .task-queue {
   display: grid;
   gap: 8px;
@@ -1351,7 +1418,8 @@ textarea {
   font-weight: 700;
 }
 
-.task-draft-editor input {
+.task-draft-editor input,
+.task-draft-editor select {
   height: var(--control-height);
   padding: 0 14px;
 }
@@ -1484,6 +1552,12 @@ textarea {
   .storyboard-toolbar,
   .export-actions {
     justify-content: flex-start;
+  }
+
+  .storyboard-toolbar__actions {
+    grid-template-columns: 1fr;
+    width: 100%;
+    justify-content: stretch;
   }
 
   .top-modal-backdrop {
