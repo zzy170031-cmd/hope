@@ -24,15 +24,15 @@ use core_domain::{
     UpdateStoryboardRowsRequest, UpdateStoryboardShotResultRequest,
     UpdateStoryboardShotResultResponse,
 };
-use export_engine::{export_v120_storyboard_bundle, V120StoryboardExportRequest};
+use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
 use validators::{
+    RepairRecommendation, WEEK3_SHARED_FIXTURE_PATH, Week3SharedFixture,
     generate_week3_repair_recommendations, generate_week3_validation_report,
-    load_week3_shared_fixture, project_v120_evidence_aware_findings, RepairRecommendation,
-    Week3SharedFixture, WEEK3_SHARED_FIXTURE_PATH,
+    load_week3_shared_fixture, project_v120_evidence_aware_findings,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +143,10 @@ struct ShotGroundedRowDraft {
 }
 
 const STORYBOARD_DURATION_SOURCE: &str = "storyboard_duration_plan.allocated_row_duration_seconds";
+const DEFAULT_EXPAND_SCRIPT_DURATION_SECONDS: u16 = 30;
+const SEEDANCE_STANDARD_SEGMENT_SECONDS: u16 = 10;
+const SEEDANCE_REMAINDER_SEGMENT_SECONDS: u16 = 5;
+const SEEDANCE_MAX_SEGMENT_SECONDS: u16 = 15;
 
 const FINALIZED_BANK_FORBIDDEN_TERMS: &[&str] = &[
     "raw prompt_body",
@@ -193,10 +197,11 @@ struct QwenUsage {
 pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandScriptResponse {
     let mut blockers = Vec::new();
     let normalized_scene_type = normalize_scene_type(&request.scene_type);
+    let target_duration_seconds = resolve_expand_script_target_duration_seconds(&request);
     let router_request = KbRouterRuntimeRequest {
         scene_type: normalized_scene_type.clone(),
         synopsis_text: request.synopsis_text.clone(),
-        duration_seconds: 0,
+        duration_seconds: target_duration_seconds,
         task_type: KbRouterTaskType::ExpandScript,
         primary_scene_type: Some(normalized_scene_type.clone()),
         primary_scene_label: Some(request.scene_type.clone()),
@@ -241,9 +246,10 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
     }
 
     let script_hash = stable_hash_hex(&format!(
-        "{}\n{}",
+        "{}\n{}\n{}",
         normalized_scene_type,
-        request.synopsis_text.trim()
+        request.synopsis_text.trim(),
+        target_duration_seconds
     ));
     let script_id = format!("script-{}", &script_hash[..12]);
 
@@ -253,7 +259,12 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
         TextGenerationTask::ExpandScript,
         Some(normalized_scene_type.clone()),
         request.synopsis_text.trim().to_string(),
-        None,
+        Some(StoryboardDurationPlan {
+            total_duration_seconds: target_duration_seconds,
+            row_count: 0,
+            per_row_seconds: SEEDANCE_STANDARD_SEGMENT_SECONDS,
+            allocated_seconds: target_duration_seconds,
+        }),
         kb_router_result.kb_context_summary.clone(),
         kb_router_result.selected_sample_ids.clone(),
         kb_router_result
@@ -301,6 +312,7 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
                     &normalized_scene_type,
                     request.synopsis_text.trim(),
                     &state.kb_golden_sample_runtime.manifest.snapshot_name,
+                    target_duration_seconds,
                 )
             }
         }
@@ -316,6 +328,7 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
             &normalized_scene_type,
             request.synopsis_text.trim(),
             &state.kb_golden_sample_runtime.manifest.snapshot_name,
+            target_duration_seconds,
         )
     };
     let status = if warnings.is_empty() {
@@ -444,39 +457,38 @@ pub fn generate_storyboard(
             &state.kb_runtime,
         );
     }
-    let row_count = selected_records.len().max(1);
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
-    let row_durations =
-        match allocate_storyboard_row_durations(request.selected_total_duration_seconds, row_count)
-        {
-            Some(durations) => durations,
-            None => {
-                return blocked_storyboard_response(
-                    None,
-                    request.selected_total_duration_seconds,
-                    vec![ProductWarning {
-                        code: "duration_allocation_failed".to_string(),
-                        message: "镜头时长分配失败，无法生成满足总时长守恒的分镜。".to_string(),
-                        related_sample_id: None,
-                    }],
-                    now_ms,
-                    &router_request,
-                    &state.kb_runtime,
-                );
-            }
-        };
+    let row_durations = match allocate_storyboard_row_durations(
+        request.selected_total_duration_seconds,
+        selected_records.len().max(1),
+    ) {
+        Some(durations) => durations,
+        None => {
+            return blocked_storyboard_response(
+                None,
+                request.selected_total_duration_seconds,
+                vec![ProductWarning {
+                    code: "duration_allocation_failed".to_string(),
+                    message: "镜头时长分配失败，无法生成满足总时长守恒的分镜。".to_string(),
+                    related_sample_id: None,
+                }],
+                now_ms,
+                &router_request,
+                &state.kb_runtime,
+            );
+        }
+    };
+    let row_count = row_durations.len();
     let provider = default_text_model_provider();
     let generation_request = build_text_generation_request(
         TextGenerationTask::GenerateStoryboard,
         Some(grounding.shot_scene_type.clone()),
         build_storyboard_model_story_input(&grounding),
-        Some(StoryboardDurationPlan {
-            total_duration_seconds: request.selected_total_duration_seconds,
-            row_count: row_count as u32,
-            per_row_seconds: (request.selected_total_duration_seconds / row_count as u16).max(1),
-            allocated_seconds: request.selected_total_duration_seconds,
-        }),
+        Some(build_storyboard_duration_plan(
+            request.selected_total_duration_seconds,
+            &row_durations,
+        )),
         kb_router_result.kb_context_summary.clone(),
         kb_router_result.selected_sample_ids.clone(),
         kb_router_result
@@ -664,7 +676,7 @@ pub fn generate_storyboard(
         duration_plan: StoryboardDurationPlan {
             total_duration_seconds: request.selected_total_duration_seconds,
             row_count: row_count as u32,
-            per_row_seconds: (allocated_seconds / row_count as u16).max(1),
+            per_row_seconds: planned_per_row_seconds(&row_durations),
             allocated_seconds,
         },
         export_status: StoryboardExportStatus {
@@ -1935,13 +1947,9 @@ pub fn split_script_to_shot_tasks(
     request: SplitScriptToShotTasksRequest,
 ) -> SplitScriptToShotTasksResponse {
     let source_segments = split_story_segments(&request.expanded_script_text);
-    let shot_count = request
-        .shot_count_hint
-        .map(|value| value.max(1) as usize)
-        .unwrap_or_else(|| source_segments.len().clamp(1, 8));
-    let durations =
-        allocate_storyboard_row_durations(request.selected_total_duration_seconds, shot_count)
-            .unwrap_or_else(|| vec![request.selected_total_duration_seconds]);
+    let durations = allocate_storyboard_row_durations(request.selected_total_duration_seconds, 0)
+        .unwrap_or_else(|| vec![request.selected_total_duration_seconds]);
+    let shot_count = durations.len();
     let mut shot_tasks = Vec::new();
     let script_hash = stable_hash_hex(&format!(
         "{}\n{}\n{}",
@@ -1951,10 +1959,12 @@ pub fn split_script_to_shot_tasks(
     ));
 
     for index in 0..shot_count {
-        let shot_script = source_segments
-            .get(index)
-            .cloned()
-            .unwrap_or_else(|| request.expanded_script_text.trim().to_string());
+        let shot_script = story_segment_for_planned_row(
+            &source_segments,
+            index,
+            shot_count,
+            &request.expanded_script_text,
+        );
         let primary_scene_type = request.primary_scene_type.clone();
         let shot_scene_type = infer_shot_scene_type(&shot_script, &primary_scene_type);
         let adaptation_reason = if shot_scene_type == primary_scene_type {
@@ -2090,10 +2100,8 @@ fn build_shot_grounded_row_draft(
     _record: Option<&GoldenSampleLibraryRecord>,
 ) -> ShotGroundedRowDraft {
     let segments = split_story_segments(&grounding.grounding_text);
-    let segment = segments
-        .get(index)
-        .cloned()
-        .unwrap_or_else(|| grounding.grounding_text.trim().to_string());
+    let segment =
+        story_segment_for_planned_row(&segments, index, row_count, &grounding.grounding_text);
     let shot_id = format!(
         "shot-task-{}-{:02}",
         &stable_hash_hex(&format!(
@@ -2105,12 +2113,14 @@ fn build_shot_grounded_row_draft(
     let person = derive_product_person(&segment, &grounding.grounding_text);
     let scene_scale = derive_shot_scene_scale(&segment);
     let character_action = derive_character_action_from_story(&segment, &grounding.grounding_text);
-    let shot_title = derive_shot_title(index, &segment, &character_action);
+    let shot_title = derive_shot_title(index, &segment, &person, &character_action);
     let dialogue = extract_dialogue_from_story(&segment);
     let visual_description = if segment.trim().is_empty() {
-        "当前镜头按已确认镜头脚本推进。".to_string()
-    } else {
+        format!("{person}按已确认镜头脚本推进，画面保持主体和动作关系清晰。")
+    } else if segment.contains(&person) || subject_label_mentions_any_name(&person, &segment) {
         segment.trim().to_string()
+    } else {
+        format!("{person}：{}", segment.trim())
     };
     let sequence_grouping = SequenceGrouping {
         structure_mode: StructureMode::SingleShot,
@@ -2253,6 +2263,33 @@ fn split_story_segments(text: &str) -> Vec<String> {
         .collect()
 }
 
+fn story_segment_for_planned_row(
+    segments: &[String],
+    index: usize,
+    planned_rows: usize,
+    fallback_text: &str,
+) -> String {
+    if segments.is_empty() || planned_rows == 0 {
+        return fallback_text.trim().to_string();
+    }
+    if segments.len() <= planned_rows {
+        return segments
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| fallback_text.trim().to_string());
+    }
+
+    let start = index * segments.len() / planned_rows;
+    let mut end = (index + 1) * segments.len() / planned_rows;
+    if index + 1 == planned_rows {
+        end = segments.len();
+    }
+    if start >= end || start >= segments.len() {
+        return fallback_text.trim().to_string();
+    }
+    segments[start..end.min(segments.len())].join("。")
+}
+
 fn infer_shot_scene_type(text: &str, primary_scene_type: &str) -> String {
     if contains_any_story_term(
         text,
@@ -2310,16 +2347,128 @@ fn build_adaptation_reason(text: &str, shot_scene_type: &str) -> String {
     }
 }
 
-fn derive_product_person(segment: &str, full_text: &str) -> String {
-    if contains_any_story_term(segment, &["掌心", "银辉", "觉醒"]) {
-        "觉醒者".to_string()
-    } else if contains_any_story_term(segment, &["震退", "七步"]) {
-        "被震退者".to_string()
-    } else if contains_any_story_term(full_text, &["格挡", "交锋", "震退"]) {
-        "交锋双方".to_string()
-    } else {
-        "当前镜头主体".to_string()
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CharacterMention {
+    name: String,
+    role: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CharacterRegistry {
+    characters: Vec<CharacterMention>,
+}
+
+impl CharacterRegistry {
+    fn from_story_text(segment: &str, full_text: &str) -> Self {
+        let mut registry = Self { characters: vec![] };
+        registry.extend_from_text(full_text);
+        registry.extend_from_text(segment);
+        registry
     }
+
+    fn extend_from_text(&mut self, text: &str) {
+        for role in [
+            "男主", "女主", "主角", "少年", "敌将", "反派", "敌人", "对手",
+        ] {
+            for (start, _) in text.match_indices(role) {
+                let after_role = &text[start + role.len()..];
+                if let Some(name) = extract_character_name_after_role(after_role) {
+                    self.push(role, &name);
+                }
+            }
+        }
+    }
+
+    fn push(&mut self, role: &str, name: &str) {
+        if self.characters.iter().any(|item| item.name == name) {
+            return;
+        }
+        self.characters.push(CharacterMention {
+            name: name.to_string(),
+            role: role.to_string(),
+        });
+    }
+
+    fn is_empty(&self) -> bool {
+        self.characters.is_empty()
+    }
+
+    fn names_in_text(&self, text: &str) -> Vec<String> {
+        self.characters
+            .iter()
+            .filter(|character| text.contains(&character.name))
+            .map(|character| character.name.clone())
+            .collect()
+    }
+
+    fn protagonist_name(&self) -> Option<&str> {
+        self.characters
+            .iter()
+            .find(|character| contains_any_story_term(&character.role, &["男主", "主角", "少年"]))
+            .or_else(|| {
+                self.characters
+                    .iter()
+                    .find(|character| !is_antagonist_role(&character.role))
+            })
+            .map(|character| character.name.as_str())
+    }
+
+    fn heroine_name(&self) -> Option<&str> {
+        self.characters
+            .iter()
+            .find(|character| character.role.contains("女主"))
+            .map(|character| character.name.as_str())
+    }
+
+    fn antagonist_name(&self) -> Option<&str> {
+        self.characters
+            .iter()
+            .find(|character| is_antagonist_role(&character.role))
+            .map(|character| character.name.as_str())
+    }
+}
+
+fn derive_product_person(segment: &str, full_text: &str) -> String {
+    let registry = CharacterRegistry::from_story_text(segment, full_text);
+    if !registry.is_empty() {
+        let active_names = registry.names_in_text(segment);
+        if !active_names.is_empty() {
+            return subject_label_from_names(&active_names);
+        }
+
+        if contains_any_story_term(segment, &["护住", "护着", "回身", "重逢"]) {
+            if let (Some(heroine), Some(protagonist)) =
+                (registry.heroine_name(), registry.protagonist_name())
+            {
+                return subject_label_from_names(&[heroine.to_string(), protagonist.to_string()]);
+            }
+        }
+
+        if contains_enemy_or_conflict_terms(segment) {
+            if let (Some(protagonist), Some(antagonist)) =
+                (registry.protagonist_name(), registry.antagonist_name())
+            {
+                return subject_label_from_names(&[
+                    protagonist.to_string(),
+                    antagonist.to_string(),
+                ]);
+            }
+        }
+
+        if let Some(protagonist) = registry.protagonist_name() {
+            return protagonist.to_string();
+        }
+
+        return subject_label_from_names(
+            &registry
+                .characters
+                .iter()
+                .map(|character| character.name.clone())
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    derive_fallback_subject(segment, full_text)
 }
 
 fn derive_shot_scene_scale(segment: &str) -> String {
@@ -2340,37 +2489,335 @@ fn derive_character_action_from_story(segment: &str, full_text: &str) -> String 
     } else {
         segment
     };
-    if contains_any_story_term(source, &["掌心银辉", "银辉觉醒", "沿手臂上升", "觉醒"])
-    {
-        "觉醒者从格挡后的短暂停滞开始，将掌心朝向当前对手，银辉自掌心亮起并沿手臂上升，到力量完全爬上前臂时结束，镜头捕捉银辉开始蔓延的觉醒瞬间。"
-            .to_string()
-    } else if contains_any_story_term(source, &["震退七步", "震退"]) {
-        "交锋双方从正面相抵的僵持状态开始，防守者以格挡余力反震当前对手，将对手震退七步，到对手脚步失衡后撤时结束，镜头捕捉第一步被震开的瞬间。"
-            .to_string()
-    } else if contains_any_story_term(source, &["焦土犁痕", "焦土", "犁痕"]) {
-        "被震退者从后撤失衡开始，双脚顶住焦土仍被冲击推远，在地面犁出焦黑拖痕，到身体重新找回重心时结束，镜头捕捉脚跟划开焦土的瞬间。"
-            .to_string()
-    } else if contains_any_story_term(source, &["心跳", "低频鼓点", "鼓点", "低频"]) {
-        "当前镜头主体从战斗后的凝滞呼吸开始，胸口随心跳和低频鼓点压低起伏，面向当前对手重新蓄力，到下一次爆发前的停顿时结束，镜头捕捉心跳压住全场节奏的瞬间。"
-            .to_string()
-    } else if contains_any_story_term(source, &["格挡", "交锋", "战", "击"]) {
-        "交锋双方从迎面冲突开始，前景角色抬臂格挡当前对手的攻击，以稳住重心的姿态抵住冲击，到攻防短暂相持时结束，镜头捕捉格挡接触的关键瞬间。"
-            .to_string()
-    } else {
-        "当前镜头主体从上一动作余势中开始，面向当前对手或环境完成待明确的可见状态转变，到下一拍动作蓄势完成时结束，镜头捕捉状态发生变化的瞬间。"
-            .to_string()
+    let registry = CharacterRegistry::from_story_text(source, full_text);
+    let subject = derive_product_person(source, full_text);
+    let target = derive_action_target(&registry, &subject, source, full_text);
+    let start_state = derive_action_start_state(source);
+    let action = derive_visible_action(source, &subject, &target);
+    let end_state = derive_action_end_state(source);
+    let captured_moment = derive_captured_moment(source);
+
+    format!(
+        "{subject}从{start_state}开始，{action}，到{end_state}时结束，镜头捕捉{captured_moment}。"
+    )
+}
+
+fn derive_shot_title(index: usize, segment: &str, person: &str, character_action: &str) -> String {
+    let action_core = derive_shot_title_action_core(segment, character_action);
+    format!("镜头{}：{}{}", index + 1, person, action_core)
+}
+
+fn extract_character_name_after_role(text: &str) -> Option<String> {
+    let mut name = String::new();
+    for character in text.chars().skip_while(|character| {
+        character.is_whitespace() || matches!(character, '：' | ':' | '，' | ',' | '、')
+    }) {
+        if is_character_name_stop(character) {
+            break;
+        }
+        if !is_cjk_unified_ideograph(character) {
+            break;
+        }
+        name.push(character);
+        if name.chars().count() >= 3 {
+            break;
+        }
+    }
+
+    (name.chars().count() >= 2).then_some(name)
+}
+
+fn is_character_name_stop(character: char) -> bool {
+    character.is_whitespace()
+        || matches!(
+            character,
+            '，' | '。'
+                | '、'
+                | '；'
+                | '：'
+                | ','
+                | '.'
+                | ';'
+                | ':'
+                | '！'
+                | '？'
+                | '!'
+                | '?'
+                | '和'
+                | '与'
+                | '跟'
+                | '同'
+                | '及'
+                | '在'
+                | '从'
+                | '向'
+                | '对'
+                | '被'
+                | '把'
+                | '将'
+                | '追'
+                | '护'
+                | '回'
+                | '稳'
+                | '抬'
+                | '踏'
+                | '挡'
+                | '格'
+                | '冲'
+                | '握'
+                | '站'
+                | '转'
+                | '看'
+                | '走'
+                | '跑'
+                | '挥'
+                | '举'
+                | '落'
+                | '借'
+                | '用'
+                | '让'
+                | '完'
+                | '压'
+                | '逼'
+                | '提'
+                | '劈'
+                | '后'
+                | '前'
+                | '中'
+                | '上'
+                | '下'
+                | '里'
+                | '内'
+                | '外'
+                | '边'
+                | '而'
+                | '到'
+                | '为'
+                | '以'
+                | '并'
+                | '的'
+                | '了'
+        )
+}
+
+fn is_cjk_unified_ideograph(character: char) -> bool {
+    ('\u{4e00}'..='\u{9fff}').contains(&character)
+}
+
+fn is_antagonist_role(role: &str) -> bool {
+    contains_any_story_term(role, &["敌将", "反派", "敌人", "对手"])
+}
+
+fn subject_label_from_names(names: &[String]) -> String {
+    let mut unique_names = Vec::new();
+    for name in names {
+        if !unique_names.contains(name) {
+            unique_names.push(name.clone());
+        }
+    }
+
+    match unique_names.as_slice() {
+        [] => "主角".to_string(),
+        [single] => single.clone(),
+        [first, second] => format!("{first}与{second}"),
+        [first, second, third, ..] => format!("{first}、{second}与{third}"),
     }
 }
 
-fn derive_shot_title(index: usize, segment: &str, character_action: &str) -> String {
-    let title_core = story_anchor_terms(segment)
-        .into_iter()
-        .take(2)
-        .collect::<Vec<_>>();
-    if title_core.is_empty() {
-        format!("镜头{}：{}", index + 1, character_action)
+fn contains_enemy_or_conflict_terms(text: &str) -> bool {
+    contains_any_story_term(
+        text,
+        &[
+            "敌方刀客",
+            "敌人",
+            "敌将",
+            "反派",
+            "对手",
+            "刀客",
+            "追杀",
+            "压近",
+            "逼近",
+            "格挡",
+            "交锋",
+            "刀锋",
+            "攻击",
+            "迎敌",
+        ],
+    )
+}
+
+fn derive_fallback_subject(segment: &str, full_text: &str) -> String {
+    let combined = format!("{segment} {full_text}");
+    let has_main = contains_any_story_term(&combined, &["主角", "男主", "女主", "少年"]);
+    let has_enemy = contains_enemy_or_conflict_terms(&combined);
+    let enemy_label = if combined.contains("刀客") {
+        "敌方刀客"
     } else {
-        format!("镜头{}：{}", index + 1, title_core.join(""))
+        "对立人物"
+    };
+
+    if contains_any_story_term(&combined, &["群像", "众人", "队伍"]) {
+        "群像角色".to_string()
+    } else if has_main && has_enemy {
+        format!("主角与{enemy_label}")
+    } else if has_enemy {
+        enemy_label.to_string()
+    } else if has_main {
+        "主角".to_string()
+    } else {
+        "目标人物".to_string()
+    }
+}
+
+fn subject_label_mentions_any_name(subject: &str, text: &str) -> bool {
+    subject
+        .split(|character| matches!(character, '与' | '、'))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .any(|value| text.contains(value))
+}
+
+fn derive_action_target(
+    registry: &CharacterRegistry,
+    subject: &str,
+    segment: &str,
+    full_text: &str,
+) -> String {
+    if contains_any_story_term(segment, &["重逢"]) {
+        return "彼此".to_string();
+    }
+    if contains_any_story_term(segment, &["护住", "护着"]) {
+        if let Some(protagonist) = registry.protagonist_name() {
+            return protagonist.to_string();
+        }
+        return "被保护者".to_string();
+    }
+    if let (Some(protagonist), Some(antagonist)) =
+        (registry.protagonist_name(), registry.antagonist_name())
+    {
+        if subject.contains(protagonist) && subject.contains(antagonist) {
+            return "彼此".to_string();
+        }
+    }
+    if let Some(antagonist) = registry.antagonist_name() {
+        if !subject.contains(antagonist) {
+            return antagonist.to_string();
+        }
+    }
+    if let Some(protagonist) = registry.protagonist_name() {
+        if !subject.contains(protagonist) {
+            return protagonist.to_string();
+        }
+    }
+    if let Some(heroine) = registry.heroine_name() {
+        if !subject.contains(heroine) {
+            return heroine.to_string();
+        }
+    }
+
+    let combined = format!("{segment} {full_text}");
+    if subject.contains("敌方刀客") || subject.contains("对立人物") {
+        "主角".to_string()
+    } else if combined.contains("刀客") {
+        "敌方刀客".to_string()
+    } else if contains_enemy_or_conflict_terms(&combined) {
+        "对立人物".to_string()
+    } else if subject.contains('与') || subject.contains('、') {
+        "彼此".to_string()
+    } else {
+        "目标人物".to_string()
+    }
+}
+
+fn derive_action_start_state(source: &str) -> &'static str {
+    if contains_any_story_term(source, &["焦土", "裂痕", "犁痕"]) {
+        "焦土裂痕边缘稳住身体"
+    } else if contains_any_story_term(source, &["断桥", "重逢"]) {
+        "断桥残口确认彼此位置"
+    } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
+        "断桥远端压低重心"
+    } else if contains_any_story_term(source, &["格挡", "刀锋", "攻击"]) {
+        "迎面冲击前的半步停顿"
+    } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) {
+        "格挡后的短暂停滞"
+    } else {
+        "上一动作落点稳定身体"
+    }
+}
+
+fn derive_visible_action(source: &str, subject: &str, target: &str) -> String {
+    if contains_any_story_term(source, &["重逢"]) {
+        format!("{subject}在断桥残口向{target}靠近，确认对方安全并重新建立站位")
+    } else if contains_any_story_term(source, &["护住", "护着", "回身"]) {
+        format!("{subject}回身护住{target}，用身体挡住逼近的威胁")
+    } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
+        format!("{subject}提刀逼向{target}，把对方压向断桥边缘")
+    } else if contains_any_story_term(source, &["格挡", "刀锋", "攻击", "交锋"]) {
+        format!("{subject}迎着{target}的冲击抬臂格挡，让银辉与刀锋正面相撞")
+    } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) {
+        format!("{subject}将掌心朝向{target}，让银辉沿手臂上升并压住对方攻势")
+    } else if contains_any_story_term(source, &["震退", "七步"]) {
+        format!("{subject}借格挡余力反震{target}，把对方逼到脚步失衡")
+    } else {
+        format!("{subject}面向{target}完成清晰可见的状态转变并接上下一拍动作")
+    }
+}
+
+fn derive_action_end_state(source: &str) -> &'static str {
+    if contains_any_story_term(source, &["重逢"]) {
+        "两人重新并肩"
+    } else if contains_any_story_term(source, &["护住", "护着"]) {
+        "被保护者退到安全半步"
+    } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
+        "目标被逼到断桥边缘"
+    } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) {
+        "银辉完全爬上前臂"
+    } else if contains_any_story_term(source, &["震退", "七步"]) {
+        "对方脚步失衡后撤"
+    } else if contains_any_story_term(source, &["格挡", "刀锋", "攻击", "交锋"]) {
+        "攻防短暂相持"
+    } else {
+        "下一拍动作蓄势完成"
+    }
+}
+
+fn derive_captured_moment(source: &str) -> &'static str {
+    if contains_any_story_term(source, &["重逢"]) {
+        "两人视线重新对上的一瞬间"
+    } else if contains_any_story_term(source, &["护住", "护着"]) {
+        "身体挡住威胁的一瞬间"
+    } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
+        "刀锋压入断桥空间的一瞬间"
+    } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) {
+        "银辉开始蔓延的一瞬间"
+    } else if contains_any_story_term(source, &["震退", "七步"]) {
+        "第一步被震开的瞬间"
+    } else if contains_any_story_term(source, &["格挡", "刀锋", "攻击", "交锋"]) {
+        "银辉与刀刃相撞的一瞬间"
+    } else {
+        "状态发生变化的一瞬间"
+    }
+}
+
+fn derive_shot_title_action_core(segment: &str, character_action: &str) -> &'static str {
+    if contains_any_story_term(segment, &["重逢"]) {
+        "断桥重逢"
+    } else if contains_any_story_term(segment, &["护住", "护着", "回身"]) {
+        "回身护人"
+    } else if contains_any_story_term(segment, &["追杀", "压近", "逼近"]) {
+        "压近断桥"
+    } else if contains_any_story_term(segment, &["掌心", "银辉", "觉醒"]) {
+        "银辉觉醒"
+    } else if contains_any_story_term(segment, &["震退", "七步"]) {
+        "震退对手"
+    } else if contains_any_story_term(segment, &["焦土", "裂痕"]) {
+        "踏碎焦土"
+    } else if contains_any_story_term(segment, &["格挡", "刀锋", "攻击", "交锋"]) {
+        "踏步格挡"
+    } else if character_action.contains("镜头捕捉") {
+        "完成关键动作"
+    } else {
+        "推进当前动作"
     }
 }
 
@@ -2708,7 +3155,7 @@ fn build_qwen_request_payload(
     };
     let system_prompt = "You are Hope's controlled text-generation layer. Ground storyboard output in shot_script first, then expanded_script_text, then primary scene fields, and only then compressed KB context. Never invent real director names, IP names, brand names, or external asset bindings. Do not expand to full KB rows.";
     let user_prompt = format!(
-        "task_type={:?}\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema={}\nconstraints=shot_script is authoritative when present; KB samples are summary-only references and must not replace current story; keep total duration conserved; do not emit full KB; do not emit raw prompt_body as final prompt_text; do not use real director/IP/brand names.",
+        "task_type={:?}\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema={}\nconstraints=for expand_script, write to the requested duration_seconds; for storyboard, each row must use a Seedance-friendly duration from the duration plan; shot_script is authoritative when present; KB samples are summary-only references and must not replace current story; keep total duration conserved; do not emit full KB; do not emit raw prompt_body as final prompt_text; do not use real director/IP/brand names.",
         request.task_type,
         scene_type,
         duration_seconds,
@@ -2822,6 +3269,40 @@ fn provider_kind_label(kind: TextModelProviderKind) -> &'static str {
     }
 }
 
+fn resolve_expand_script_target_duration_seconds(request: &ExpandScriptRequest) -> u16 {
+    request
+        .target_duration_seconds
+        .or_else(|| infer_duration_seconds_from_text(&request.synopsis_text))
+        .filter(|duration| is_supported_storyboard_duration(*duration))
+        .unwrap_or(DEFAULT_EXPAND_SCRIPT_DURATION_SECONDS)
+}
+
+fn infer_duration_seconds_from_text(text: &str) -> Option<u16> {
+    let chars = text.chars().collect::<Vec<_>>();
+    for index in 0..chars.len() {
+        if !chars[index].is_ascii_digit() {
+            continue;
+        }
+        let end = chars[index..]
+            .iter()
+            .position(|character| !character.is_ascii_digit())
+            .map(|offset| index + offset)
+            .unwrap_or(chars.len());
+        let value = chars[index..end]
+            .iter()
+            .collect::<String>()
+            .parse::<u16>()
+            .ok()?;
+        let suffix = chars[end..chars.len().min(end + 2)]
+            .iter()
+            .collect::<String>();
+        if suffix.starts_with('秒') || suffix.to_ascii_lowercase().starts_with('s') {
+            return Some(value);
+        }
+    }
+    None
+}
+
 fn validate_generated_script_text(text: &str) -> Option<&str> {
     let trimmed = text.trim();
     if trimmed.is_empty() || contains_forbidden_generation_terms(trimmed) {
@@ -2891,10 +3372,12 @@ fn validate_storyboard_rows(
     }
     for row in rows {
         for (field_name, field_value) in [
+            ("person", row.person.as_str()),
             ("shot_title", row.shot_title.as_str()),
             ("scene_scale", row.scene_scale.as_str()),
             ("visual_description", row.visual_description.as_str()),
             ("character_action", row.character_action.as_str()),
+            ("prompt_text", row.prompt_text.as_str()),
         ] {
             if field_value.trim().is_empty() {
                 findings.push(ProductWarning {
@@ -2928,6 +3411,26 @@ fn validate_storyboard_rows(
                     code: "internal_field_code_leaked".to_string(),
                     message: format!(
                         "Storyboard row {} includes an internal code in {}.",
+                        row.shot_id, field_name
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
+            if contains_any_story_term(
+                field_value,
+                &[
+                    "交锋双方",
+                    "当前镜头主体",
+                    "未指定角色",
+                    "按当前镜头脚本执行关键动作",
+                    "执行关键动作",
+                    "保持连续性",
+                ],
+            ) {
+                findings.push(ProductWarning {
+                    code: "role_action_grounding_incomplete".to_string(),
+                    message: format!(
+                        "Storyboard row {} includes vague product wording in {}.",
                         row.shot_id, field_name
                     ),
                     related_sample_id: Some(row.prompt_text_source_row_id.clone()),
@@ -2973,7 +3476,19 @@ fn is_role_action_grounding_incomplete(value: &str) -> bool {
     !(trimmed.contains("从")
         && trimmed.contains("到")
         && trimmed.contains("镜头捕捉")
-        && (trimmed.contains("对手") || trimmed.contains("环境") || trimmed.contains("全场")))
+        && (trimmed.contains("对手")
+            || trimmed.contains("环境")
+            || trimmed.contains("全场")
+            || trimmed.contains("迎着")
+            || trimmed.contains("面向")
+            || trimmed.contains("逼向")
+            || trimmed.contains("护住")
+            || trimmed.contains("朝向")
+            || trimmed.contains("彼此")
+            || trimmed.contains("敌方刀客")
+            || trimmed.contains("对立人物")
+            || trimmed.contains("目标人物")
+            || trimmed.contains("被保护者")))
 }
 
 fn contains_forbidden_generation_terms(text: &str) -> bool {
@@ -2994,11 +3509,40 @@ fn deterministic_expanded_script_text(
     normalized_scene_type: &str,
     synopsis_text: &str,
     snapshot_name: &str,
+    target_duration_seconds: u16,
 ) -> String {
-    format!(
-        "scene_type: {}\nsynopsis: {}\nsource_package: {}",
-        normalized_scene_type, synopsis_text, snapshot_name
-    )
+    let beat_count = match target_duration_seconds {
+        0..=15 => 2,
+        16..=30 => 3,
+        31..=45 => 5,
+        _ => 6,
+    };
+    let seconds_per_beat = (target_duration_seconds / beat_count).max(1);
+    let mut lines = vec![
+        format!("scene_type: {normalized_scene_type}"),
+        format!("target_duration_seconds: {target_duration_seconds}"),
+        format!("synopsis: {}", synopsis_text.trim()),
+        format!("source_package: {snapshot_name}"),
+        format!(
+            "扩写剧本：按{target_duration_seconds}秒连续剧情处理，保留真实人物名、主体关系、动作对象和清晰起承转合。"
+        ),
+    ];
+
+    for index in 0..beat_count {
+        let beat_no = index + 1;
+        let start_second = index as u16 * seconds_per_beat;
+        let end_second = if beat_no == beat_count {
+            target_duration_seconds
+        } else {
+            ((index as u16 + 1) * seconds_per_beat).min(target_duration_seconds)
+        };
+        lines.push(format!(
+            "段落{beat_no}（约{start_second}-{end_second}秒）：{}；人物从上一段状态接续，明确谁面对谁、做什么动作、情绪和空间如何变化，并为下一段留下可见承接。",
+            synopsis_text.trim()
+        ));
+    }
+
+    lines.join("\n")
 }
 
 fn build_prompt_text_compilation_request(
@@ -3380,32 +3924,62 @@ fn extract_synopsis_text(script_text: &str) -> String {
 }
 
 fn is_supported_storyboard_duration(duration_seconds: u16) -> bool {
-    matches!(duration_seconds, 5 | 10 | 15 | 30 | 45 | 60)
+    (5..=60).contains(&duration_seconds)
+        && duration_seconds % SEEDANCE_REMAINDER_SEGMENT_SECONDS == 0
 }
 
 fn allocate_storyboard_row_durations(
     total_duration_seconds: u16,
-    row_count: usize,
+    _row_count: usize,
 ) -> Option<Vec<u16>> {
-    if row_count == 0 || !is_supported_storyboard_duration(total_duration_seconds) {
+    if !is_supported_storyboard_duration(total_duration_seconds) {
         return None;
     }
 
-    let base = total_duration_seconds / row_count as u16;
-    if base == 0 {
+    let mut remaining = total_duration_seconds;
+    let mut durations = Vec::new();
+    while remaining >= SEEDANCE_STANDARD_SEGMENT_SECONDS {
+        durations.push(SEEDANCE_STANDARD_SEGMENT_SECONDS);
+        remaining -= SEEDANCE_STANDARD_SEGMENT_SECONDS;
+    }
+    if remaining == SEEDANCE_REMAINDER_SEGMENT_SECONDS {
+        durations.push(SEEDANCE_REMAINDER_SEGMENT_SECONDS);
+    } else if remaining != 0 {
         return None;
     }
 
-    let mut durations = vec![base; row_count];
-    let mut remainder = total_duration_seconds % row_count as u16;
-    let mut index = 0usize;
-    while remainder > 0 {
-        durations[index] += 1;
-        remainder -= 1;
-        index = (index + 1) % row_count;
+    if durations.is_empty()
+        || durations
+            .iter()
+            .any(|duration| *duration == 0 || *duration > SEEDANCE_MAX_SEGMENT_SECONDS)
+    {
+        return None;
     }
 
     (durations.iter().copied().sum::<u16>() == total_duration_seconds).then_some(durations)
+}
+
+fn build_storyboard_duration_plan(
+    total_duration_seconds: u16,
+    durations: &[u16],
+) -> StoryboardDurationPlan {
+    StoryboardDurationPlan {
+        total_duration_seconds,
+        row_count: durations.len() as u32,
+        per_row_seconds: planned_per_row_seconds(durations),
+        allocated_seconds: durations.iter().copied().sum(),
+    }
+}
+
+fn planned_per_row_seconds(durations: &[u16]) -> u16 {
+    if durations
+        .iter()
+        .any(|duration| *duration == SEEDANCE_STANDARD_SEGMENT_SECONDS)
+    {
+        SEEDANCE_STANDARD_SEGMENT_SECONDS
+    } else {
+        durations.first().copied().unwrap_or_default()
+    }
 }
 
 fn serialize_storyboard_rows(rows: &[GeneratedStoryboardRow]) -> String {
@@ -3684,19 +4258,20 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        build_prompt_text_compilation_request, build_qwen_request_payload,
-        build_storyboard_preview_plan, build_text_generation_request,
+        SEEDANCE_STANDARD_SEGMENT_SECONDS, StoryboardPreviewPlanRequest,
+        ValidationExportPanelSnapshotRequest, ValidationExportPanelState,
+        allocate_storyboard_row_durations, build_prompt_text_compilation_request,
+        build_qwen_request_payload, build_storyboard_preview_plan, build_text_generation_request,
         build_validation_export_panel_snapshot_from_fixture, compile_seedance_prompt_text,
         default_text_model_provider, expand_script, export_bundle, export_storyboard_bank,
         generate_storyboard, list_storyboard_shot_results, project_scene_performance,
         remove_storyboard_shot_result, resolve_scene_taxonomy, run_kb_router,
         run_qwen_text_generation_with_transport, save_storyboard_rows, save_storyboard_shot_result,
         select_golden_sample_records, serialize_storyboard_rows, stable_hash_hex,
-        update_storyboard_shot_result, StoryboardPreviewPlanRequest,
-        ValidationExportPanelSnapshotRequest, ValidationExportPanelState,
+        subject_label_mentions_any_name, update_storyboard_shot_result,
     };
     use crate::state::AppState;
-    use validators::{load_week3_shared_fixture, WEEK3_SHARED_FIXTURE_PATH};
+    use validators::{WEEK3_SHARED_FIXTURE_PATH, load_week3_shared_fixture};
 
     fn test_state() -> AppState {
         let store = StoreSkeleton::new(DualSqliteConnectionPolicy::new(
@@ -3878,6 +4453,63 @@ mod tests {
             confirmed,
             updated_at_ms: storyboard.updated_at_ms,
             rows_hash: stable_hash_hex(&serialize_storyboard_rows(&storyboard.rows)),
+        }
+    }
+
+    fn assert_storyboard_row_has_no_vague_or_internal_terms(
+        row: &core_domain::GeneratedStoryboardRow,
+    ) {
+        let combined = format!(
+            "{} {} {} {} {}",
+            row.person,
+            row.shot_title,
+            row.visual_description,
+            row.character_action,
+            row.prompt_text
+        );
+        for forbidden in [
+            "交锋双方",
+            "当前镜头主体",
+            "not_specified_by_v120_bridge",
+            "visual_scene_core",
+            "fused_scene_performance_core_preserved",
+            "按当前镜头脚本执行关键动作",
+            "执行关键动作",
+            "保持连续性",
+            "待明确",
+        ] {
+            assert!(
+                !combined.contains(forbidden),
+                "storyboard row leaked vague/internal term {forbidden}: {combined}"
+            );
+        }
+    }
+
+    fn assert_prompt_text_has_no_internal_payload(prompt_text: &str) {
+        for forbidden in [
+            "KB摘要",
+            "KB上下文",
+            "sample_id",
+            "selected_sample_ids",
+            "rule id",
+            "rule_id",
+            "retrieval trace",
+            "retrieval_trace",
+            "grounding_source",
+            "raw prompt_body",
+            "prompt_body",
+            "source_register",
+            "overlay JSON",
+            "overlay_json",
+            "API key",
+            "api_key",
+            "internal hash",
+            "full raw KB rows",
+        ] {
+            assert!(
+                !prompt_text.contains(forbidden),
+                "prompt_text leaked internal payload term {forbidden}: {prompt_text}"
+            );
         }
     }
 
@@ -4382,17 +5014,23 @@ mod tests {
         );
         assert!(router_result.kb_context_summary.chars().count() >= 800);
         assert!(router_result.kb_context_summary.chars().count() <= 1500);
-        assert!(!router_result
-            .kb_context_summary
-            .contains("TODO: fill prompt"));
-        assert!(!router_result
-            .kb_context_summary
-            .contains("reserve evidence"));
-        assert!(router_result
-            .retrieval_trace
-            .excluded_candidates
-            .iter()
-            .any(|candidate| candidate.reason_code == "reserve_gate"));
+        assert!(
+            !router_result
+                .kb_context_summary
+                .contains("TODO: fill prompt")
+        );
+        assert!(
+            !router_result
+                .kb_context_summary
+                .contains("reserve evidence")
+        );
+        assert!(
+            router_result
+                .retrieval_trace
+                .excluded_candidates
+                .iter()
+                .any(|candidate| candidate.reason_code == "reserve_gate")
+        );
     }
 
     #[test]
@@ -4405,12 +5043,14 @@ mod tests {
         assert_eq!(package.official_record_count(), 108);
         assert_eq!(package.reserve_record_count(), 44);
         assert_eq!(package.positive_fewshot_record_count(), 108);
-        assert!(package
-            .golden_sample_library
-            .records
-            .iter()
-            .filter(|record| record.is_reserve())
-            .all(|record| record.source_fields.usable_for_fewshot == "No"));
+        assert!(
+            package
+                .golden_sample_library
+                .records
+                .iter()
+                .filter(|record| record.is_reserve())
+                .all(|record| record.source_fields.usable_for_fewshot == "No")
+        );
 
         let selected = select_golden_sample_records(
             &state,
@@ -4494,21 +5134,29 @@ mod tests {
         assert!(!response.prompt_text.contains("shot_scene_type"));
         assert!(!response.prompt_text.contains("retrieval trace"));
         assert!(!response.prompt_text.contains("retrieval_trace"));
-        assert!(!response
-            .prompt_text
-            .contains("Compose a restrained dialogue shot with stable eyeline"));
-        assert!(response
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "text_model_live_call_closed"));
-        assert!(response
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "seedance_video_generation_closed"));
-        assert!(response
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "role_action_grounding_incomplete"));
+        assert!(
+            !response
+                .prompt_text
+                .contains("Compose a restrained dialogue shot with stable eyeline")
+        );
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "text_model_live_call_closed")
+        );
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "seedance_video_generation_closed")
+        );
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "role_action_grounding_incomplete")
+        );
     }
 
     #[test]
@@ -4699,9 +5347,10 @@ mod tests {
             );
             assert!(!row.adaptation_reason.trim().is_empty());
             assert!(!row.person.contains("not_specified_by_v120_bridge"));
-            assert!(!row
-                .character_action
-                .contains("fused_scene_performance_core_preserved"));
+            assert!(
+                !row.character_action
+                    .contains("fused_scene_performance_core_preserved")
+            );
             assert!(!row.character_action.contains("按镜头脚本执行"));
             assert!(!row.character_action.contains("执行关键动作"));
             assert!(row.character_action.contains("从"));
@@ -4722,13 +5371,15 @@ mod tests {
             assert!(!row.prompt_text.contains("shot_scene_type"));
             assert!(!row.prompt_text.contains("retrieval trace"));
             assert!(!row.prompt_text.contains("retrieval_trace"));
-            assert!(!row
-                .prompt_text
-                .contains("Compose a restrained dialogue shot"));
-            assert!(!row
-                .prompt_text_compilation_warnings
-                .iter()
-                .any(|warning| warning.code == "role_action_grounding_incomplete"));
+            assert!(
+                !row.prompt_text
+                    .contains("Compose a restrained dialogue shot")
+            );
+            assert!(
+                !row.prompt_text_compilation_warnings
+                    .iter()
+                    .any(|warning| warning.code == "role_action_grounding_incomplete")
+            );
             assert!(row.external_reference_handle_candidates.is_empty());
         }
 
@@ -4736,6 +5387,219 @@ mod tests {
             serde_json::to_string(&storyboard).expect("storyboard response should serialize");
         assert!(!response_json.contains("prompt_body_candidate"));
         assert!(!response_json.contains("Compose a restrained dialogue shot"));
+    }
+
+    #[test]
+    fn generate_storyboard_uses_named_people_in_product_fields() {
+        let state = test_state();
+        let shot_script = "男主林峰和女主叶倾颜在断桥重逢。敌将萧寒追杀而至，林峰抬起银辉手臂迎着萧寒格挡。叶倾颜回身护住林峰。";
+
+        let storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "named-character-grounding".to_string(),
+                script_id: None,
+                shot_script: Some(shot_script.to_string()),
+                expanded_script_text: Some(
+                    "scene_type: daily_dialogue\nsynopsis: 男主林峰和女主叶倾颜在断桥重逢，敌将萧寒追杀而至。"
+                        .to_string(),
+                ),
+                primary_scene_type: Some("daily_dialogue".to_string()),
+                primary_scene_label: Some("断桥重逢".to_string()),
+                primary_scene_category: Some("action_dialogue".to_string()),
+                shot_scene_type: None,
+                shot_scene_label: None,
+                shot_intent: None,
+                adaptation_reason: None,
+                selected_total_duration_seconds: 30,
+            },
+        );
+
+        assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
+        assert_eq!(
+            storyboard
+                .rows
+                .iter()
+                .map(|row| row.duration_seconds)
+                .collect::<Vec<_>>(),
+            vec![10, 10, 10]
+        );
+        let combined_rows = storyboard
+            .rows
+            .iter()
+            .map(|row| {
+                format!(
+                    "{} {} {} {} {}",
+                    row.person,
+                    row.shot_title,
+                    row.visual_description,
+                    row.character_action,
+                    row.prompt_text
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for required_name in ["林峰", "叶倾颜", "萧寒"] {
+            assert!(
+                combined_rows.contains(required_name),
+                "storyboard rows should keep named person {required_name}"
+            );
+        }
+
+        for row in &storyboard.rows {
+            assert!(!["主角", "女主", "交锋双方", "当前镜头主体"].contains(&row.person.as_str()));
+            assert!(row.shot_title.contains(&row.person));
+            assert!(row.character_action.contains("从"));
+            assert!(row.character_action.contains("到"));
+            assert!(row.character_action.contains("镜头捕捉"));
+            assert!(
+                row.prompt_text.contains(&row.person)
+                    || subject_label_mentions_any_name(&row.person, &row.prompt_text)
+            );
+            assert_storyboard_row_has_no_vague_or_internal_terms(row);
+            assert_prompt_text_has_no_internal_payload(&row.prompt_text);
+        }
+    }
+
+    #[test]
+    fn generate_storyboard_uses_clear_subjects_without_named_people() {
+        let state = test_state();
+        let shot_script = "主角在焦土裂痕边缘稳住身体。敌方刀客压近断壁，刀锋逼向主角。主角抬起银辉手臂格挡后震退对手。";
+
+        let storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "fallback-subject-grounding".to_string(),
+                script_id: None,
+                shot_script: Some(shot_script.to_string()),
+                expanded_script_text: Some(
+                    "scene_type: daily_dialogue\nsynopsis: 主角与敌方刀客在焦土断壁交锋。"
+                        .to_string(),
+                ),
+                primary_scene_type: Some("daily_dialogue".to_string()),
+                primary_scene_label: Some("焦土交锋".to_string()),
+                primary_scene_category: Some("action_dialogue".to_string()),
+                shot_scene_type: None,
+                shot_scene_label: None,
+                shot_intent: None,
+                adaptation_reason: None,
+                selected_total_duration_seconds: 30,
+            },
+        );
+
+        assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
+        for row in &storyboard.rows {
+            assert!(
+                ["主角", "敌方刀客", "主角与敌方刀客", "主角与对立人物"]
+                    .contains(&row.person.as_str()),
+                "unexpected fallback person: {}",
+                row.person
+            );
+            assert!(row.shot_title.contains(&row.person));
+            assert!(row.character_action.contains("从"));
+            assert!(row.character_action.contains("到"));
+            assert!(row.character_action.contains("镜头捕捉"));
+            assert!(row.prompt_text.contains(&row.person));
+            assert_storyboard_row_has_no_vague_or_internal_terms(row);
+            assert_prompt_text_has_no_internal_payload(&row.prompt_text);
+        }
+    }
+
+    #[test]
+    fn seedance_duration_planner_uses_ten_second_rows_and_five_second_remainder() {
+        let state = test_state();
+        let storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "duration-45-seedance-plan".to_string(),
+                script_id: None,
+                shot_script: Some(
+                    "主角踏碎焦土迎敌。敌方刀客压近断壁。主角抬臂格挡。银辉沿主角手臂觉醒。主角震退敌方刀客。"
+                        .to_string(),
+                ),
+                expanded_script_text: Some(
+                    "scene_type: daily_dialogue\nsynopsis: 45秒动作分镜".to_string(),
+                ),
+                primary_scene_type: Some("daily_dialogue".to_string()),
+                primary_scene_label: Some("动作分镜".to_string()),
+                primary_scene_category: Some("action".to_string()),
+                shot_scene_type: Some("action_beat".to_string()),
+                shot_scene_label: Some("动作交锋镜头".to_string()),
+                shot_intent: Some("action_beat".to_string()),
+                adaptation_reason: Some("explicit action beat".to_string()),
+                selected_total_duration_seconds: 45,
+            },
+        );
+
+        assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
+        let durations = storyboard
+            .rows
+            .iter()
+            .map(|row| row.duration_seconds)
+            .collect::<Vec<_>>();
+        assert_eq!(durations, vec![10, 10, 10, 10, 5]);
+        assert!(!durations.contains(&9));
+        for row in &storyboard.rows {
+            assert_eq!(row.duration_seconds, row.shot_duration_seconds);
+            assert!(row.duration_seconds <= 15);
+        }
+        assert_eq!(storyboard.duration_plan.total_duration_seconds, 45);
+        assert_eq!(storyboard.duration_plan.allocated_seconds, 45);
+        assert_eq!(
+            storyboard.duration_plan.per_row_seconds,
+            SEEDANCE_STANDARD_SEGMENT_SECONDS
+        );
+    }
+
+    #[test]
+    fn expand_script_respects_target_duration_in_deterministic_fallback() {
+        let state = test_state();
+
+        let script_15 = expand_script(
+            &state,
+            ExpandScriptRequest {
+                scene_type: "daily_dialogue".to_string(),
+                synopsis_text: "男主林峰和女主叶倾颜在断桥重逢，敌将萧寒追杀而至。".to_string(),
+                target_duration_seconds: Some(15),
+            },
+        );
+        let script_60 = expand_script(
+            &state,
+            ExpandScriptRequest {
+                scene_type: "daily_dialogue".to_string(),
+                synopsis_text: "男主林峰和女主叶倾颜在断桥重逢，敌将萧寒追杀而至。".to_string(),
+                target_duration_seconds: Some(60),
+            },
+        );
+
+        assert_ne!(script_15.status, BridgeCallStatus::Blocked);
+        assert_ne!(script_60.status, BridgeCallStatus::Blocked);
+        assert!(
+            script_15
+                .expanded_script_text
+                .contains("target_duration_seconds: 15")
+        );
+        assert!(
+            script_60
+                .expanded_script_text
+                .contains("target_duration_seconds: 60")
+        );
+        assert!(
+            script_60.expanded_script_text.chars().count()
+                > script_15.expanded_script_text.chars().count() * 3 / 2
+        );
+        assert!(
+            script_60
+                .expanded_script_text
+                .lines()
+                .filter(|line| line.starts_with("段落"))
+                .count()
+                > script_15
+                    .expanded_script_text
+                    .lines()
+                    .filter(|line| line.starts_with("段落"))
+                    .count()
+        );
     }
 
     #[test]
@@ -4916,13 +5780,17 @@ mod tests {
         assert_eq!(empty_export.confirmed_shot_count, 0);
         assert!(empty_export.exported_result_ids.is_empty());
         assert!(empty_export.artifacts.is_empty());
-        assert!(!empty_export
-            .exported_result_ids
-            .contains(&generated_but_unsaved.result_id));
-        assert!(empty_export
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "storyboard_bank_no_confirmed_shots"));
+        assert!(
+            !empty_export
+                .exported_result_ids
+                .contains(&generated_but_unsaved.result_id)
+        );
+        assert!(
+            empty_export
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "storyboard_bank_no_confirmed_shots")
+        );
 
         let unconfirmed_save = save_storyboard_shot_result(
             &state,
@@ -4964,10 +5832,12 @@ mod tests {
         );
         assert_eq!(include_unconfirmed_export.status, BridgeCallStatus::Blocked);
         assert!(include_unconfirmed_export.no_export);
-        assert!(include_unconfirmed_export
-            .blockers
-            .iter()
-            .any(|blocker| blocker.code == "storyboard_bank_include_unconfirmed_not_supported"));
+        assert!(
+            include_unconfirmed_export
+                .blockers
+                .iter()
+                .any(|blocker| blocker.code == "storyboard_bank_include_unconfirmed_not_supported")
+        );
     }
 
     #[test]
@@ -4985,10 +5855,12 @@ mod tests {
 
         let forbidden_save = save_storyboard_shot_result(&state, forbidden_request);
         assert_eq!(forbidden_save.status, BridgeCallStatus::Blocked);
-        assert!(forbidden_save
-            .blockers
-            .iter()
-            .any(|blocker| blocker.code == "storyboard_bank_forbidden_payload"));
+        assert!(
+            forbidden_save
+                .blockers
+                .iter()
+                .any(|blocker| blocker.code == "storyboard_bank_forbidden_payload")
+        );
 
         let valid_save = save_storyboard_shot_result(
             &state,
@@ -5047,19 +5919,24 @@ mod tests {
             ExpandScriptRequest {
                 scene_type: "daily_dialogue".to_string(),
                 synopsis_text: "Two leads negotiate quietly before dawn.".to_string(),
+                target_duration_seconds: None,
             },
         );
 
         assert_eq!(script.status, BridgeCallStatus::WarningOnly);
         assert!(script.expanded_script_text.contains("source_package:"));
-        assert!(script
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "text_model_api_key_missing"));
-        assert!(script
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "text_model_live_expand_fallback"));
+        assert!(
+            script
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "text_model_api_key_missing")
+        );
+        assert!(
+            script
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "text_model_live_expand_fallback")
+        );
     }
 
     #[test]
@@ -5071,15 +5948,18 @@ mod tests {
             ExpandScriptRequest {
                 scene_type: "daily_dialogue".to_string(),
                 synopsis_text: "Two leads negotiate quietly before dawn.".to_string(),
+                target_duration_seconds: None,
             },
         );
 
         assert!(script.script_id.starts_with("script-"));
         assert!(script.expanded_script_text.contains("daily_dialogue"));
-        assert!(script
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "text_model_live_call_closed"));
+        assert!(
+            script
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "text_model_live_call_closed")
+        );
 
         let storyboard = generate_storyboard(
             &state,
@@ -5100,7 +5980,7 @@ mod tests {
         );
 
         assert_eq!(state.kb_runtime.summary.golden_sample_record_count, 152);
-        assert_eq!(storyboard.rows.len(), 3);
+        assert_eq!(storyboard.rows.len(), 1);
         assert_eq!(storyboard.kb_router_result.selected_sample_ids.len(), 3);
         assert_eq!(
             storyboard
@@ -5133,47 +6013,61 @@ mod tests {
         assert!(!storyboard.rows[0].prompt_text.contains("sample_id"));
         assert!(!storyboard.rows[0].prompt_text.contains("scene_category"));
         assert!(!storyboard.rows[0].prompt_text.contains("style_cluster"));
-        assert!(!storyboard.rows[0]
-            .prompt_text
-            .contains("selected_sample_ids"));
+        assert!(
+            !storyboard.rows[0]
+                .prompt_text
+                .contains("selected_sample_ids")
+        );
         assert!(!storyboard.rows[0].prompt_text.contains("rule_id"));
         assert!(!storyboard.rows[0].prompt_text.contains("duration_guard"));
         assert!(!storyboard.rows[0].prompt_text.contains("reserve_gate"));
         assert!(!storyboard.rows[0].prompt_text.contains("grounding_source"));
-        assert!(!storyboard.rows[0]
-            .prompt_text
-            .contains("primary_scene_type"));
+        assert!(
+            !storyboard.rows[0]
+                .prompt_text
+                .contains("primary_scene_type")
+        );
         assert!(!storyboard.rows[0].prompt_text.contains("shot_scene_type"));
         assert!(!storyboard.rows[0].prompt_text.contains("retrieval trace"));
         assert!(!storyboard.rows[0].prompt_text.contains("retrieval_trace"));
-        assert!(!storyboard.rows[0]
-            .prompt_text
-            .contains("Compose a restrained dialogue shot with stable eyeline"));
+        assert!(
+            !storyboard.rows[0]
+                .prompt_text
+                .contains("Compose a restrained dialogue shot with stable eyeline")
+        );
         assert_eq!(
             storyboard.rows[0].sequence_grouping.sequence_field_state,
             core_domain::SequenceFieldState::NotApplicable
         );
-        assert!(storyboard.rows[0]
-            .external_reference_handle_candidates
-            .is_empty());
+        assert!(
+            storyboard.rows[0]
+                .external_reference_handle_candidates
+                .is_empty()
+        );
         assert_eq!(
             storyboard.export_status.status,
             BridgeCallStatus::WarningOnly
         );
-        assert!(storyboard
-            .export_status
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "text_model_live_call_closed"));
-        assert!(storyboard
-            .export_status
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "seedance_video_generation_closed"));
-        assert!(storyboard.rows[0]
-            .prompt_text_compilation_warnings
-            .iter()
-            .any(|warning| warning.code == "text_model_live_call_closed"));
+        assert!(
+            storyboard
+                .export_status
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "text_model_live_call_closed")
+        );
+        assert!(
+            storyboard
+                .export_status
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "seedance_video_generation_closed")
+        );
+        assert!(
+            storyboard.rows[0]
+                .prompt_text_compilation_warnings
+                .iter()
+                .any(|warning| warning.code == "text_model_live_call_closed")
+        );
 
         let export = export_bundle(
             &state,
@@ -5186,10 +6080,12 @@ mod tests {
 
         assert_eq!(export.export_status.status, BridgeCallStatus::WarningOnly);
         assert_eq!(export.artifacts.len(), 4);
-        assert!(export
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.artifact_kind == "v120_bridge_manifest" && artifact.ready));
+        assert!(
+            export
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.artifact_kind == "v120_bridge_manifest" && artifact.ready)
+        );
         for artifact_kind in ["storyboard_json", "storyboard_csv", "excel_workbook"] {
             let artifact = export
                 .artifacts
@@ -5198,7 +6094,7 @@ mod tests {
                 .expect("storyboard export artifact should be present");
             assert!(artifact.ready, "{artifact_kind} should be ready");
             assert!(artifact.blocked_reason.is_none());
-            assert_eq!(artifact.row_count, Some(3));
+            assert_eq!(artifact.row_count, Some(1));
             assert!(artifact.byte_size.unwrap_or_default() > 0);
             assert_eq!(artifact.full_kb_rows_included, 0);
             assert_eq!(artifact.selected_sample_ids.len(), 3);
@@ -5236,17 +6132,21 @@ mod tests {
         );
 
         assert_eq!(export.export_status.status, BridgeCallStatus::Blocked);
-        assert!(export
-            .export_status
-            .blockers
-            .iter()
-            .any(|blocker| blocker.code == "storyboard_result_not_found"));
+        assert!(
+            export
+                .export_status
+                .blockers
+                .iter()
+                .any(|blocker| blocker.code == "storyboard_result_not_found")
+        );
         assert!(export.artifacts.iter().all(|artifact| !artifact.ready));
-        assert!(export
-            .artifacts
-            .iter()
-            .all(|artifact| artifact.blocked_reason.as_deref()
-                == Some("storyboard_result_not_found")));
+        assert!(
+            export
+                .artifacts
+                .iter()
+                .all(|artifact| artifact.blocked_reason.as_deref()
+                    == Some("storyboard_result_not_found"))
+        );
     }
 
     #[test]
@@ -5258,15 +6158,18 @@ mod tests {
             ExpandScriptRequest {
                 scene_type: "daily_dialogue".to_string(),
                 synopsis_text: "   ".to_string(),
+                target_duration_seconds: None,
             },
         );
 
         assert_eq!(response.status, BridgeCallStatus::Blocked);
         assert!(response.script_id.is_empty());
-        assert!(response
-            .blockers
-            .iter()
-            .any(|item| item.code == "synopsis_required"));
+        assert!(
+            response
+                .blockers
+                .iter()
+                .any(|item| item.code == "synopsis_required")
+        );
     }
 
     #[test]
@@ -5293,13 +6196,15 @@ mod tests {
         assert_eq!(empty_script.export_status.status, BridgeCallStatus::Blocked);
         assert!(empty_script.result_id.is_empty());
         assert!(empty_script.rows.is_empty());
-        assert!(empty_script
-            .export_status
-            .blockers
-            .iter()
-            .any(|item| item.code == "task_script_required"));
+        assert!(
+            empty_script
+                .export_status
+                .blockers
+                .iter()
+                .any(|item| item.code == "task_script_required")
+        );
 
-        for duration in [7u16, 20u16, 0u16] {
+        for duration in [7u16, 62u16, 0u16] {
             let response = generate_storyboard(
                 &state,
                 GenerateStoryboardRequest {
@@ -5321,11 +6226,13 @@ mod tests {
             );
             assert_eq!(response.export_status.status, BridgeCallStatus::Blocked);
             assert!(response.result_id.is_empty());
-            assert!(response
-                .export_status
-                .blockers
-                .iter()
-                .any(|item| item.code == "duration_not_supported"));
+            assert!(
+                response
+                    .export_status
+                    .blockers
+                    .iter()
+                    .any(|item| item.code == "duration_not_supported")
+            );
         }
     }
 
@@ -5347,12 +6254,15 @@ mod tests {
                 ExpandScriptRequest {
                     scene_type: scene_type.to_string(),
                     synopsis_text: format!("synopsis for {scene_type}"),
+                    target_duration_seconds: None,
                 },
             );
             assert_ne!(script.status, BridgeCallStatus::Blocked);
-            assert!(script
-                .expanded_script_text
-                .contains("scene_type: daily_dialogue"));
+            assert!(
+                script
+                    .expanded_script_text
+                    .contains("scene_type: daily_dialogue")
+            );
 
             let storyboard = generate_storyboard(
                 &state,
@@ -5387,7 +6297,7 @@ mod tests {
     fn generate_storyboard_keeps_duration_sum_for_supported_values() {
         let state = test_state();
 
-        for duration in [5u16, 10u16, 15u16, 30u16, 45u16, 60u16] {
+        for duration in [5u16, 10u16, 15u16, 20u16, 30u16, 40u16, 45u16, 60u16] {
             let response = generate_storyboard(
                 &state,
                 GenerateStoryboardRequest {
@@ -5418,6 +6328,15 @@ mod tests {
                 duration
             );
             assert_eq!(response.duration_plan.allocated_seconds, duration);
+            assert!(response.rows.iter().all(|row| row.duration_seconds <= 15));
+            assert_eq!(
+                response
+                    .rows
+                    .iter()
+                    .map(|row| row.duration_seconds)
+                    .collect::<Vec<_>>(),
+                allocate_storyboard_row_durations(duration, 0).expect("duration should plan")
+            );
         }
     }
 
@@ -5440,16 +6359,16 @@ mod tests {
                 shot_scene_label: None,
                 shot_intent: None,
                 adaptation_reason: None,
-                selected_total_duration_seconds: 10,
+                selected_total_duration_seconds: 30,
             },
         );
 
         let mut edited_rows = storyboard.rows.clone();
         edited_rows[0].visual_description = "Edited bridge visual description".to_string();
         edited_rows[0].prompt_text = "Edited Seedance2.0 prompt text".to_string();
-        edited_rows[0].duration_seconds = 4;
-        edited_rows[1].duration_seconds = 3;
-        edited_rows[2].duration_seconds = 3;
+        edited_rows[0].duration_seconds = 10;
+        edited_rows[1].duration_seconds = 10;
+        edited_rows[2].duration_seconds = 10;
 
         let saved = save_storyboard_rows(
             &state,
@@ -5465,7 +6384,7 @@ mod tests {
 
         assert!(saved.dirty);
         assert_eq!(saved.revision, storyboard.revision + 1);
-        assert_eq!(saved.duration_plan.allocated_seconds, 10);
+        assert_eq!(saved.duration_plan.allocated_seconds, 30);
         assert_eq!(
             saved.rows[0].visual_description,
             "Edited bridge visual description"
@@ -5486,13 +6405,15 @@ mod tests {
             .find(|artifact| artifact.artifact_kind == "storyboard_json")
             .expect("json artifact should exist");
         assert!(json_artifact.edited_rows_applied);
-        assert_eq!(json_artifact.selected_total_duration_seconds, Some(10));
+        assert_eq!(json_artifact.selected_total_duration_seconds, Some(30));
         assert_eq!(json_artifact.full_kb_rows_included, 0);
         assert_eq!(json_artifact.selected_sample_ids.len(), 3);
-        assert!(json_artifact
-            .prompt_text_compilation_statuses
-            .iter()
-            .any(|status| status == "ReadyStub"));
+        assert!(
+            json_artifact
+                .prompt_text_compilation_statuses
+                .iter()
+                .any(|status| status == "ReadyStub")
+        );
         assert!(json_artifact.kb_context_summary.is_some());
         assert!(json_artifact.retrieval_trace.is_some());
 
@@ -5541,11 +6462,13 @@ mod tests {
         );
 
         assert_eq!(saved.export_status.status, BridgeCallStatus::Blocked);
-        assert!(saved
-            .export_status
-            .blockers
-            .iter()
-            .any(|item| item.code == "duration_conservation_failed"));
+        assert!(
+            saved
+                .export_status
+                .blockers
+                .iter()
+                .any(|item| item.code == "duration_conservation_failed")
+        );
         assert!(saved.result_id.is_empty());
     }
 
@@ -5665,15 +6588,19 @@ mod tests {
             snapshot.summary_items[2].state,
             ValidationExportPanelState::Ready
         );
-        assert!(snapshot
-            .repair_recommendations
-            .iter()
-            .any(|item| item.failure_code == "chinese_prompt_noise"));
-        assert!(snapshot
-            .repair_recommendations
-            .iter()
-            .flat_map(|item| item.prompt_template_names.iter())
-            .any(|name| name == "Repair Prompt Language"));
+        assert!(
+            snapshot
+                .repair_recommendations
+                .iter()
+                .any(|item| item.failure_code == "chinese_prompt_noise")
+        );
+        assert!(
+            snapshot
+                .repair_recommendations
+                .iter()
+                .flat_map(|item| item.prompt_template_names.iter())
+                .any(|name| name == "Repair Prompt Language")
+        );
     }
 
     #[test]

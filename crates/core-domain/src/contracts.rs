@@ -390,6 +390,8 @@ pub struct SplitScriptToShotTasksResponse {
 pub struct ExpandScriptRequest {
     pub scene_type: String,
     pub synopsis_text: String,
+    #[serde(default)]
+    pub target_duration_seconds: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
