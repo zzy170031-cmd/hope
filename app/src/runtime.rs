@@ -156,6 +156,14 @@ const SEEDANCE_REMAINDER_SEGMENT_SECONDS: u16 = 5;
 const SEEDANCE_MAX_SEGMENT_SECONDS: u16 = 15;
 const V0_SHORT_STORY_PROFILE: &str = "short_story_2000_2500";
 const V0_TWO_MINUTE_STORY_PROFILE: &str = "two_minute_story_2500_3500";
+const V0_SHORT_CLIP_PROFILE: &str = "short_clip";
+const V0_STANDARD_CLIP_PROFILE: &str = "standard_clip";
+const V0_LONG_STORY_PROFILE: &str = "long_story";
+const V0_LONG_STORY_AUTO_PROFILE: &str = "long_story_auto";
+const TARGET_DURATION_MODE_FIXED_SECONDS: &str = "fixed_seconds";
+const TARGET_DURATION_MODE_LONG_TEXT_AUTO: &str = "long_text_auto";
+const AUTO_SEGMENT_STRATEGY_FIXED_SECONDS: &str = "fixed_seconds_seedance_grid";
+const AUTO_SEGMENT_STRATEGY_LONG_TEXT: &str = "long_text_auto_story_fact_segments";
 
 const FINALIZED_BANK_FORBIDDEN_TERMS: &[&str] = &[
     "raw prompt_body",
@@ -843,13 +851,37 @@ pub fn run_v0_story_to_storyboard_chain(
     request: RunV0StoryToStoryboardChainRequest,
 ) -> RunV0StoryToStoryboardChainResponse {
     let source_analysis = analyze_v0_source_input(&request.user_topic_or_synopsis);
-    let mut warnings = Vec::new();
+    let duration_plan = plan_v0_chain_duration(&request, &source_analysis);
+    let mut warnings = duration_plan.warnings.clone();
     let mut blockers = validate_run_v0_story_to_storyboard_chain_request(&request);
+    blockers.extend(
+        duration_plan
+            .warnings
+            .iter()
+            .filter(|warning| {
+                warning.code == "long_text_auto_duration_plan_missing"
+                    || warning.code == "long_text_auto_compressed_to_single_clip_blocked"
+            })
+            .cloned(),
+    );
     if !blockers.is_empty() {
         return RunV0StoryToStoryboardChainResponse {
             status: BridgeCallStatus::Blocked,
             blockers,
-            warnings: source_analysis.continuity_warnings.clone(),
+            warnings: source_analysis
+                .continuity_warnings
+                .iter()
+                .chain(duration_plan.warnings.iter())
+                .cloned()
+                .collect(),
+            target_duration_mode: duration_plan.target_duration_mode,
+            story_length_profile: duration_plan.story_length_profile,
+            source_material_length_chars: duration_plan.source_material_length_chars,
+            auto_segment_strategy: duration_plan.auto_segment_strategy,
+            estimated_total_story_duration_seconds: duration_plan
+                .estimated_total_story_duration_seconds,
+            generated_shot_task_count: duration_plan.generated_shot_task_count,
+            duration_plan_summary: duration_plan.duration_plan_summary,
             source_input_type: source_analysis.source_input_type,
             authoring_mode: source_analysis.authoring_mode,
             source_material_summary: source_analysis.source_material_summary,
@@ -887,7 +919,7 @@ pub fn run_v0_story_to_storyboard_chain(
             chapter_id: request.chapter_id.clone(),
             chapter_order: request.chapter_order,
             user_topic_or_synopsis: request.user_topic_or_synopsis.clone(),
-            story_length_profile: request.story_length_profile.clone(),
+            story_length_profile: duration_plan.story_length_profile.clone(),
             authoring_craft_summary,
             continuity_context_summary: request.continuity_context_summary.clone(),
             kb_context_summary: request.kb_context_summary.clone(),
@@ -904,6 +936,14 @@ pub fn run_v0_story_to_storyboard_chain(
             status: BridgeCallStatus::Blocked,
             blockers,
             warnings,
+            target_duration_mode: duration_plan.target_duration_mode.clone(),
+            story_length_profile: duration_plan.story_length_profile.clone(),
+            source_material_length_chars: duration_plan.source_material_length_chars,
+            auto_segment_strategy: duration_plan.auto_segment_strategy.clone(),
+            estimated_total_story_duration_seconds: duration_plan
+                .estimated_total_story_duration_seconds,
+            generated_shot_task_count: duration_plan.generated_shot_task_count,
+            duration_plan_summary: duration_plan.duration_plan_summary.clone(),
             source_input_type: chapter.source_input_type.clone(),
             authoring_mode: chapter.authoring_mode.clone(),
             source_material_summary: chapter.source_material_summary.clone(),
@@ -950,6 +990,14 @@ pub fn run_v0_story_to_storyboard_chain(
             status: BridgeCallStatus::Blocked,
             blockers,
             warnings,
+            target_duration_mode: duration_plan.target_duration_mode.clone(),
+            story_length_profile: duration_plan.story_length_profile.clone(),
+            source_material_length_chars: duration_plan.source_material_length_chars,
+            auto_segment_strategy: duration_plan.auto_segment_strategy.clone(),
+            estimated_total_story_duration_seconds: duration_plan
+                .estimated_total_story_duration_seconds,
+            generated_shot_task_count: duration_plan.generated_shot_task_count,
+            duration_plan_summary: duration_plan.duration_plan_summary.clone(),
             source_input_type: chapter.source_input_type.clone(),
             authoring_mode: chapter.authoring_mode.clone(),
             source_material_summary: chapter.source_material_summary.clone(),
@@ -975,13 +1023,15 @@ pub fn run_v0_story_to_storyboard_chain(
     let split_response = split_script_to_shot_tasks(SplitScriptToShotTasksRequest {
         script_id: Some(script.script_id.clone()),
         expanded_script_text: script.script_text.clone(),
-        selected_total_duration_seconds: request.selected_total_duration_seconds,
+        selected_total_duration_seconds: duration_plan.estimated_total_story_duration_seconds,
+        target_duration_mode: duration_plan.target_duration_mode.clone(),
+        auto_segment_strategy: duration_plan.auto_segment_strategy.clone(),
         primary_scene_type: request.primary_scene_type.clone(),
         primary_scene_label: request.primary_scene_label.clone(),
         primary_scene_category: request.primary_scene_category.clone(),
         task_type: Some("v0_story_to_storyboard_chain".to_string()),
         shot_count_hint: None,
-        structure_type: Some(request.story_length_profile.clone()),
+        structure_type: Some(duration_plan.story_length_profile.clone()),
         kb_context_summary: Some(request.kb_context_summary.clone()),
         selected_kb_rules: request.selected_kb_rules.clone(),
         selected_sample_ids: request.selected_sample_ids.clone(),
@@ -993,17 +1043,14 @@ pub fn run_v0_story_to_storyboard_chain(
         chapter_id: request.chapter_id.clone(),
         chapter_order: request.chapter_order,
         shot_task_count: split_response.shot_tasks.len() as u32,
-        duration_plan_summary: format!(
-            "total={}s; rows={}; segments={}",
-            request.selected_total_duration_seconds,
-            split_response.shot_tasks.len(),
-            split_response
-                .shot_tasks
-                .iter()
-                .map(|task| task.duration_seconds.to_string())
-                .collect::<Vec<_>>()
-                .join("/")
-        ),
+        target_duration_mode: duration_plan.target_duration_mode.clone(),
+        story_length_profile: duration_plan.story_length_profile.clone(),
+        source_material_length_chars: duration_plan.source_material_length_chars,
+        auto_segment_strategy: duration_plan.auto_segment_strategy.clone(),
+        estimated_total_story_duration_seconds: duration_plan
+            .estimated_total_story_duration_seconds,
+        generated_shot_task_count: split_response.shot_tasks.len() as u32,
+        duration_plan_summary: duration_plan.duration_plan_summary.clone(),
         continuity_delta: format!(
             "shot_task_plan:{} split script into {} grounded shot tasks",
             script.script_id,
@@ -1126,6 +1173,14 @@ pub fn run_v0_story_to_storyboard_chain(
             status: BridgeCallStatus::Blocked,
             blockers,
             warnings,
+            target_duration_mode: duration_plan.target_duration_mode.clone(),
+            story_length_profile: duration_plan.story_length_profile.clone(),
+            source_material_length_chars: duration_plan.source_material_length_chars,
+            auto_segment_strategy: duration_plan.auto_segment_strategy.clone(),
+            estimated_total_story_duration_seconds: duration_plan
+                .estimated_total_story_duration_seconds,
+            generated_shot_task_count: shot_task_plan.generated_shot_task_count,
+            duration_plan_summary: duration_plan.duration_plan_summary.clone(),
             source_input_type: chapter.source_input_type.clone(),
             authoring_mode: chapter.authoring_mode.clone(),
             source_material_summary: chapter.source_material_summary.clone(),
@@ -1191,6 +1246,14 @@ pub fn run_v0_story_to_storyboard_chain(
         },
         blockers,
         warnings,
+        target_duration_mode: duration_plan.target_duration_mode.clone(),
+        story_length_profile: duration_plan.story_length_profile.clone(),
+        source_material_length_chars: duration_plan.source_material_length_chars,
+        auto_segment_strategy: duration_plan.auto_segment_strategy.clone(),
+        estimated_total_story_duration_seconds: duration_plan
+            .estimated_total_story_duration_seconds,
+        generated_shot_task_count: shot_task_plan.generated_shot_task_count,
+        duration_plan_summary: duration_plan.duration_plan_summary.clone(),
         source_input_type: chapter.source_input_type.clone(),
         authoring_mode: chapter.authoring_mode.clone(),
         source_material_summary: chapter.source_material_summary.clone(),
@@ -2829,6 +2892,7 @@ fn select_golden_sample_records_from_router<'a>(
 pub fn split_script_to_shot_tasks(
     request: SplitScriptToShotTasksRequest,
 ) -> SplitScriptToShotTasksResponse {
+    let mut warnings = Vec::new();
     let mut source_segments = split_story_segments(&request.expanded_script_text)
         .into_iter()
         .filter(|segment| !is_v0_screenplay_metadata_segment(segment))
@@ -2836,15 +2900,45 @@ pub fn split_script_to_shot_tasks(
     if source_segments.is_empty() {
         source_segments = split_story_segments(&request.expanded_script_text);
     }
-    let durations = allocate_storyboard_row_durations(request.selected_total_duration_seconds, 0)
-        .unwrap_or_else(|| vec![request.selected_total_duration_seconds]);
+    let target_duration_mode = normalize_target_duration_mode(&request.target_duration_mode)
+        .unwrap_or(TARGET_DURATION_MODE_FIXED_SECONDS);
+    if normalize_target_duration_mode(&request.target_duration_mode).is_none()
+        && !request.target_duration_mode.trim().is_empty()
+    {
+        warnings.push(duration_plan_warning(
+            "target_duration_mode_invalid",
+            "split_script_to_shot_tasks received an unsupported target_duration_mode and used fixed_seconds planning.",
+        ));
+    }
+    let durations = if target_duration_mode == TARGET_DURATION_MODE_LONG_TEXT_AUTO {
+        let planned =
+            allocate_long_text_auto_shot_task_durations(request.selected_total_duration_seconds);
+        if planned.is_empty() {
+            warnings.push(duration_plan_warning(
+                "long_text_auto_duration_plan_missing",
+                "long_text_auto could not split the estimated total into Seedance-friendly shot tasks.",
+            ));
+        }
+        if planned.len() <= 1 {
+            warnings.push(duration_plan_warning(
+                "long_text_auto_compressed_to_single_clip_blocked",
+                "long_text_auto must not compress source material into a single storyboard clip.",
+            ));
+        }
+        planned
+    } else {
+        allocate_storyboard_row_durations(request.selected_total_duration_seconds, 0)
+            .unwrap_or_else(|| vec![request.selected_total_duration_seconds])
+    };
     let shot_count = durations.len();
     let mut shot_tasks = Vec::new();
     let script_hash = stable_hash_hex(&format!(
-        "{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}",
         request.script_id.as_deref().unwrap_or_default(),
         request.expanded_script_text,
-        request.selected_total_duration_seconds
+        request.selected_total_duration_seconds,
+        target_duration_mode,
+        request.auto_segment_strategy
     ));
 
     for index in 0..shot_count {
@@ -2882,7 +2976,7 @@ pub fn split_script_to_shot_tasks(
     SplitScriptToShotTasksResponse {
         script_id: request.script_id,
         shot_tasks,
-        warnings: vec![],
+        warnings,
     }
 }
 
@@ -2905,7 +2999,7 @@ fn validate_generate_novel_chapter_request(
     if !is_supported_v0_story_length_profile(&request.story_length_profile) {
         blockers.push(ProductWarning {
             code: "story_length_profile_unsupported".to_string(),
-            message: "V0 story_length_profile must be short_story_2000_2500 or two_minute_story_2500_3500."
+            message: "V0 story_length_profile must be one of short_clip, standard_clip, long_story, long_story_auto, short_story_2000_2500, or two_minute_story_2500_3500."
                 .to_string(),
             related_sample_id: None,
         });
@@ -2982,18 +3076,29 @@ fn validate_run_v0_story_to_storyboard_chain_request(
         "primary_scene_type",
         &request.primary_scene_type,
     );
+    let target_duration_mode = normalize_target_duration_mode(&request.target_duration_mode);
+    if target_duration_mode.is_none() && !request.target_duration_mode.trim().is_empty() {
+        blockers.push(ProductWarning {
+            code: "target_duration_mode_invalid".to_string(),
+            message: "target_duration_mode must be fixed_seconds or long_text_auto.".to_string(),
+            related_sample_id: None,
+        });
+    }
     if !is_supported_v0_story_length_profile(&request.story_length_profile) {
         blockers.push(ProductWarning {
             code: "story_length_profile_unsupported".to_string(),
-            message: "V0 chain supports short_story_2000_2500 and two_minute_story_2500_3500."
+            message: "V0 chain supports short_clip, standard_clip, long_story, long_story_auto, short_story_2000_2500, and two_minute_story_2500_3500."
                 .to_string(),
             related_sample_id: None,
         });
     }
-    if !is_supported_storyboard_duration(request.selected_total_duration_seconds) {
+    if target_duration_mode.unwrap_or(TARGET_DURATION_MODE_FIXED_SECONDS)
+        == TARGET_DURATION_MODE_FIXED_SECONDS
+        && !is_supported_fixed_chain_duration(request.selected_total_duration_seconds)
+    {
         blockers.push(ProductWarning {
             code: "duration_not_supported".to_string(),
-            message: "V0 chain storyboard duration must use the Seedance-friendly 5-second grid within 5-60 seconds."
+            message: "fixed_seconds duration must be one of 5, 10, 15, 30, 45, or 60 seconds."
                 .to_string(),
             related_sample_id: None,
         });
@@ -3030,8 +3135,17 @@ fn push_required_warning(blockers: &mut Vec<ProductWarning>, field_name: &str, v
 fn is_supported_v0_story_length_profile(value: &str) -> bool {
     matches!(
         value.trim(),
-        V0_SHORT_STORY_PROFILE | V0_TWO_MINUTE_STORY_PROFILE
+        V0_SHORT_CLIP_PROFILE
+            | V0_STANDARD_CLIP_PROFILE
+            | V0_LONG_STORY_PROFILE
+            | V0_LONG_STORY_AUTO_PROFILE
+            | V0_SHORT_STORY_PROFILE
+            | V0_TWO_MINUTE_STORY_PROFILE
     )
+}
+
+fn is_supported_fixed_chain_duration(duration_seconds: u16) -> bool {
+    matches!(duration_seconds, 5 | 10 | 15 | 30 | 45 | 60)
 }
 
 #[derive(Debug, Clone)]
@@ -3044,6 +3158,261 @@ struct SourceInputAnalysis {
     changed_for_screenplay_summary: String,
     omitted_detail_summary: String,
     continuity_warnings: Vec<ProductWarning>,
+}
+
+#[derive(Debug, Clone)]
+struct V0ChainDurationPlan {
+    target_duration_mode: String,
+    story_length_profile: String,
+    source_material_length_chars: u32,
+    auto_segment_strategy: String,
+    estimated_total_story_duration_seconds: u16,
+    generated_shot_task_count: u32,
+    duration_plan_summary: String,
+    warnings: Vec<ProductWarning>,
+}
+
+fn plan_v0_chain_duration(
+    request: &RunV0StoryToStoryboardChainRequest,
+    source_analysis: &SourceInputAnalysis,
+) -> V0ChainDurationPlan {
+    let source_material_length_chars =
+        stable_source_material_length_chars(&request.user_topic_or_synopsis);
+    let target_duration_mode = normalize_target_duration_mode(&request.target_duration_mode)
+        .map(str::to_string)
+        .unwrap_or_else(|| request.target_duration_mode.trim().to_string());
+
+    if normalize_target_duration_mode(&request.target_duration_mode).is_none()
+        && !request.target_duration_mode.trim().is_empty()
+    {
+        return V0ChainDurationPlan {
+            target_duration_mode,
+            story_length_profile: request.story_length_profile.trim().to_string(),
+            source_material_length_chars,
+            auto_segment_strategy: request.auto_segment_strategy.trim().to_string(),
+            estimated_total_story_duration_seconds: 0,
+            generated_shot_task_count: 0,
+            duration_plan_summary: "target_duration_mode is invalid; duration plan not created."
+                .to_string(),
+            warnings: vec![],
+        };
+    }
+
+    if target_duration_mode == TARGET_DURATION_MODE_LONG_TEXT_AUTO {
+        let estimated_total_story_duration_seconds = estimate_long_text_auto_duration_seconds(
+            source_material_length_chars,
+            &source_analysis.source_input_type,
+            &source_analysis.source_story_facts,
+        );
+        let story_length_profile = derive_auto_story_length_profile(
+            source_material_length_chars,
+            estimated_total_story_duration_seconds,
+        );
+        let auto_segment_strategy = request
+            .auto_segment_strategy
+            .trim()
+            .to_string()
+            .if_empty(AUTO_SEGMENT_STRATEGY_LONG_TEXT);
+        let shot_task_durations =
+            allocate_long_text_auto_shot_task_durations(estimated_total_story_duration_seconds);
+        let generated_shot_task_count = shot_task_durations.len() as u32;
+        let mut warnings = Vec::new();
+        if request.auto_segment_strategy.trim().is_empty() {
+            warnings.push(duration_plan_warning(
+                "auto_segment_strategy_missing",
+                "long_text_auto used the deterministic story-fact segment strategy because no strategy was supplied.",
+            ));
+        }
+        if shot_task_durations.is_empty() {
+            warnings.push(duration_plan_warning(
+                "long_text_auto_duration_plan_missing",
+                "long_text_auto could not produce a Seedance-friendly duration plan.",
+            ));
+        }
+        if generated_shot_task_count <= 1 {
+            warnings.push(duration_plan_warning(
+                "long_text_auto_compressed_to_single_clip_blocked",
+                "long_text_auto must split source material into multiple concrete shot tasks instead of one compressed clip.",
+            ));
+        }
+        let duration_plan_summary = format!(
+            "mode={}; story_length_profile={}; source_chars={}; source_input_type={}; strategy={}; estimated_total={}s; generated_shot_tasks={}; shot_task_durations={}; layers=writing_continuity>scene_expression_adaptation>director_scheduling>shot_language",
+            TARGET_DURATION_MODE_LONG_TEXT_AUTO,
+            story_length_profile,
+            source_material_length_chars,
+            source_analysis.source_input_type,
+            auto_segment_strategy,
+            estimated_total_story_duration_seconds,
+            generated_shot_task_count,
+            join_durations(&shot_task_durations)
+        );
+
+        return V0ChainDurationPlan {
+            target_duration_mode,
+            story_length_profile,
+            source_material_length_chars,
+            auto_segment_strategy,
+            estimated_total_story_duration_seconds,
+            generated_shot_task_count,
+            duration_plan_summary,
+            warnings,
+        };
+    }
+
+    let fixed_duration = request.selected_total_duration_seconds;
+    let shot_task_durations = allocate_storyboard_row_durations(fixed_duration, 0)
+        .unwrap_or_else(|| vec![fixed_duration]);
+    let generated_shot_task_count = shot_task_durations.len() as u32;
+    let story_length_profile = request.story_length_profile.trim().to_string();
+    let auto_segment_strategy = request
+        .auto_segment_strategy
+        .trim()
+        .to_string()
+        .if_empty(AUTO_SEGMENT_STRATEGY_FIXED_SECONDS);
+
+    V0ChainDurationPlan {
+        target_duration_mode: TARGET_DURATION_MODE_FIXED_SECONDS.to_string(),
+        story_length_profile: story_length_profile.clone(),
+        source_material_length_chars,
+        auto_segment_strategy: auto_segment_strategy.clone(),
+        estimated_total_story_duration_seconds: fixed_duration,
+        generated_shot_task_count,
+        duration_plan_summary: format!(
+            "mode={}; story_length_profile={}; source_chars={}; source_input_type={}; total={}s; generated_shot_tasks={}; shot_task_durations={}",
+            TARGET_DURATION_MODE_FIXED_SECONDS,
+            story_length_profile,
+            source_material_length_chars,
+            source_analysis.source_input_type,
+            fixed_duration,
+            generated_shot_task_count,
+            join_durations(&shot_task_durations)
+        ),
+        warnings: vec![],
+    }
+}
+
+trait IfEmpty {
+    fn if_empty(self, fallback: &str) -> String;
+}
+
+impl IfEmpty for String {
+    fn if_empty(self, fallback: &str) -> String {
+        if self.trim().is_empty() {
+            fallback.to_string()
+        } else {
+            self
+        }
+    }
+}
+
+fn normalize_target_duration_mode(value: &str) -> Option<&'static str> {
+    match value.trim() {
+        "" | TARGET_DURATION_MODE_FIXED_SECONDS => Some(TARGET_DURATION_MODE_FIXED_SECONDS),
+        TARGET_DURATION_MODE_LONG_TEXT_AUTO => Some(TARGET_DURATION_MODE_LONG_TEXT_AUTO),
+        _ => None,
+    }
+}
+
+fn stable_source_material_length_chars(source_text: &str) -> u32 {
+    source_text.trim().chars().count().min(u32::MAX as usize) as u32
+}
+
+fn estimate_long_text_auto_duration_seconds(
+    source_material_length_chars: u32,
+    source_input_type: &str,
+    facts: &SourceStoryFacts,
+) -> u16 {
+    let length_based = match source_material_length_chars {
+        0..=220 => 30,
+        221..=800 => 75,
+        801..=2_000 => 90,
+        2_001..=2_500 => 105,
+        2_501..=3_500 => 120,
+        3_501..=6_000 => 180,
+        _ => {
+            let extra_blocks = ((source_material_length_chars - 6_000) / 1_500).min(6) as u16;
+            180 + extra_blocks * 30
+        }
+    };
+    let source_type_floor = match source_input_type {
+        "screenplay_text" => 75,
+        "novel_chapter" | "mixed_material" => 90,
+        "full_story" => 120,
+        _ => 30,
+    };
+    let event_count = facts.event_order.len().max(facts.core_events.len()) as u16;
+    let fact_based = if event_count == 0 {
+        0
+    } else {
+        event_count.min(18) * SEEDANCE_STANDARD_SEGMENT_SECONDS
+    };
+    let mut total = length_based.max(source_type_floor).max(fact_based);
+    if total == 60 {
+        total = 75;
+    }
+    round_duration_to_five(total.clamp(30, 360))
+}
+
+fn derive_auto_story_length_profile(
+    source_material_length_chars: u32,
+    estimated_total_story_duration_seconds: u16,
+) -> String {
+    if source_material_length_chars >= 3_500 || estimated_total_story_duration_seconds >= 180 {
+        V0_LONG_STORY_AUTO_PROFILE
+    } else if source_material_length_chars >= 2_500 || estimated_total_story_duration_seconds >= 120
+    {
+        V0_TWO_MINUTE_STORY_PROFILE
+    } else if source_material_length_chars >= 2_000 || estimated_total_story_duration_seconds >= 105
+    {
+        V0_SHORT_STORY_PROFILE
+    } else if estimated_total_story_duration_seconds >= 75 {
+        V0_LONG_STORY_PROFILE
+    } else if estimated_total_story_duration_seconds >= 45 {
+        V0_STANDARD_CLIP_PROFILE
+    } else {
+        V0_SHORT_CLIP_PROFILE
+    }
+    .to_string()
+}
+
+fn round_duration_to_five(duration_seconds: u16) -> u16 {
+    ((duration_seconds + SEEDANCE_REMAINDER_SEGMENT_SECONDS - 1)
+        / SEEDANCE_REMAINDER_SEGMENT_SECONDS)
+        * SEEDANCE_REMAINDER_SEGMENT_SECONDS
+}
+
+fn allocate_long_text_auto_shot_task_durations(total_duration_seconds: u16) -> Vec<u16> {
+    if total_duration_seconds < SEEDANCE_STANDARD_SEGMENT_SECONDS
+        || total_duration_seconds % SEEDANCE_REMAINDER_SEGMENT_SECONDS != 0
+    {
+        return vec![];
+    }
+    let mut remaining = total_duration_seconds;
+    let mut durations = Vec::new();
+    while remaining >= SEEDANCE_STANDARD_SEGMENT_SECONDS {
+        durations.push(SEEDANCE_STANDARD_SEGMENT_SECONDS);
+        remaining -= SEEDANCE_STANDARD_SEGMENT_SECONDS;
+    }
+    if remaining == SEEDANCE_REMAINDER_SEGMENT_SECONDS {
+        durations.push(SEEDANCE_REMAINDER_SEGMENT_SECONDS);
+    }
+    durations
+}
+
+fn join_durations(durations: &[u16]) -> String {
+    durations
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn duration_plan_warning(code: &str, message: &str) -> ProductWarning {
+    ProductWarning {
+        code: code.to_string(),
+        message: message.to_string(),
+        related_sample_id: None,
+    }
 }
 
 fn analyze_v0_source_input(source_text: &str) -> SourceInputAnalysis {
@@ -3353,10 +3722,10 @@ fn deterministic_v0_chapter_text(
     continuity_context_summary: &str,
     kb_summary_available: bool,
 ) -> String {
-    let beat_count = if story_length_profile == V0_TWO_MINUTE_STORY_PROFILE {
-        6
-    } else {
-        4
+    let beat_count = match story_length_profile {
+        V0_LONG_STORY_AUTO_PROFILE | V0_LONG_STORY_PROFILE => 8,
+        V0_TWO_MINUTE_STORY_PROFILE | V0_STANDARD_CLIP_PROFILE => 6,
+        _ => 4,
     };
     let topic_summary = compact_product_summary(topic, "主角在压力中推进目标", 160);
     let craft_summary = compact_product_summary(
@@ -6167,18 +6536,21 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        SEEDANCE_STANDARD_SEGMENT_SECONDS, StoryboardPreviewPlanRequest,
+        SEEDANCE_REMAINDER_SEGMENT_SECONDS, SEEDANCE_STANDARD_SEGMENT_SECONDS,
+        StoryboardPreviewPlanRequest, TARGET_DURATION_MODE_FIXED_SECONDS,
+        TARGET_DURATION_MODE_LONG_TEXT_AUTO, V0_LONG_STORY_AUTO_PROFILE,
         ValidationExportPanelSnapshotRequest, ValidationExportPanelState,
-        allocate_storyboard_row_durations, build_prompt_text_compilation_request,
-        build_qwen_request_payload, build_storyboard_preview_plan, build_text_generation_request,
+        allocate_long_text_auto_shot_task_durations, allocate_storyboard_row_durations,
+        build_prompt_text_compilation_request, build_qwen_request_payload,
+        build_storyboard_preview_plan, build_text_generation_request,
         build_validation_export_panel_snapshot_from_fixture, compile_seedance_prompt_text,
         contains_any_story_term, default_text_model_provider, expand_script, export_bundle,
         export_storyboard_bank, generate_storyboard, list_storyboard_shot_results,
         project_scene_performance, remove_storyboard_shot_result, resolve_scene_taxonomy,
         run_kb_router, run_qwen_text_generation_with_transport, run_v0_story_to_storyboard_chain,
         save_storyboard_rows, save_storyboard_shot_result, select_golden_sample_records,
-        serialize_storyboard_rows, stable_hash_hex, subject_label_mentions_any_name,
-        update_storyboard_shot_result,
+        serialize_storyboard_rows, stable_hash_hex, stable_source_material_length_chars,
+        subject_label_mentions_any_name, update_storyboard_shot_result,
     };
     use crate::state::AppState;
     use validators::{WEEK3_SHARED_FIXTURE_PATH, load_week3_shared_fixture};
@@ -6435,6 +6807,10 @@ mod tests {
             user_topic_or_synopsis: source_text.to_string(),
             story_length_profile: "short_story_2000_2500".to_string(),
             selected_total_duration_seconds: 10,
+            target_duration_mode: TARGET_DURATION_MODE_FIXED_SECONDS.to_string(),
+            source_material_length_chars: 0,
+            auto_segment_strategy: String::new(),
+            estimated_total_story_duration_seconds: 0,
             primary_scene_type: "daily_dialogue".to_string(),
             primary_scene_label: Some("story rewrite validation".to_string()),
             primary_scene_category: Some("story_rewrite".to_string()),
@@ -7545,7 +7921,11 @@ mod tests {
                 user_topic_or_synopsis: "男主林峰和女主叶倾颜在断桥重逢，敌将萧寒追杀而至。"
                     .to_string(),
                 story_length_profile: "short_story_2000_2500".to_string(),
-                selected_total_duration_seconds: 20,
+                selected_total_duration_seconds: 30,
+                target_duration_mode: TARGET_DURATION_MODE_FIXED_SECONDS.to_string(),
+                source_material_length_chars: 0,
+                auto_segment_strategy: String::new(),
+                estimated_total_story_duration_seconds: 0,
                 primary_scene_type: "daily_dialogue".to_string(),
                 primary_scene_label: Some("断桥重逢".to_string()),
                 primary_scene_category: Some("action_dialogue".to_string()),
@@ -7579,10 +7959,10 @@ mod tests {
                 .iter()
                 .map(|task| task.duration_seconds)
                 .collect::<Vec<_>>(),
-            vec![10, 10]
+            vec![10, 10, 10]
         );
-        assert_eq!(response.storyboard_results.len(), 2);
-        assert_eq!(response.finalized_storyboard_refs.len(), 2);
+        assert_eq!(response.storyboard_results.len(), 3);
+        assert_eq!(response.finalized_storyboard_refs.len(), 3);
         assert!(response.continuity_state.is_some());
 
         let continuity = response.continuity_state.as_ref().unwrap();
@@ -7591,7 +7971,7 @@ mod tests {
                 .continuity_context_summary
                 .contains("story-v0-001")
         );
-        assert_eq!(continuity.finalized_storyboard_refs.len(), 2);
+        assert_eq!(continuity.finalized_storyboard_refs.len(), 3);
         assert!(
             state
                 .find_v0_chapter("story-v0-001", "chapter-v0-001")
@@ -7629,6 +8009,122 @@ mod tests {
                 continuity.continuity_context_summary
             );
         }
+    }
+
+    #[test]
+    fn v0_story_to_storyboard_chain_long_text_auto_plans_multiple_shot_tasks() {
+        let state = test_state();
+        let source = [
+            "Event 1: Lin keeps the bridge order while Ye answers the pressure and Xiao closes the gate before the next move. The paragraph stays long enough to exercise automatic duration planning without adding any new facts.",
+            "Event 2: Lin changes position, Ye protects the same promise, and Xiao moves closer. The source keeps ordered events visible so writing continuity remains ahead of camera advice.",
+            "Event 3: The bridge route narrows, the keepsake stays with Lin, and Ye names the next choice. The scene expression can shift, but the accepted source facts stay first.",
+            "Event 4: Xiao blocks the exit, Lin must answer with action, and Ye holds the final state for the following scene. The director can schedule shots only after this order is preserved.",
+        ]
+        .join("\n\n")
+        .repeat(4);
+        let mut request = v0_chain_request_for_source("story-v0-long-auto", &source);
+        request.target_duration_mode = TARGET_DURATION_MODE_LONG_TEXT_AUTO.to_string();
+        request.selected_total_duration_seconds = 60;
+        request.story_length_profile = V0_LONG_STORY_AUTO_PROFILE.to_string();
+        request.auto_segment_strategy = String::new();
+
+        let response = run_v0_story_to_storyboard_chain(&state, request);
+
+        assert_ne!(response.status, BridgeCallStatus::Blocked, "{response:#?}");
+        assert_eq!(
+            response.target_duration_mode,
+            TARGET_DURATION_MODE_LONG_TEXT_AUTO
+        );
+        assert_ne!(response.estimated_total_story_duration_seconds, 60);
+        assert_eq!(
+            response.source_material_length_chars,
+            stable_source_material_length_chars(&source)
+        );
+        assert!(response.generated_shot_task_count > 1);
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "auto_segment_strategy_missing")
+        );
+        assert!(
+            !response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "long_text_auto_compressed_to_single_clip_blocked")
+        );
+
+        let plan = response
+            .shot_task_plan
+            .as_ref()
+            .expect("long_text_auto should return a shot task plan");
+        let durations = plan
+            .shot_tasks
+            .iter()
+            .map(|task| task.duration_seconds)
+            .collect::<Vec<_>>();
+        assert_eq!(response.generated_shot_task_count, durations.len() as u32);
+        assert_eq!(
+            durations.iter().copied().sum::<u16>(),
+            response.estimated_total_story_duration_seconds
+        );
+        assert!(durations.iter().all(|duration| *duration <= 15));
+        assert!(
+            durations
+                .iter()
+                .all(|duration| *duration == SEEDANCE_STANDARD_SEGMENT_SECONDS
+                    || *duration == SEEDANCE_REMAINDER_SEGMENT_SECONDS)
+        );
+        assert_eq!(response.storyboard_results.len(), durations.len());
+        assert!(
+            response
+                .duration_plan_summary
+                .contains("director_scheduling")
+        );
+    }
+
+    #[test]
+    fn v0_story_to_storyboard_chain_validates_duration_mode_and_fixed_seconds() {
+        let state = test_state();
+        let mut invalid_mode =
+            v0_chain_request_for_source("story-v0-invalid-mode", "Lin keeps the bridge.");
+        invalid_mode.target_duration_mode = "sixty_seconds_auto".to_string();
+        let invalid_mode_response = run_v0_story_to_storyboard_chain(&state, invalid_mode);
+        assert_eq!(invalid_mode_response.status, BridgeCallStatus::Blocked);
+        assert!(
+            invalid_mode_response
+                .blockers
+                .iter()
+                .any(|blocker| blocker.code == "target_duration_mode_invalid")
+        );
+
+        let mut unsupported_fixed =
+            v0_chain_request_for_source("story-v0-fixed-20", "Lin keeps the bridge.");
+        unsupported_fixed.selected_total_duration_seconds = 20;
+        let unsupported_fixed_response =
+            run_v0_story_to_storyboard_chain(&state, unsupported_fixed);
+        assert_eq!(unsupported_fixed_response.status, BridgeCallStatus::Blocked);
+        assert!(
+            unsupported_fixed_response
+                .blockers
+                .iter()
+                .any(|blocker| blocker.code == "duration_not_supported")
+        );
+    }
+
+    #[test]
+    fn long_text_auto_allocator_uses_ten_second_tasks_and_five_second_remainder() {
+        let durations = allocate_long_text_auto_shot_task_durations(105);
+
+        assert_eq!(durations.iter().copied().sum::<u16>(), 105);
+        assert_eq!(durations.last(), Some(&SEEDANCE_REMAINDER_SEGMENT_SECONDS));
+        assert!(durations.iter().all(|duration| *duration <= 15));
+        assert!(
+            durations
+                .iter()
+                .all(|duration| *duration == SEEDANCE_STANDARD_SEGMENT_SECONDS
+                    || *duration == SEEDANCE_REMAINDER_SEGMENT_SECONDS)
+        );
     }
 
     #[test]
@@ -7820,6 +8316,10 @@ mod tests {
                 user_topic_or_synopsis: "主角与对手在城门前对峙。".to_string(),
                 story_length_profile: "short_story_2000_2500".to_string(),
                 selected_total_duration_seconds: 10,
+                target_duration_mode: TARGET_DURATION_MODE_FIXED_SECONDS.to_string(),
+                source_material_length_chars: 0,
+                auto_segment_strategy: String::new(),
+                estimated_total_story_duration_seconds: 0,
                 primary_scene_type: "daily_dialogue".to_string(),
                 primary_scene_label: Some("城门对峙".to_string()),
                 primary_scene_category: Some("dialogue".to_string()),

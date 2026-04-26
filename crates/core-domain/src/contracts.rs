@@ -304,6 +304,10 @@ pub struct SourceStoryFacts {
     pub ending_state: String,
 }
 
+fn default_target_duration_mode() -> String {
+    "fixed_seconds".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GenerateNovelChapterRequest {
     pub story_id: String,
@@ -570,6 +574,10 @@ pub struct SplitScriptToShotTasksRequest {
     pub script_id: Option<String>,
     pub expanded_script_text: String,
     pub selected_total_duration_seconds: u16,
+    #[serde(default = "default_target_duration_mode")]
+    pub target_duration_mode: String,
+    #[serde(default)]
+    pub auto_segment_strategy: String,
     pub primary_scene_type: String,
     pub primary_scene_label: Option<String>,
     pub primary_scene_category: Option<String>,
@@ -609,6 +617,18 @@ pub struct ShotTaskPlan {
     pub chapter_order: u32,
     pub shot_tasks: Vec<ShotTask>,
     pub shot_task_count: u32,
+    #[serde(default = "default_target_duration_mode")]
+    pub target_duration_mode: String,
+    #[serde(default)]
+    pub story_length_profile: String,
+    #[serde(default)]
+    pub source_material_length_chars: u32,
+    #[serde(default)]
+    pub auto_segment_strategy: String,
+    #[serde(default)]
+    pub estimated_total_story_duration_seconds: u16,
+    #[serde(default)]
+    pub generated_shot_task_count: u32,
     pub duration_plan_summary: String,
     pub continuity_delta: String,
     pub warnings: Vec<ProductWarning>,
@@ -969,6 +989,14 @@ pub struct RunV0StoryToStoryboardChainRequest {
     pub user_topic_or_synopsis: String,
     pub story_length_profile: String,
     pub selected_total_duration_seconds: u16,
+    #[serde(default = "default_target_duration_mode")]
+    pub target_duration_mode: String,
+    #[serde(default)]
+    pub source_material_length_chars: u32,
+    #[serde(default)]
+    pub auto_segment_strategy: String,
+    #[serde(default)]
+    pub estimated_total_story_duration_seconds: u16,
     pub primary_scene_type: String,
     pub primary_scene_label: Option<String>,
     pub primary_scene_category: Option<String>,
@@ -989,6 +1017,20 @@ pub struct RunV0StoryToStoryboardChainResponse {
     pub status: BridgeCallStatus,
     pub blockers: Vec<ProductWarning>,
     pub warnings: Vec<ProductWarning>,
+    #[serde(default = "default_target_duration_mode")]
+    pub target_duration_mode: String,
+    #[serde(default)]
+    pub story_length_profile: String,
+    #[serde(default)]
+    pub source_material_length_chars: u32,
+    #[serde(default)]
+    pub auto_segment_strategy: String,
+    #[serde(default)]
+    pub estimated_total_story_duration_seconds: u16,
+    #[serde(default)]
+    pub generated_shot_task_count: u32,
+    #[serde(default)]
+    pub duration_plan_summary: String,
     #[serde(default)]
     pub source_input_type: String,
     #[serde(default)]
