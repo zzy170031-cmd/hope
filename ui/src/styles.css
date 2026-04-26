@@ -712,6 +712,7 @@ textarea {
 .task-row {
   grid-template-columns: var(--task-index-column) var(--task-name-column) minmax(112px, 0.72fr) minmax(120px, 0.78fr) minmax(122px, 0.58fr) minmax(88px, 0.45fr) minmax(112px, 0.56fr) minmax(118px, 0.62fr) var(--workflow-action-column);
   grid-template-rows: var(--control-height);
+  align-items: stretch;
   gap: 8px;
   padding: 8px 10px;
 }
@@ -765,6 +766,17 @@ textarea {
 .task-row--compact .current-shot-status {
   height: var(--control-height);
   width: 100%;
+  align-self: stretch;
+  justify-self: stretch;
+}
+
+.task-row--compact .action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  text-align: center;
 }
 
 .task-row--compact > :nth-child(1) {
@@ -1152,18 +1164,22 @@ textarea {
 .storyboard-table td:nth-child(6),
 .storyboard-table th:nth-child(6) {
   width: 13%;
-  text-align: left;
 }
 
 .storyboard-table td:nth-child(7),
 .storyboard-table th:nth-child(7) {
   width: 12%;
-  text-align: left;
 }
 
 .storyboard-table td:nth-child(8),
 .storyboard-table th:nth-child(8) {
   width: 14%;
+}
+
+.storyboard-table td:nth-child(5),
+.storyboard-table td:nth-child(6),
+.storyboard-table td:nth-child(7),
+.storyboard-table td:nth-child(8) {
   text-align: left;
 }
 
@@ -1554,20 +1570,29 @@ textarea {
   min-width: 0;
   max-width: 520px;
   align-items: center;
-  gap: 8px;
-  padding: 0 8px;
-  color: var(--text-soft);
-  font-size: 12px;
+  gap: 10px;
+  padding: 0 10px;
+  color: #2f3a4e;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
   white-space: nowrap;
 }
 
 .finalized-bank strong {
   color: var(--navy);
+  font-size: 13px;
+  font-weight: 900;
 }
 
 .finalized-bank span {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.finalized-bank .link-button {
+  color: var(--navy);
+  font-weight: 900;
 }
 
 .finalized-bank-dialog {
@@ -1955,7 +1980,7 @@ textarea {
   }
 }
 
-@media (max-width: 1240px) {
+@media (max-width: 1400px) {
   .script-row {
     grid-template-columns: minmax(0, 1fr) var(--workflow-action-column);
     grid-template-rows: auto auto;
