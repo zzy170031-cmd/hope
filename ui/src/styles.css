@@ -1967,16 +1967,17 @@ textarea {
   :root {
     --script-settings-column: clamp(190px, 15vw, 220px);
     --task-index-column: clamp(122px, 9vw, 136px);
-    --task-name-column: clamp(178px, 16vw, 230px);
-    --workflow-action-column: clamp(168px, 14vw, 188px);
+    --task-name-column: clamp(168px, 15vw, 220px);
+    --workflow-action-column: clamp(148px, 12vw, 168px);
   }
 
   .task-row {
-    grid-template-columns: var(--task-index-column) var(--task-name-column) minmax(108px, 0.7fr) minmax(116px, 0.76fr) minmax(118px, 0.56fr) minmax(88px, 0.44fr) minmax(112px, 0.54fr) minmax(118px, 0.6fr) var(--workflow-action-column);
+    grid-template-columns: var(--task-index-column) var(--task-name-column) minmax(100px, 0.68fr) minmax(108px, 0.74fr) minmax(112px, 0.54fr) minmax(80px, 0.42fr) minmax(104px, 0.52fr) minmax(110px, 0.58fr) var(--workflow-action-column);
+    gap: 6px;
   }
 
   .action-button {
-    padding: 0 12px;
+    padding: 0 10px;
   }
 
   .duration-pill {
