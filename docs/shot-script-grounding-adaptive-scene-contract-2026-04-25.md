@@ -61,6 +61,7 @@ adaptation_reason
 split_script_to_shot_tasks
 shot_duration_seconds
 duration_source
+target_duration_seconds
 ```
 
 ## Field Definitions
@@ -158,6 +159,49 @@ storyboard_duration_plan.allocated_row_duration_seconds
 ```
 
 - any additional value requires a later contract gate
+
+`target_duration_seconds`
+
+- optional `ExpandScriptRequest` compatibility field
+- source is the user's selected target duration or
+  `selected_total_duration_seconds`
+- used by `expand_script` to control the scale, density, and rhythm of
+  `expanded_script_text`
+- 15-second and 60-second requests should produce clearly different story
+  volume and pacing
+- must not override explicit user story intent
+
+## ExpandScriptRequest Duration Compatibility
+
+`ExpandScriptRequest` may accept:
+
+```text
+target_duration_seconds
+```
+
+`target_duration_seconds` is optional.
+
+When present, it should be interpreted as the script-expansion target duration.
+When absent, `expand_script` may fall back to the existing selected duration
+field supplied by the caller.
+
+Allowed source:
+
+```text
+user selected target duration
+selected_total_duration_seconds
+```
+
+Expected behavior:
+
+```text
+15 seconds -> compact premise, fewer beats, faster setup
+60 seconds -> broader setup, more action/reaction beats, fuller transition room
+```
+
+`target_duration_seconds` affects script volume and pacing only. It is not a
+Seedance runtime duration request, not a video-generation request, and not a
+new KB schema field.
 
 ## split_script_to_shot_tasks Input
 
@@ -289,6 +333,50 @@ source_register
 overlay JSON
 ```
 
+## Person Subject Grounding Quality Boundary
+
+When real character names are present in story evidence, product-facing subject
+fields should prefer those names.
+
+Name-bearing fields:
+
+```text
+person
+shot_title
+character_action
+prompt_text
+```
+
+Examples of valid real character names:
+
+```text
+林峰
+叶倾颜
+萧寒
+```
+
+When no real character name exists, use stable product-facing subject labels:
+
+```text
+主角
+女主
+敌方刀客
+目标人物
+对立人物
+```
+
+Long-term generic placeholders are forbidden as stable product output:
+
+```text
+交锋双方
+当前镜头主体
+未指定角色
+内部码
+```
+
+This boundary applies to visible product fields and final `prompt_text`. It
+does not require inventing names when the story has not supplied them.
+
 ## generate_storyboard Input Priority
 
 `generate_storyboard` must resolve grounding in this order:
@@ -312,6 +400,42 @@ Priority behavior:
   grounding is established.
 
 The Router summary cannot override explicit `shot_script`.
+
+## Seedance-Friendly Segment Strategy
+
+Hope currently does not connect Seedance runtime.
+
+Hope V1 produces:
+
+```text
+storyboard rows
+prompt_text
+```
+
+Each storyboard row represents one Seedance-friendly short segment.
+
+Segment duration rules:
+
+```text
+single row max duration = 15 seconds
+V0 default preferred row duration = 10 seconds
+remainder may use 5 seconds
+```
+
+Recommended 45-second split:
+
+```text
+10 + 10 + 10 + 10 + 5
+```
+
+Avoid default equal splitting into:
+
+```text
+9 + 9 + 9 + 9 + 9
+```
+
+The segment strategy is a storyboard and prompt-text planning boundary only.
+It does not call Seedance runtime and does not generate video.
 
 ## Adaptive Scene Rules
 
@@ -428,6 +552,8 @@ full raw KB rows
 API key
 token
 plaintext secret
+internal hash
+debug trace
 user local path
 real director name
 concrete IP name
@@ -467,10 +593,13 @@ A later implementation validator must check:
 
 ```text
 shot_script presence or fallback reason
+target_duration_seconds compatibility
 generate_storyboard grounding priority
 shot_scene_type adaptation evidence
 adaptation_reason required on scene-type changes
 duration conservation
+Seedance-friendly segment max duration
+person subject grounding quality
 shot_duration_seconds source
 duration_source allowed value
 role_action_grounding_incomplete warning boundary
@@ -483,6 +612,8 @@ no KB summary leakage into prompt_text
 no retrieval trace leakage into prompt_text
 no full raw KB rows leakage
 no API key or token leakage
+no internal hash leakage into prompt_text
+no debug trace leakage into prompt_text
 no user local path leakage
 ```
 
@@ -496,6 +627,12 @@ Storyboard row duration source rule:
 
 ```text
 GeneratedStoryboardRow.duration_source == storyboard_duration_plan.allocated_row_duration_seconds
+```
+
+Seedance-friendly segment duration rule:
+
+```text
+GeneratedStoryboardRow.shot_duration_seconds <= 15
 ```
 
 The validator must fail if `shot_scene_type` changes without a non-empty
