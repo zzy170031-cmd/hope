@@ -234,6 +234,8 @@ pub struct ExpandScriptRequest {
     #[serde(default)]
     pub model_config_summary: Option<ModelConfigSummary>,
     #[serde(default)]
+    pub target_duration_seconds: Option<u16>,
+    #[serde(default)]
     pub selected_total_duration_seconds: Option<u16>,
     pub synopsis_text: String,
 }

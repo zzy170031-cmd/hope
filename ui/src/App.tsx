@@ -788,6 +788,7 @@ export function App() {
         scene_label: selectedSceneOption.label,
         scene_category: selectedSceneOption.group,
         model_config_summary: modelConfigSummary,
+        target_duration_seconds: durationSeconds,
         selected_total_duration_seconds: durationSeconds,
         synopsis_text: storyInput,
       });

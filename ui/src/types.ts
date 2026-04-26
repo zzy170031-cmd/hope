@@ -75,6 +75,7 @@ export interface ExpandScriptRequest {
   scene_label?: string;
   scene_category?: string;
   model_config_summary?: ModelConfigSummary;
+  target_duration_seconds?: number;
   selected_total_duration_seconds?: number;
   synopsis_text: string;
 }

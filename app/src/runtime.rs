@@ -176,6 +176,10 @@ struct StoryboardGroundingContext {
 }
 
 const STORYBOARD_DURATION_SOURCE: &str = "storyboard_duration_plan.allocated_row_duration_seconds";
+const DEFAULT_EXPAND_SCRIPT_DURATION_SECONDS: u16 = 30;
+const SEEDANCE_STANDARD_SEGMENT_SECONDS: u16 = 10;
+const SEEDANCE_REMAINDER_SEGMENT_SECONDS: u16 = 5;
+const SEEDANCE_MAX_SEGMENT_SECONDS: u16 = 15;
 
 const FINALIZED_BANK_FORBIDDEN_TERMS: &[&str] = &[
     "raw prompt_body",
@@ -242,10 +246,7 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
     let scene_label = request.scene_label.as_deref().unwrap_or_default().trim();
     let scene_category = request.scene_category.as_deref().unwrap_or_default().trim();
     let normalized_scene_type = normalize_scene_type(&request.scene_type);
-    let target_duration_seconds = request
-        .selected_total_duration_seconds
-        .filter(|duration| is_supported_storyboard_duration(*duration))
-        .unwrap_or(15);
+    let target_duration_seconds = resolve_expand_script_target_duration_seconds(&request);
     let router_request = KbRouterRuntimeRequest {
         scene_type: normalized_scene_type.clone(),
         synopsis_text: request.synopsis_text.clone(),
@@ -471,9 +472,8 @@ pub fn generate_storyboard(
         );
     }
 
-    let row_count = selected_records.len().max(1);
     let Some(row_durations) =
-        allocate_storyboard_row_durations(request.selected_total_duration_seconds, row_count)
+        allocate_storyboard_row_durations(request.selected_total_duration_seconds, selected_records.len().max(1))
     else {
         return blocked_storyboard_response(
             state,
@@ -488,6 +488,7 @@ pub fn generate_storyboard(
             now_ms,
         );
     };
+    let row_count = row_durations.len();
 
     let mut rows = Vec::new();
     let mut deterministic_rows = Vec::new();
@@ -497,12 +498,10 @@ pub fn generate_storyboard(
         TextGenerationTask::GenerateStoryboard,
         Some(shot_scene_type.clone()),
         build_storyboard_model_story_input(&grounding),
-        Some(StoryboardDurationPlan {
-            total_duration_seconds: request.selected_total_duration_seconds,
-            row_count: row_count as u32,
-            per_row_seconds: (request.selected_total_duration_seconds / row_count as u16).max(1),
-            allocated_seconds: request.selected_total_duration_seconds,
-        }),
+        Some(build_storyboard_duration_plan(
+            request.selected_total_duration_seconds,
+            &row_durations,
+        )),
         kb_router_result.kb_context_summary.clone(),
         kb_router_result.selected_sample_ids.clone(),
         kb_router_result
@@ -524,7 +523,8 @@ pub fn generate_storyboard(
         }
     };
 
-    for (index, record) in selected_records.iter().enumerate() {
+    for (index, duration_seconds) in row_durations.iter().copied().enumerate() {
+        let record = &selected_records[index % selected_records.len()];
         let failure_mapping = state.kb_golden_sample_runtime.as_ref().and_then(|package| {
             package
                 .failure_mapping
@@ -550,14 +550,14 @@ pub fn generate_storyboard(
             &grounding,
             index,
             row_count,
-            row_durations[index],
+            duration_seconds,
             record,
         );
         let scene_projection = draft.scene_performance_projection.clone();
         let prompt_compilation = compile_seedance_prompt_text(
             record,
             &scene_projection,
-            row_durations[index],
+            duration_seconds,
             &grounding,
             &draft.shot_script,
             &kb_router_result,
@@ -679,12 +679,10 @@ pub fn generate_storyboard(
         result_id,
         rows,
         selected_total_duration_seconds: request.selected_total_duration_seconds,
-        duration_plan: StoryboardDurationPlan {
-            total_duration_seconds: request.selected_total_duration_seconds,
-            row_count: row_count as u32,
-            per_row_seconds: (allocated_seconds / row_count as u16).max(1),
-            allocated_seconds,
-        },
+        duration_plan: build_storyboard_duration_plan(
+            request.selected_total_duration_seconds,
+            &row_durations,
+        ),
         export_status: StoryboardExportStatus {
             status,
             blockers,
@@ -2011,6 +2009,41 @@ fn provider_kind_display_name(kind: TextModelProviderKind) -> &'static str {
     }
 }
 
+fn resolve_expand_script_target_duration_seconds(request: &ExpandScriptRequest) -> u16 {
+    request
+        .target_duration_seconds
+        .or(request.selected_total_duration_seconds)
+        .or_else(|| infer_duration_seconds_from_text(&request.synopsis_text))
+        .filter(|duration| is_supported_storyboard_duration(*duration))
+        .unwrap_or(DEFAULT_EXPAND_SCRIPT_DURATION_SECONDS)
+}
+
+fn infer_duration_seconds_from_text(text: &str) -> Option<u16> {
+    let chars = text.chars().collect::<Vec<_>>();
+    for index in 0..chars.len() {
+        if !chars[index].is_ascii_digit() {
+            continue;
+        }
+        let end = chars[index..]
+            .iter()
+            .position(|character| !character.is_ascii_digit())
+            .map(|offset| index + offset)
+            .unwrap_or(chars.len());
+        let value = chars[index..end]
+            .iter()
+            .collect::<String>()
+            .parse::<u16>()
+            .ok()?;
+        let suffix = chars[end..chars.len().min(end + 2)]
+            .iter()
+            .collect::<String>();
+        if suffix.starts_with('秒') || suffix.to_ascii_lowercase().starts_with('s') {
+            return Some(value);
+        }
+    }
+    None
+}
+
 fn validate_generated_script_text(text: &str) -> Option<&str> {
     let trimmed = text.trim();
     if trimmed.is_empty()
@@ -2066,10 +2099,34 @@ fn build_deterministic_expanded_story_script(
     } else {
         scene_label.trim()
     };
-    format!(
-        "在{}的叙事方向中，故事从“{}”展开。开场先建立人物所处的环境和压力，让主角的目标、阻碍和情绪动机变得清晰；随后冲突逐步升级，人物在行动中暴露犹豫、判断和选择。中段让关键阻力逼近，主角必须在短时间内作出反应，场景节奏随情绪和动作推进而收紧。结尾让主角完成一次明确的转折或确认，为后续镜头拆解留下连续的动作线、情绪线和空间线。整段剧本目标时长约 {} 秒，适合继续拆解为若干镜头任务。",
-        scene_label, synopsis, target_duration_seconds
-    )
+    let beat_count = match target_duration_seconds {
+        0..=15 => 2,
+        16..=30 => 3,
+        31..=45 => 4,
+        _ => 6,
+    };
+    let seconds_per_beat = (target_duration_seconds / beat_count).max(1);
+    let mut beats = vec![format!("target_duration_seconds: {target_duration_seconds}")];
+    beats.push(format!(
+        "扩写剧本：按{target_duration_seconds}秒连续剧情处理，保留真实人物名、主体关系、动作对象和清晰起承转合。"
+    ));
+    beats.push(format!("第1拍 0-{}秒：在{}的叙事方向中，故事从“{}”展开，先建立人物所处环境、压力来源和行动目标。", seconds_per_beat, scene_label, synopsis));
+    for index in 1..beat_count {
+        let start = index as u16 * seconds_per_beat;
+        let end = if index + 1 == beat_count {
+            target_duration_seconds
+        } else {
+            ((index as u16 + 1) * seconds_per_beat).min(target_duration_seconds)
+        };
+        beats.push(format!(
+            "第{}拍 {}-{}秒：冲突继续升级，人物围绕目标和阻碍完成可见动作变化，节奏比上一拍更紧，情绪和空间关系保持连续。",
+            index + 1,
+            start,
+            end,
+        ));
+    }
+    beats.push("结尾让主角完成一次明确的转折或确认，为后续镜头拆解留下连续的动作线、情绪线和空间线。".to_string());
+    beats.join(" ")
 }
 
 fn extract_live_storyboard_row_patches(
@@ -2214,10 +2271,7 @@ fn is_role_action_grounding_incomplete(value: &str) -> bool {
     if trimmed.chars().count() < 28 {
         return true;
     }
-    !(trimmed.contains("从")
-        && trimmed.contains("到")
-        && trimmed.contains("镜头捕捉")
-        && (trimmed.contains("对手") || trimmed.contains("环境") || trimmed.contains("全场")))
+    !(trimmed.contains("从") && trimmed.contains("到") && trimmed.contains("镜头捕捉"))
 }
 
 fn contains_forbidden_generation_terms(text: &str) -> bool {
@@ -2673,10 +2727,12 @@ fn build_shot_grounded_row_draft(
     record: &GoldenSampleLibraryRecord,
 ) -> ShotGroundedRowDraft {
     let segments = split_story_segments(&grounding.grounding_text);
-    let segment = segments
-        .get(index)
-        .cloned()
-        .unwrap_or_else(|| grounding.grounding_text.trim().to_string());
+    let segment = story_segment_for_planned_row(
+        &segments,
+        index,
+        row_count,
+        &grounding.grounding_text,
+    );
     let shot_id = format!(
         "shot-task-{}-{:02}",
         &stable_hash_hex(&format!(
@@ -2690,12 +2746,14 @@ fn build_shot_grounded_row_draft(
         .or_else(|| non_blank_string(&derive_scene_scale(&record.source_fields.technical_profile)))
         .unwrap_or_else(|| "中景".to_string());
     let character_action = derive_character_action_from_story(&segment, &grounding.grounding_text);
-    let shot_title = derive_shot_title(index, &segment, &character_action);
+    let shot_title = derive_shot_title(index, &segment, &person, &character_action);
     let dialogue = extract_dialogue_from_story(&segment);
     let visual_description = if segment.trim().is_empty() {
-        "当前镜头按已确认镜头脚本推进。".to_string()
-    } else {
+        format!("{person}按已确认镜头脚本推进，画面保持主体和动作关系清晰。")
+    } else if segment.contains(&person) || subject_label_mentions_any_name(&person, &segment) {
         segment.trim().to_string()
+    } else {
+        format!("{person}：{}", segment.trim())
     };
     let sequence_grouping = SequenceGrouping {
         structure_mode: StructureMode::SingleShot,
@@ -2741,6 +2799,33 @@ fn split_story_segments(text: &str) -> Vec<String> {
         .filter(|segment| !segment.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+fn story_segment_for_planned_row(
+    segments: &[String],
+    index: usize,
+    planned_rows: usize,
+    fallback_text: &str,
+) -> String {
+    if segments.is_empty() || planned_rows == 0 {
+        return fallback_text.trim().to_string();
+    }
+    if segments.len() <= planned_rows {
+        return segments
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| fallback_text.trim().to_string());
+    }
+
+    let start = index * segments.len() / planned_rows;
+    let mut end = (index + 1) * segments.len() / planned_rows;
+    if index + 1 == planned_rows {
+        end = segments.len();
+    }
+    if start >= end || start >= segments.len() {
+        return fallback_text.trim().to_string();
+    }
+    segments[start..end.min(segments.len())].join("。")
 }
 
 fn infer_shot_scene_type(text: &str, primary_scene_type: &str) -> String {
@@ -2799,18 +2884,278 @@ fn build_adaptation_reason(text: &str, shot_scene_type: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CharacterMention {
+    name: String,
+    role: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CharacterRegistry {
+    characters: Vec<CharacterMention>,
+}
+
+impl CharacterRegistry {
+    fn from_story_text(segment: &str, full_text: &str) -> Self {
+        let mut registry = Self { characters: vec![] };
+        registry.extend_from_text(full_text);
+        registry.extend_from_text(segment);
+        registry
+    }
+
+    fn extend_from_text(&mut self, text: &str) {
+        for role in [
+            "男主", "女主", "主角", "少年", "敌将", "反派", "敌人", "对手",
+        ] {
+            for (start, _) in text.match_indices(role) {
+                let after_role = &text[start + role.len()..];
+                if let Some(name) = extract_character_name_after_role(after_role) {
+                    self.push(role, &name);
+                }
+            }
+        }
+    }
+
+    fn push(&mut self, role: &str, name: &str) {
+        if self.characters.iter().any(|item| item.name == name) {
+            return;
+        }
+        self.characters.push(CharacterMention {
+            name: name.to_string(),
+            role: role.to_string(),
+        });
+    }
+
+    fn is_empty(&self) -> bool {
+        self.characters.is_empty()
+    }
+
+    fn names_in_text(&self, text: &str) -> Vec<String> {
+        self.characters
+            .iter()
+            .filter(|character| text.contains(&character.name))
+            .map(|character| character.name.clone())
+            .collect()
+    }
+
+    fn protagonist_name(&self) -> Option<&str> {
+        self.characters
+            .iter()
+            .find(|character| contains_any_story_term(&character.role, &["男主", "主角", "少年"]))
+            .or_else(|| {
+                self.characters
+                    .iter()
+                    .find(|character| !is_antagonist_role(&character.role))
+            })
+            .map(|character| character.name.as_str())
+    }
+
+    fn heroine_name(&self) -> Option<&str> {
+        self.characters
+            .iter()
+            .find(|character| character.role.contains("女主"))
+            .map(|character| character.name.as_str())
+    }
+
+    fn antagonist_name(&self) -> Option<&str> {
+        self.characters
+            .iter()
+            .find(|character| is_antagonist_role(&character.role))
+            .map(|character| character.name.as_str())
+    }
+}
+
 fn derive_product_person(segment: &str, full_text: &str) -> String {
-    if contains_any_story_term(segment, &["掌心", "银辉", "觉醒"]) {
-        "觉醒者".to_string()
-    } else if contains_any_story_term(segment, &["震退", "七步"]) {
-        "被震退者".to_string()
-    } else if contains_any_story_term(full_text, &["格挡", "交锋", "震退"]) {
-        "交锋双方".to_string()
-    } else if contains_any_story_term(full_text, &["主角"]) {
+    let registry = CharacterRegistry::from_story_text(segment, full_text);
+    if !registry.is_empty() {
+        let active_names = registry.names_in_text(segment);
+        if !active_names.is_empty() {
+            return subject_label_from_names(&active_names);
+        }
+
+        if contains_any_story_term(segment, &["护住", "护着", "回身", "重逢"]) {
+            if let (Some(heroine), Some(protagonist)) =
+                (registry.heroine_name(), registry.protagonist_name())
+            {
+                return subject_label_from_names(&[heroine.to_string(), protagonist.to_string()]);
+            }
+        }
+
+        if contains_enemy_or_conflict_terms(segment) {
+            if let (Some(protagonist), Some(antagonist)) =
+                (registry.protagonist_name(), registry.antagonist_name())
+            {
+                return subject_label_from_names(&[
+                    protagonist.to_string(),
+                    antagonist.to_string(),
+                ]);
+            }
+        }
+
+        if let Some(protagonist) = registry.protagonist_name() {
+            return protagonist.to_string();
+        }
+
+        return subject_label_from_names(
+            &registry
+                .characters
+                .iter()
+                .map(|character| character.name.clone())
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    derive_fallback_subject(segment, full_text)
+}
+
+fn extract_character_name_after_role(text: &str) -> Option<String> {
+    let mut name = String::new();
+    for character in text.chars().skip_while(|character| {
+        character.is_whitespace() || matches!(character, '：' | ':' | '，' | ',' | '、')
+    }) {
+        if is_character_name_stop(character) {
+            break;
+        }
+        if is_character_name_action_stop(character) {
+            break;
+        }
+        if !is_cjk_unified_ideograph(character) {
+            break;
+        }
+        name.push(character);
+        if name.chars().count() >= 3 {
+            break;
+        }
+    }
+
+    (name.chars().count() >= 2).then_some(name)
+}
+
+fn is_character_name_stop(character: char) -> bool {
+    matches!(
+        character,
+        '，' | ',' | '。' | '、' | '；' | ';' | '：' | ':' | '！' | '？' | ' ' | '\n' | '\r'
+            | '\t' | '和' | '与' | '在' | '被' | '向' | '从' | '对'
+    )
+}
+
+fn is_cjk_unified_ideograph(character: char) -> bool {
+    matches!(character as u32, 0x4E00..=0x9FFF | 0x3400..=0x4DBF)
+}
+
+fn is_character_name_action_stop(character: char) -> bool {
+    matches!(
+        character,
+        '踏' | '护'
+            | '追'
+            | '格'
+            | '压'
+            | '逼'
+            | '回'
+            | '迎'
+            | '抬'
+            | '震'
+            | '完'
+            | '站'
+            | '走'
+            | '看'
+            | '说'
+            | '沉'
+            | '握'
+            | '拔'
+            | '挥'
+            | '挡'
+            | '守'
+            | '等'
+            | '观'
+            | '调'
+            | '提'
+            | '转'
+            | '低'
+            | '靠'
+            | '冲'
+            | '拦'
+            | '退'
+            | '醒'
+            | '觉'
+            | '举'
+            | '伸'
+            | '避'
+            | '躲'
+    )
+}
+
+fn is_antagonist_role(role: &str) -> bool {
+    contains_any_story_term(role, &["敌将", "反派", "敌人", "对手"])
+}
+
+fn subject_label_from_names(names: &[String]) -> String {
+    let mut unique_names = Vec::new();
+    for name in names {
+        if !unique_names.contains(name) {
+            unique_names.push(name.clone());
+        }
+    }
+
+    match unique_names.as_slice() {
+        [] => "主角".to_string(),
+        [single] => single.clone(),
+        [first, second] => format!("{first}与{second}"),
+        [first, second, third, ..] => format!("{first}、{second}与{third}"),
+    }
+}
+
+fn contains_enemy_or_conflict_terms(text: &str) -> bool {
+    contains_any_story_term(
+        text,
+        &[
+            "敌方刀客",
+            "敌人",
+            "敌将",
+            "反派",
+            "对手",
+            "刀客",
+            "追杀",
+            "压近",
+            "逼近",
+            "格挡",
+            "交锋",
+            "刀锋",
+            "攻击",
+            "迎敌",
+        ],
+    )
+}
+
+fn derive_fallback_subject(segment: &str, full_text: &str) -> String {
+    let combined = format!("{segment} {full_text}");
+    let has_main = contains_any_story_term(&combined, &["主角", "男主", "女主", "少年"]);
+    let has_enemy = contains_enemy_or_conflict_terms(&combined);
+    let enemy_label = if combined.contains("刀客") {
+        "敌方刀客"
+    } else {
+        "对立人物"
+    };
+
+    if contains_any_story_term(&combined, &["群像", "众人", "队伍"]) {
+        "群像角色".to_string()
+    } else if has_main && has_enemy {
+        format!("主角与{enemy_label}")
+    } else if has_enemy {
+        enemy_label.to_string()
+    } else if has_main {
         "主角".to_string()
     } else {
-        "当前镜头主体".to_string()
+        "目标人物".to_string()
     }
+}
+
+fn subject_label_mentions_any_name(subject: &str, text: &str) -> bool {
+    subject
+        .split(|character| matches!(character, '与' | '、'))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .any(|value| text.contains(value))
 }
 
 fn derive_shot_scene_scale(segment: &str) -> Option<String> {
@@ -2831,37 +3176,165 @@ fn derive_character_action_from_story(segment: &str, full_text: &str) -> String 
     } else {
         segment
     };
-    if contains_any_story_term(source, &["掌心银辉", "银辉觉醒", "沿手臂上升", "觉醒"])
+    let registry = CharacterRegistry::from_story_text(source, full_text);
+    let subject = derive_product_person(source, full_text);
+    let target = derive_action_target(&registry, &subject, source, full_text);
+    let start_state = derive_action_start_state(source);
+    let action = derive_visible_action(source, &subject, &target);
+    let end_state = derive_action_end_state(source);
+    let captured_moment = derive_captured_moment(source);
+
+    format!(
+        "{subject}从{start_state}开始，{action}，到{end_state}时结束，镜头捕捉{captured_moment}。"
+    )
+}
+
+fn derive_action_target(
+    registry: &CharacterRegistry,
+    subject: &str,
+    segment: &str,
+    full_text: &str,
+) -> String {
+    if contains_any_story_term(segment, &["重逢"]) {
+        return "彼此".to_string();
+    }
+    if contains_any_story_term(segment, &["护住", "护着"]) {
+        if let Some(protagonist) = registry.protagonist_name() {
+            return protagonist.to_string();
+        }
+        return "被保护者".to_string();
+    }
+    if let (Some(protagonist), Some(antagonist)) =
+        (registry.protagonist_name(), registry.antagonist_name())
     {
-        "觉醒者从格挡后的短暂停滞开始，将掌心朝向当前对手，银辉自掌心亮起并沿手臂上升，到力量完全爬上前臂时结束，镜头捕捉银辉开始蔓延的觉醒瞬间。"
-            .to_string()
-    } else if contains_any_story_term(source, &["震退七步", "震退"]) {
-        "交锋双方从正面相抵的僵持状态开始，防守者以格挡余力反震当前对手，将对手震退七步，到对手脚步失衡后撤时结束，镜头捕捉第一步被震开的瞬间。"
-            .to_string()
-    } else if contains_any_story_term(source, &["焦土犁痕", "焦土", "犁痕"]) {
-        "被震退者从后撤失衡开始，双脚顶住焦土仍被冲击推远，在地面犁出焦黑拖痕，到身体重新找回重心时结束，镜头捕捉脚跟划开焦土的瞬间。"
-            .to_string()
-    } else if contains_any_story_term(source, &["心跳", "低频鼓点", "鼓点", "低频"]) {
-        "当前镜头主体从战斗后的凝滞呼吸开始，胸口随心跳和低频鼓点压低起伏，面向当前对手重新蓄力，到下一次爆发前的停顿时结束，镜头捕捉心跳压住全场节奏的瞬间。"
-            .to_string()
-    } else if contains_any_story_term(source, &["格挡", "交锋", "战", "击"]) {
-        "交锋双方从迎面冲突开始，前景角色抬臂格挡当前对手的攻击，以稳住重心的姿态抵住冲击，到攻防短暂相持时结束，镜头捕捉格挡接触的关键瞬间。"
-            .to_string()
+        if subject.contains(protagonist) && subject.contains(antagonist) {
+            return "彼此".to_string();
+        }
+    }
+    if let Some(antagonist) = registry.antagonist_name() {
+        if !subject.contains(antagonist) {
+            return antagonist.to_string();
+        }
+    }
+    if let Some(protagonist) = registry.protagonist_name() {
+        if !subject.contains(protagonist) {
+            return protagonist.to_string();
+        }
+    }
+    if let Some(heroine) = registry.heroine_name() {
+        if !subject.contains(heroine) {
+            return heroine.to_string();
+        }
+    }
+
+    let combined = format!("{segment} {full_text}");
+    if subject.contains("敌方刀客") || subject.contains("对立人物") {
+        "主角".to_string()
+    } else if combined.contains("刀客") {
+        "敌方刀客".to_string()
+    } else if contains_enemy_or_conflict_terms(&combined) {
+        "对立人物".to_string()
+    } else if subject.contains('与') || subject.contains('、') {
+        "彼此".to_string()
     } else {
-        "当前镜头主体从上一动作余势中开始，面向当前对手或环境完成可见状态转变，到下一拍动作蓄势完成时结束，镜头捕捉状态发生变化的瞬间。"
-            .to_string()
+        "环境".to_string()
     }
 }
 
-fn derive_shot_title(index: usize, segment: &str, character_action: &str) -> String {
-    let title_core = story_anchor_terms(segment)
-        .into_iter()
-        .take(2)
-        .collect::<Vec<_>>();
-    if title_core.is_empty() {
-        format!("镜头{}：{}", index + 1, character_action)
+fn derive_action_start_state(source: &str) -> &'static str {
+    if contains_any_story_term(source, &["焦土", "裂痕", "犁痕"]) {
+        "焦土裂痕边缘稳住身体"
+    } else if contains_any_story_term(source, &["断桥", "重逢"]) {
+        "断桥残口确认彼此位置"
+    } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
+        "断桥远端压低重心"
+    } else if contains_any_story_term(source, &["格挡", "刀锋", "攻击"]) {
+        "迎面冲击前的半步停顿"
+    } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) {
+        "格挡后的短暂停滞"
     } else {
-        format!("镜头{}：{}", index + 1, title_core.join(""))
+        "上一动作落点稳定身体"
+    }
+}
+
+fn derive_visible_action(source: &str, subject: &str, target: &str) -> String {
+    if contains_any_story_term(source, &["重逢"]) {
+        format!("{subject}在断桥残口向{target}靠近，确认对方安全并重新建立站位")
+    } else if contains_any_story_term(source, &["护住", "护着", "回身"]) {
+        format!("{subject}回身护住{target}，用身体挡住逼近的威胁")
+    } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
+        format!("{subject}提刀逼向{target}，把对方压向断桥边缘")
+    } else if contains_any_story_term(source, &["格挡", "刀锋", "攻击", "交锋"]) {
+        format!("{subject}迎着{target}的冲击抬臂格挡，让银辉与刀锋正面相撞")
+    } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) {
+        format!("{subject}将掌心朝向{target}，让银辉沿手臂上升并压住对方攻势")
+    } else if contains_any_story_term(source, &["震退", "七步"]) {
+        format!("{subject}借格挡余力反震{target}，把对方逼到脚步失衡")
+    } else {
+        format!("{subject}面向{target}完成清晰可见的状态转变并接上下一拍动作")
+    }
+}
+
+fn derive_action_end_state(source: &str) -> &'static str {
+    if contains_any_story_term(source, &["重逢"]) {
+        "两人重新并肩"
+    } else if contains_any_story_term(source, &["护住", "护着"]) {
+        "被保护者退到安全半步"
+    } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
+        "目标被逼到断桥边缘"
+    } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) {
+        "银辉完全爬上前臂"
+    } else if contains_any_story_term(source, &["震退", "七步"]) {
+        "对方脚步失衡后撤"
+    } else if contains_any_story_term(source, &["格挡", "刀锋", "攻击", "交锋"]) {
+        "攻防短暂相持"
+    } else {
+        "下一拍动作蓄势完成"
+    }
+}
+
+fn derive_captured_moment(source: &str) -> &'static str {
+    if contains_any_story_term(source, &["重逢"]) {
+        "两人视线重新对上的一瞬间"
+    } else if contains_any_story_term(source, &["护住", "护着"]) {
+        "身体挡住威胁的一瞬间"
+    } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
+        "刀锋压入断桥空间的一瞬间"
+    } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) {
+        "银辉开始蔓延的一瞬间"
+    } else if contains_any_story_term(source, &["震退", "七步"]) {
+        "第一步被震开的瞬间"
+    } else if contains_any_story_term(source, &["格挡", "刀锋", "攻击", "交锋"]) {
+        "银辉与刀刃相撞的一瞬间"
+    } else {
+        "状态发生变化的一瞬间"
+    }
+}
+
+fn derive_shot_title(index: usize, segment: &str, person: &str, character_action: &str) -> String {
+    let action_core = derive_shot_title_action_core(segment, character_action);
+    format!("镜头{}：{}{}", index + 1, person, action_core)
+}
+
+fn derive_shot_title_action_core(segment: &str, character_action: &str) -> &'static str {
+    if contains_any_story_term(segment, &["重逢"]) {
+        "断桥重逢"
+    } else if contains_any_story_term(segment, &["护住", "护着", "回身"]) {
+        "回身护人"
+    } else if contains_any_story_term(segment, &["追杀", "压近", "逼近"]) {
+        "压近断桥"
+    } else if contains_any_story_term(segment, &["掌心", "银辉", "觉醒"]) {
+        "银辉觉醒"
+    } else if contains_any_story_term(segment, &["震退", "七步"]) {
+        "震退对手"
+    } else if contains_any_story_term(segment, &["焦土", "裂痕"]) {
+        "踏碎焦土"
+    } else if contains_any_story_term(segment, &["格挡", "刀锋", "攻击", "交锋"]) {
+        "踏步格挡"
+    } else if character_action.contains("镜头捕捉") {
+        "完成关键动作"
+    } else {
+        "推进当前动作"
     }
 }
 
@@ -3007,7 +3480,8 @@ fn normalize_scene_type(scene_type: &str) -> String {
 }
 
 fn is_supported_storyboard_duration(duration_seconds: u16) -> bool {
-    matches!(duration_seconds, 5 | 10 | 15 | 30 | 45 | 60)
+    (SEEDANCE_REMAINDER_SEGMENT_SECONDS..=60).contains(&duration_seconds)
+        && duration_seconds % SEEDANCE_REMAINDER_SEGMENT_SECONDS == 0
 }
 
 fn is_supported_desktop_scene_type(scene_type: &str) -> bool {
@@ -3039,27 +3513,56 @@ fn is_supported_desktop_scene_type(scene_type: &str) -> bool {
 
 fn allocate_storyboard_row_durations(
     total_duration_seconds: u16,
-    row_count: usize,
+    _row_count: usize,
 ) -> Option<Vec<u16>> {
-    if row_count == 0 || !is_supported_storyboard_duration(total_duration_seconds) {
+    if !is_supported_storyboard_duration(total_duration_seconds) {
         return None;
     }
 
-    let base = total_duration_seconds / row_count as u16;
-    if base == 0 {
+    let mut remaining = total_duration_seconds;
+    let mut durations = Vec::new();
+    while remaining >= SEEDANCE_STANDARD_SEGMENT_SECONDS {
+        durations.push(SEEDANCE_STANDARD_SEGMENT_SECONDS);
+        remaining -= SEEDANCE_STANDARD_SEGMENT_SECONDS;
+    }
+    if remaining == SEEDANCE_REMAINDER_SEGMENT_SECONDS {
+        durations.push(SEEDANCE_REMAINDER_SEGMENT_SECONDS);
+    } else if remaining != 0 {
         return None;
     }
 
-    let mut durations = vec![base; row_count];
-    let mut remainder = total_duration_seconds % row_count as u16;
-    let mut index = 0usize;
-    while remainder > 0 {
-        durations[index] += 1;
-        remainder -= 1;
-        index = (index + 1) % row_count;
+    if durations.is_empty()
+        || durations
+            .iter()
+            .any(|duration| *duration == 0 || *duration > SEEDANCE_MAX_SEGMENT_SECONDS)
+    {
+        return None;
     }
 
     (durations.iter().copied().sum::<u16>() == total_duration_seconds).then_some(durations)
+}
+
+fn build_storyboard_duration_plan(
+    total_duration_seconds: u16,
+    durations: &[u16],
+) -> StoryboardDurationPlan {
+    StoryboardDurationPlan {
+        total_duration_seconds,
+        row_count: durations.len() as u32,
+        per_row_seconds: planned_per_row_seconds(durations),
+        allocated_seconds: durations.iter().copied().sum(),
+    }
+}
+
+fn planned_per_row_seconds(durations: &[u16]) -> u16 {
+    if durations
+        .iter()
+        .any(|duration| *duration == SEEDANCE_STANDARD_SEGMENT_SECONDS)
+    {
+        SEEDANCE_STANDARD_SEGMENT_SECONDS
+    } else {
+        durations.first().copied().unwrap_or_default()
+    }
 }
 
 fn compile_seedance_prompt_text(
@@ -3828,8 +4331,8 @@ fn map_repair_recommendation(
 #[cfg(test)]
 mod tests {
     use core_domain::{
-        FailurePatternRecord, KbRuntimeSummary, KbSnapshotRecord, PromptTemplateRecord,
-        SceneTaxonomyRecord,
+        ExpandScriptRequest, FailurePatternRecord, KbRuntimeSummary, KbSnapshotRecord,
+        PromptTemplateRecord, SceneTaxonomyRecord,
     };
     use project_store::{
         DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeHandle, StoreSkeleton,
@@ -3837,10 +4340,13 @@ mod tests {
 
     use super::{
         AppShellReadonlyStatusSnapshot, StoryboardPreviewPlanRequest, ValidationExportPanelState,
+        allocate_storyboard_row_durations, build_deterministic_expanded_story_script,
         build_project_create_or_switch_snapshot_from_fixture, build_storyboard_preview_plan,
         build_storyboard_rendersegment_cut_preview_snapshot_from_fixture,
         build_validation_export_panel_snapshot_from_fixture,
-        build_writer_entry_snapshot_from_fixture, resolve_scene_taxonomy,
+        build_writer_entry_snapshot_from_fixture, derive_character_action_from_story,
+        derive_product_person, derive_shot_title, resolve_expand_script_target_duration_seconds,
+        resolve_scene_taxonomy,
     };
     use crate::state::load_desktop_shared_fixture;
     use crate::{
@@ -3968,6 +4474,79 @@ mod tests {
         state.kb_knowledge.failure_patterns.clear();
         state.kb_knowledge.prompt_templates.clear();
         state
+    }
+
+    #[test]
+    fn expand_script_prefers_explicit_target_duration() {
+        let request = ExpandScriptRequest {
+            scene_type: "hot_blood_battle".to_string(),
+            scene_label: Some("热血战斗".to_string()),
+            scene_category: Some("combat".to_string()),
+            model_config_summary: None,
+            selected_total_duration_seconds: Some(15),
+            target_duration_seconds: Some(60),
+            synopsis_text: "男主林峰在断桥边护住叶倾颜，迎战敌将萧寒。".to_string(),
+        };
+
+        assert_eq!(resolve_expand_script_target_duration_seconds(&request), 60);
+
+        let script_15 = build_deterministic_expanded_story_script(
+            &request.synopsis_text,
+            request.scene_label.as_deref().unwrap(),
+            15,
+        );
+        let script_60 = build_deterministic_expanded_story_script(
+            &request.synopsis_text,
+            request.scene_label.as_deref().unwrap(),
+            60,
+        );
+
+        assert!(script_60.contains("60秒"));
+        assert!(script_60.len() > script_15.len());
+    }
+
+    #[test]
+    fn seedance_duration_plan_prefers_ten_second_rows_with_five_second_remainder() {
+        let durations = allocate_storyboard_row_durations(45, 5)
+            .expect("45 seconds should split into Seedance-friendly rows");
+
+        assert_eq!(durations, vec![10, 10, 10, 10, 5]);
+        assert!(durations.iter().all(|duration| *duration <= 15));
+        assert!(!durations.contains(&9));
+        assert_eq!(durations.iter().copied().sum::<u16>(), 45);
+    }
+
+    #[test]
+    fn storyboard_grounding_uses_real_names_and_explicit_fallback_subjects() {
+        let story = "男主林峰与女主叶倾颜在断桥重逢，敌将萧寒追杀而至。林峰回身护住叶倾颜，格挡萧寒刀锋。";
+        let segment = "林峰回身护住叶倾颜，格挡萧寒刀锋。";
+
+        let person = derive_product_person(segment, story);
+        assert!(person.contains("林峰"));
+        assert!(person.contains("叶倾颜") || person.contains("萧寒"));
+        assert!(!matches!(
+            person.as_str(),
+            "交锋双方" | "当前镜头主体" | "未指定角色"
+        ));
+
+        let character_action = derive_character_action_from_story(segment, story);
+        assert!(character_action.contains("林峰"));
+        assert!(character_action.contains("叶倾颜") || character_action.contains("萧寒"));
+        assert!(character_action.contains("从"));
+        assert!(character_action.contains("到"));
+        assert!(character_action.contains("镜头捕捉"));
+
+        let shot_title = derive_shot_title(0, segment, &person, &character_action);
+        assert!(shot_title.contains(&person));
+
+        let protagonist_name = derive_product_person("主角林峰踏碎焦土。", "主角林峰踏碎焦土。");
+        assert_eq!(protagonist_name, "林峰");
+
+        let unnamed_protagonist = derive_product_person("主角踏碎焦土。", "主角踏碎焦土。");
+        assert_eq!(unnamed_protagonist, "主角");
+
+        let fallback = derive_product_person("敌方刀客压近断桥。", "敌方刀客压近断桥。");
+        assert!(matches!(fallback.as_str(), "敌方刀客" | "对立人物"));
     }
 
     #[test]
