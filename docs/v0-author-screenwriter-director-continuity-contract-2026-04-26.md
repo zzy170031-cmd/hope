@@ -73,6 +73,209 @@ V0 continuity is summary-level continuity state plus finalized storyboard
 references. It is not a video runtime, a hidden raw KB replay mechanism, or a
 real-author style clone.
 
+## Source Input Type And Authoring Mode
+
+V0 must classify user source material before choosing an authoring path.
+
+Required source-classification fields:
+
+```text
+source_input_type
+authoring_mode
+source_material_summary
+source_story_facts
+preserved_fact_summary
+changed_for_screenplay_summary
+omitted_detail_summary
+continuity_warnings
+```
+
+Allowed `source_input_type` values:
+
+```text
+synopsis
+full_story
+novel_chapter
+screenplay_text
+mixed_material
+```
+
+Allowed `authoring_mode` values:
+
+```text
+expand_from_synopsis
+rewrite_from_full_story
+adapt_story_to_screenplay
+polish_existing_screenplay
+```
+
+Routing rules:
+
+```text
+synopsis -> expand_from_synopsis
+full_story -> rewrite_from_full_story
+novel_chapter -> adapt_story_to_screenplay
+screenplay_text -> polish_existing_screenplay
+mixed_material -> conservative classification with light user hint when needed
+```
+
+`synopsis` means the user has provided a premise, short outline, or partial
+idea. It may be expanded.
+
+`full_story` means the user has provided a complete story document or complete
+story passage. It must be rewritten with fact preservation. It is not a simple
+synopsis-expansion task.
+
+`novel_chapter` means the user has provided a prose chapter or chapter-like
+section. It must be adapted to screenplay or shot planning while preserving
+facts.
+
+`screenplay_text` means the user has provided script-like material. It should
+be organized, polished, or prepared for shot splitting rather than expanded as
+new plot.
+
+`mixed_material` means the input contains multiple source types. V0 should use
+the safest conservative interpretation and, when needed, show a light status
+hint rather than forcing the user through a complex mode selector.
+
+## Full Story Rewrite Flow
+
+When `source_input_type` is `full_story` or `novel_chapter`, the correct V0
+flow is:
+
+```text
+import complete story material
+identify source_input_type
+extract characters
+extract events
+extract timeline
+extract emotion
+extract conflict
+extract prop state
+preserve source story facts
+rewrite as screenplay
+split into shot tasks
+generate storyboard
+save finalized shots
+export
+```
+
+This flow is fact-preserving rewrite. It is not synopsis expansion.
+
+`source_material_summary`
+
+- short product-safe summary of the imported source material
+- must not expose local file paths, provider transcripts, or internal payloads
+
+`source_story_facts`
+
+- compact structured fact set extracted from the source material
+- may summarize characters, relationships, events, timeline, locations, prop
+  states, emotions, conflicts, and ending state
+
+`preserved_fact_summary`
+
+- summary of facts that were preserved during screenplay rewrite
+- must be reviewable by validators and the user
+
+`changed_for_screenplay_summary`
+
+- summary of medium-specific changes made for screenplay structure
+- allowed changes include compression, scene ordering clarification, dialogue
+  formatting, and filmable action grouping
+- must not hide plot invention or motivation drift
+
+`omitted_detail_summary`
+
+- summary of details omitted for screenplay pacing or shot planning
+- must not omit key people, key events, necessary motivation, prop state, or
+  ending state without warning
+
+`continuity_warnings`
+
+- product-safe warning list for uncertain input classification, fact loss,
+  motivation drift, event-order drift, added plot, or over-long source material
+
+## Full Story Fact Preservation Boundary
+
+Full-story and novel-chapter rewrite must preserve:
+
+```text
+character_names
+character_relationships
+core_events
+event_order
+timeline_facts
+prop_state
+location_facts
+emotional_progression
+conflict_progression
+ending_state
+```
+
+Full-story and novel-chapter rewrite must not:
+
+```text
+reinvent the main plot
+delete key characters
+change character motivation
+shuffle event order
+let KB authoring technique override user story facts
+let director layer override content facts
+exaggerate only for writing intensity
+imitate a real author, IP, or brand style
+```
+
+KB authoring and director capabilities may provide summary-only suggestions.
+They must never outrank the user's source story facts.
+
+## Source Classification Warning Codes
+
+V0 may emit these product-safe warnings:
+
+```text
+source_input_type_uncertain
+full_story_rewrite_fact_loss_detected
+rewrite_changed_character_motivation
+rewrite_changed_event_order
+rewrite_dropped_key_event
+rewrite_added_unapproved_plot
+source_document_too_long_for_single_pass
+```
+
+`source_input_type_uncertain`
+
+- emitted when V0 cannot safely classify the input as synopsis, full story,
+  novel chapter, screenplay text, or mixed material
+
+`full_story_rewrite_fact_loss_detected`
+
+- emitted when extracted source facts are missing from the rewritten screenplay
+
+`rewrite_changed_character_motivation`
+
+- emitted when screenplay adaptation changes a character's goal, pressure, or
+  motivation without user approval
+
+`rewrite_changed_event_order`
+
+- emitted when screenplay adaptation changes event order without a justified
+  medium-specific reason
+
+`rewrite_dropped_key_event`
+
+- emitted when a core event disappears from the rewrite
+
+`rewrite_added_unapproved_plot`
+
+- emitted when the rewrite invents a new plot line not supported by source
+  material or user approval
+
+`source_document_too_long_for_single_pass`
+
+- emitted when source material should be chunked before reliable rewrite or
+  fact extraction
+
 ## V0 Content Priority Ladder
 
 The V0 priority order is:
@@ -475,6 +678,11 @@ retrieval_trace_user_summary
 full_kb_rows_included = 0
 ```
 
+For full-story rewrite, KB authoring and director capabilities are
+summary-only advisory inputs. They may improve screenplay compression,
+filmability, emotional clarity, scene focus, and shot-readiness, but they must
+not replace source story facts.
+
 `kb_context_summary`
 
 - product-safe compressed guidance for the current stage
@@ -514,6 +722,18 @@ full_kb_rows_included = 0
 
 If a stage needs more KB help, it must request a narrower compressed selection.
 It must not attach the full KB package.
+
+For `rewrite_from_full_story` and `adapt_story_to_screenplay`, the source fact
+priority is:
+
+```text
+1. source_story_facts
+2. preserved_fact_summary
+3. continuity_context_summary
+4. screenwriting_adaptation_summary
+5. kb_context_summary as advisory only
+6. directing_kb_context_summary as advisory only
+```
 
 `generate_novel_chapter` is included in this boundary. It must not be treated
 as KB-free generic text generation when a KB summary is available. Its allowed
@@ -1160,6 +1380,13 @@ split_script_to_shot_tasks
 generate_storyboard
 save_storyboard_shot_result
 update_continuity_state
+source_input_type
+authoring_mode
+source_material_summary
+source_story_facts
+preserved_fact_summary
+changed_for_screenplay_summary
+omitted_detail_summary
 authoring_craft_summary
 screenwriting_adaptation_summary
 directing_kb_context_summary
@@ -1216,6 +1443,13 @@ character_motivation_drift_detected
 timeline_drift_detected
 prop_state_conflict_detected
 next_scene_bridge_missing
+source_input_type_uncertain
+full_story_rewrite_fact_loss_detected
+rewrite_changed_character_motivation
+rewrite_changed_event_order
+rewrite_dropped_key_event
+rewrite_added_unapproved_plot
+source_document_too_long_for_single_pass
 short_story_2000_2500
 two_minute_story_2500_3500
 kb_context_summary
@@ -1332,6 +1566,24 @@ no user local path leakage
 no Seedance runtime payload leakage
 no director_style_ref
 no real author, real director, concrete IP, or brand style imitation label
+source_input_type is one of the V0 allowed values
+authoring_mode is one of the V0 allowed values
+synopsis routes to expand_from_synopsis
+full_story routes to rewrite_from_full_story
+novel_chapter routes to adapt_story_to_screenplay
+screenplay_text routes to polish_existing_screenplay
+mixed_material routes conservatively or returns source_input_type_uncertain
+full_story and novel_chapter preserve source_story_facts
+preserved_fact_summary is present after full-story rewrite
+changed_for_screenplay_summary is present after full-story rewrite
+omitted_detail_summary is present after full-story rewrite
+rewrite does not reinvent main plot
+rewrite does not delete key characters
+rewrite does not change character motivation without warning
+rewrite does not change event order without warning
+rewrite does not let KB authoring technique override source story facts
+rewrite does not let director layer override content facts
+rewrite does not imitate a real author, IP, or brand style
 ```
 
 ## Still Gated
@@ -1349,6 +1601,41 @@ The following remain closed:
 - video generation
 - provider credential persistence changes
 - export behavior changes
+
+## Desktop UI Contract Note
+
+If a later desktop gate adds document import, story expansion, or script rewrite
+entry points, V0 should avoid adding a large new panel.
+
+The entry should stay in the current script-area right-side action region,
+using the existing expand-script button location as the anchor.
+
+Allowed compact vertical buttons:
+
+```text
+导入文档
+扩写故事
+改写/扩写剧本
+```
+
+Users should not be forced to choose a complex mode manually.
+
+Desktop should let the system infer:
+
+```text
+source_input_type
+authoring_mode
+```
+
+When the system identifies a complete story, desktop may show this light status
+hint:
+
+```text
+已识别为完整故事，将保留剧情事实并改写为剧本。
+```
+
+This UI note is a contract note only. It does not modify desktop UI, IPC,
+state, or runtime behavior in this docs-only gate.
 
 ## Completion Standard
 
