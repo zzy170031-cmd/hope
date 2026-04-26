@@ -5,7 +5,7 @@
   "identifier": "com.hope.desktop.shell",
   "build": {
     "beforeDevCommand": "cd ui && npm run dev -- --host 127.0.0.1",
-    "beforeBuildCommand": "cd ui && npm run build",
+    "beforeBuildCommand": "cd ..\\ui && npm run build",
     "devUrl": "http://127.0.0.1:5173",
     "frontendDist": "../ui/dist"
   },
