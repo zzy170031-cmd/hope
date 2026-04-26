@@ -1974,7 +1974,11 @@ qwen_request: {
               >
                 导入镜头任务
               </button>
-              <div className="duration-pill">
+              <div
+                className="duration-pill"
+                title={`镜头时长 ${currentTaskDuration} 秒`}
+                aria-label={`镜头时长 ${currentTaskDuration} 秒`}
+              >
                 <strong>镜头时长</strong>
                 <span>{currentTaskDuration} 秒</span>
               </div>
