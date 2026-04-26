@@ -1980,25 +1980,33 @@ textarea {
   }
 }
 
-@media (max-width: 1400px) {
+@media (max-width: 1220px) {
   .script-row {
-    grid-template-columns: minmax(0, 1fr) var(--workflow-action-column);
-    grid-template-rows: auto auto;
+    grid-template-columns: var(--script-settings-column) minmax(0, 1fr) var(--workflow-action-column);
+    grid-template-rows: auto;
+    gap: 8px;
   }
 
   .script-settings {
-    grid-column: 1 / -1;
+    grid-column: 1;
     grid-row: 1;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(2, minmax(34px, 1fr));
+    min-height: 76px;
+  }
+
+  .script-settings select {
+    height: 34px;
   }
 
   .text-control {
-    grid-column: 1;
-    grid-row: 2;
+    grid-column: 2;
+    grid-row: 1;
   }
 
   .script-actions {
-    grid-column: 2;
-    grid-row: 2;
+    grid-column: 3;
+    grid-row: 1;
   }
 
   .task-row {
@@ -2054,7 +2062,6 @@ textarea {
 
 @media (max-width: 900px) {
   .reference-topbar,
-  .script-row,
   .task-row,
   .storyboard-toolbar,
   .pagination-row,
@@ -2108,12 +2115,6 @@ textarea {
   .edit-dialog__actions,
   .task-draft-actions__buttons,
   .task-picker-card {
-    grid-template-columns: 1fr;
-  }
-
-  .scene-select,
-  .duration-select,
-  .script-settings {
     grid-template-columns: 1fr;
   }
 
