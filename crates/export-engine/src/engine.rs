@@ -33,6 +33,7 @@ pub const V120_STORYBOARD_COLUMNS: &[&str] = &[
     "人物",
     "镜头",
     "景别",
+    "运镜",
     "画面描述",
     "角色动作",
     "对白/旁白",
@@ -272,6 +273,7 @@ fn v120_storyboard_row_cells(
         row.person.clone(),
         row.shot_title.clone(),
         row.scene_scale.clone(),
+        row.camera_movement.clone(),
         row.visual_description.clone(),
         row.character_action.clone(),
         row.dialogue.clone(),
@@ -841,6 +843,7 @@ mod tests {
                 person: "lead_pair".to_string(),
                 shot_title: "Bridge dialogue sample".to_string(),
                 scene_scale: "MCU".to_string(),
+                camera_movement: "MCU static camera observes the dialogue beat.".to_string(),
                 visual_description: "Two leads hold a restrained dialogue beat.".to_string(),
                 character_action: "One lead answers with a quiet nod.".to_string(),
                 dialogue: "We move before dawn.".to_string(),
@@ -903,6 +906,8 @@ mod tests {
             fs::read_to_string(&json_artifact.path).expect("json artifact should be readable");
 
         assert!(json_text.contains("Bridge dialogue sample"));
+        assert!(json_text.contains("运镜"));
+        assert!(json_text.contains("MCU static camera observes the dialogue beat."));
         assert!(json_text.contains("ReadyStub"));
         assert!(json_text.contains("seedance_prompt_text_stub"));
         assert!(json_text.contains("storyboard-152"));

@@ -108,6 +108,8 @@ struct LiveStoryboardRowPatch {
     #[serde(default)]
     character_action: String,
     #[serde(default)]
+    camera_movement: String,
+    #[serde(default)]
     dialogue: String,
 }
 
@@ -140,6 +142,7 @@ struct ShotGroundedRowDraft {
     scene_scale: String,
     visual_description: String,
     character_action: String,
+    camera_movement: String,
     dialogue: String,
     duration_seconds: u16,
     sequence_grouping: SequenceGrouping,
@@ -2090,13 +2093,14 @@ fn finalized_storyboard_payload_contains_forbidden_terms(
         .iter()
         .map(|row| {
             format!(
-                "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
                 row.shot_script,
                 row.person,
                 row.shot_title,
                 row.scene_scale,
                 row.visual_description,
                 row.character_action,
+                row.camera_movement,
                 row.dialogue,
                 row.prompt_text
             )
@@ -3169,6 +3173,12 @@ fn build_shot_grounded_row_draft(
     } else {
         format!("{person}：{}", segment.trim())
     };
+    let camera_movement = derive_camera_movement_from_story(
+        &segment,
+        &scene_scale,
+        &visual_description,
+        &character_action,
+    );
     let sequence_grouping = SequenceGrouping {
         structure_mode: StructureMode::SingleShot,
         sequence_id: None,
@@ -3194,6 +3204,7 @@ fn build_shot_grounded_row_draft(
         scene_scale,
         visual_description,
         character_action,
+        camera_movement,
         dialogue,
         duration_seconds,
         sequence_grouping,
@@ -3214,6 +3225,7 @@ fn build_shot_prompt_text_compilation_request(
             scene_scale: draft.scene_scale.clone(),
             visual_description: draft.visual_description.clone(),
             character_action: draft.character_action.clone(),
+            camera_movement: draft.camera_movement.clone(),
             dialogue: draft.dialogue.clone(),
             duration_seconds: draft.duration_seconds,
         },
@@ -3254,6 +3266,7 @@ fn build_generated_storyboard_row(
         scene_scale: draft.scene_scale.clone(),
         visual_description: draft.visual_description.clone(),
         character_action: draft.character_action.clone(),
+        camera_movement: draft.camera_movement.clone(),
         dialogue: draft.dialogue.clone(),
         prompt_text: prompt_compilation.prompt_text.clone(),
         prompt_text_compilation_status: prompt_compilation.compilation_status,
@@ -3287,6 +3300,7 @@ fn restore_shot_grounded_row(
     row.scene_scale = draft.scene_scale.clone();
     row.visual_description = draft.visual_description.clone();
     row.character_action = draft.character_action.clone();
+    row.camera_movement = draft.camera_movement.clone();
     row.dialogue = draft.dialogue.clone();
     row.scene_performance_projection = draft.scene_performance_projection.clone();
     row.external_reference_handle_candidates.clear();
@@ -3552,6 +3566,47 @@ fn derive_character_action_from_story(segment: &str, full_text: &str) -> String 
 fn derive_shot_title(index: usize, segment: &str, person: &str, character_action: &str) -> String {
     let action_core = derive_shot_title_action_core(segment, character_action);
     format!("镜头{}：{}{}", index + 1, person, action_core)
+}
+
+fn derive_camera_movement_from_story(
+    shot_script: &str,
+    scene_scale: &str,
+    visual_description: &str,
+    character_action: &str,
+) -> String {
+    let evidence = format!("{shot_script}\n{visual_description}\n{character_action}");
+    let subject = character_action_subject(character_action);
+    if contains_any_story_term(&evidence, &["站起", "起身"]) {
+        format!("{scene_scale}低机位上摇，捕捉{subject}站起的动作转折")
+    } else if contains_any_story_term(&evidence, &["抬起", "举起"]) {
+        format!("{scene_scale}缓慢上摇，跟住{subject}抬起动作的发力线")
+    } else if contains_any_story_term(&evidence, &["后撤", "震退", "退开"]) {
+        format!("{scene_scale}跟随{subject}后撤半步，稳住动作对象和空间距离")
+    } else if contains_any_story_term(&evidence, &["掌心", "手臂", "刀柄", "手部"]) {
+        format!("{scene_scale}缓慢推近{subject}手部动作，停在动作发力瞬间")
+    } else if contains_any_story_term(&evidence, &["焦土", "战场", "残骸", "断桥", "城门"])
+    {
+        format!("{scene_scale}横移掠过环境边缘，再锁定{subject}当前动作")
+    } else if contains_any_story_term(&evidence, &["望向", "看向", "对手", "敌", "对立人物"])
+    {
+        format!("{scene_scale}过肩跟拍{subject}视线方向，保持动作对象在画面内")
+    } else if scene_scale.contains("特写") {
+        format!("{scene_scale}缓慢推近{subject}的关键动作，保持画面焦点稳定")
+    } else if scene_scale.contains("全景") {
+        format!("{scene_scale}定机位观察{subject}动作起止，保留环境和主体关系")
+    } else {
+        format!("{scene_scale}定机位观察{subject}动作起止，镜头在关键瞬间轻微推近")
+    }
+}
+
+fn character_action_subject(character_action: &str) -> String {
+    character_action
+        .split('从')
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "当前主体".to_string())
 }
 
 fn extract_character_name_after_role(text: &str) -> Option<String> {
@@ -3889,11 +3944,12 @@ fn row_is_grounded_in_story(
     grounding: &StoryboardGroundingContext,
 ) -> bool {
     let combined = format!(
-        "{} {} {} {} {} {}",
+        "{} {} {} {} {} {} {}",
         row.person,
         row.shot_title,
         row.visual_description,
         row.character_action,
+        row.camera_movement,
         row.dialogue,
         row.prompt_text
     );
@@ -4399,6 +4455,9 @@ fn apply_live_storyboard_patch(row: &mut GeneratedStoryboardRow, patch: &LiveSto
     if let Some(value) = non_blank_string(&patch.character_action) {
         row.character_action = value;
     }
+    if let Some(value) = non_blank_string(&patch.camera_movement) {
+        row.camera_movement = value;
+    }
     if let Some(value) = non_blank_string(&patch.dialogue) {
         row.dialogue = value;
     }
@@ -4424,6 +4483,7 @@ fn validate_storyboard_rows(
             ("scene_scale", row.scene_scale.as_str()),
             ("visual_description", row.visual_description.as_str()),
             ("character_action", row.character_action.as_str()),
+            ("camera_movement", row.camera_movement.as_str()),
             ("prompt_text", row.prompt_text.as_str()),
         ] {
             if field_value.trim().is_empty() {
@@ -4494,9 +4554,79 @@ fn validate_storyboard_rows(
                     related_sample_id: Some(row.prompt_text_source_row_id.clone()),
                 });
             }
+            if field_name == "camera_movement"
+                && is_camera_movement_grounding_incomplete(
+                    field_value,
+                    &row.shot_title,
+                    &row.scene_scale,
+                    &row.visual_description,
+                    &row.shot_script,
+                )
+            {
+                findings.push(ProductWarning {
+                    code: "camera_movement_grounding_incomplete".to_string(),
+                    message: format!(
+                        "Storyboard row {} has an incomplete camera movement; it must describe how the camera moves or stages the current shot without replacing title or visual description.",
+                        row.shot_id
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
         }
     }
     findings
+}
+
+fn is_camera_movement_grounding_incomplete(
+    camera_movement: &str,
+    shot_title: &str,
+    scene_scale: &str,
+    visual_description: &str,
+    shot_script: &str,
+) -> bool {
+    let trimmed = camera_movement.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if trimmed == shot_title.trim() || trimmed == visual_description.trim() {
+        return true;
+    }
+    if shot_script.trim().is_empty() {
+        return true;
+    }
+    if contains_forbidden_v0_product_payload(trimmed)
+        || contains_any_story_term(
+            trimmed,
+            &[
+                "当前镜头主体完成动作",
+                "按当前脚本执行",
+                "visual_scene_core",
+                "fused_scene_performance_core_preserved",
+                "目标人物完成关键动作",
+            ],
+        )
+    {
+        return true;
+    }
+    if !scene_scale.trim().is_empty() && !trimmed.contains(scene_scale.trim()) {
+        return true;
+    }
+    !contains_any_story_term(
+        trimmed,
+        &[
+            "定机位",
+            "推近",
+            "跟随",
+            "横移",
+            "上摇",
+            "过肩",
+            "手持",
+            "跟拍",
+            "锁定",
+            "观察",
+            "捕捉",
+        ],
+    )
 }
 
 fn is_role_action_grounding_incomplete(value: &str) -> bool {
@@ -4613,6 +4743,12 @@ fn build_prompt_text_compilation_request(
             scene_scale: scene_projection.scene_scale.clone(),
             visual_description: scene_projection.visual_description.clone(),
             character_action: scene_projection.character_action.clone(),
+            camera_movement: derive_camera_movement_from_story(
+                &scene_projection.fused_source_text,
+                &scene_projection.scene_scale,
+                &scene_projection.visual_description,
+                &scene_projection.character_action,
+            ),
             dialogue: String::new(),
             duration_seconds,
         },
@@ -4677,6 +4813,7 @@ fn compile_seedance_prompt_text(
         format!("景别：{}", request.row.scene_scale),
         format!("画面描述：{}", request.row.visual_description),
         format!("角色动作：{}", request.row.character_action),
+        format!("运镜：{}", request.row.camera_movement),
     ]);
     if !request.row.dialogue.trim().is_empty() {
         prompt_sections.push(format!("对白/旁白：{}", request.row.dialogue.trim()));
@@ -4690,6 +4827,19 @@ fn compile_seedance_prompt_text(
             message:
                 "角色动作未能完整说明主体、动作、对象、起止状态与镜头捕捉瞬间，已保留产品态占位。"
                     .to_string(),
+            related_sample_id: Some(request.row.shot_id.clone()),
+        });
+    }
+    if is_camera_movement_grounding_incomplete(
+        &request.row.camera_movement,
+        &request.row.shot_title,
+        &request.row.scene_scale,
+        &request.row.visual_description,
+        request.shot_script.as_deref().unwrap_or_default(),
+    ) {
+        warnings.push(ProductWarning {
+            code: "camera_movement_grounding_incomplete".to_string(),
+            message: "运镜未能完整说明镜头如何结合景别捕捉当前动作，已保留产品态占位。".to_string(),
             related_sample_id: Some(request.row.shot_id.clone()),
         });
     }
@@ -4721,12 +4871,13 @@ fn compile_seedance_prompt_text(
 
 fn build_prompt_compilation_story_input(request: &PromptTextCompilationRequest) -> String {
     format!(
-        "grounding_priority=shot_script_then_row_fields\nshot_script={}\nscene_label={}\nshot_title={}\nvisual_description={}\ncharacter_action={}\ndialogue={}",
+        "grounding_priority=shot_script_then_row_fields\nshot_script={}\nscene_label={}\nshot_title={}\nvisual_description={}\ncharacter_action={}\ncamera_movement={}\ndialogue={}",
         request.shot_script.as_deref().unwrap_or_default(),
         request.scene_label,
         request.row.shot_title,
         request.row.visual_description,
         request.row.character_action,
+        request.row.camera_movement,
         request.row.dialogue,
     )
 }
@@ -5033,7 +5184,7 @@ fn serialize_storyboard_rows(rows: &[GeneratedStoryboardRow]) -> String {
     rows.iter()
         .map(|row| {
             format!(
-                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}|{}|{}",
                 row.shot_id,
                 row.order,
                 row.shot_script,
@@ -5049,6 +5200,7 @@ fn serialize_storyboard_rows(rows: &[GeneratedStoryboardRow]) -> String {
                 row.shot_title,
                 row.visual_description,
                 row.character_action,
+                row.camera_movement,
                 row.dialogue,
                 row.prompt_text,
                 row.prompt_text_compilation_status,
@@ -5311,10 +5463,10 @@ mod tests {
         allocate_storyboard_row_durations, build_prompt_text_compilation_request,
         build_qwen_request_payload, build_storyboard_preview_plan, build_text_generation_request,
         build_validation_export_panel_snapshot_from_fixture, compile_seedance_prompt_text,
-        default_text_model_provider, expand_script, export_bundle, export_storyboard_bank,
-        generate_storyboard, list_storyboard_shot_results, project_scene_performance,
-        remove_storyboard_shot_result, resolve_scene_taxonomy, run_kb_router,
-        run_qwen_text_generation_with_transport, run_v0_story_to_storyboard_chain,
+        contains_any_story_term, default_text_model_provider, expand_script, export_bundle,
+        export_storyboard_bank, generate_storyboard, list_storyboard_shot_results,
+        project_scene_performance, remove_storyboard_shot_result, resolve_scene_taxonomy,
+        run_kb_router, run_qwen_text_generation_with_transport, run_v0_story_to_storyboard_chain,
         save_storyboard_rows, save_storyboard_shot_result, select_golden_sample_records,
         serialize_storyboard_rows, stable_hash_hex, subject_label_mentions_any_name,
         update_storyboard_shot_result,
@@ -5509,11 +5661,12 @@ mod tests {
         row: &core_domain::GeneratedStoryboardRow,
     ) {
         let combined = format!(
-            "{} {} {} {} {}",
+            "{} {} {} {} {} {}",
             row.person,
             row.shot_title,
             row.visual_description,
             row.character_action,
+            row.camera_movement,
             row.prompt_text
         );
         for forbidden in [
@@ -6352,11 +6505,12 @@ mod tests {
             .iter()
             .map(|row| {
                 format!(
-                    "{} {} {} {} {} {} {}",
+                    "{} {} {} {} {} {} {} {}",
                     row.person,
                     row.shot_title,
                     row.visual_description,
                     row.character_action,
+                    row.camera_movement,
                     row.dialogue,
                     row.prompt_text,
                     row.shot_script
@@ -6405,6 +6559,26 @@ mod tests {
             assert!(row.character_action.contains("从"));
             assert!(row.character_action.contains("到"));
             assert!(row.character_action.contains("镜头捕捉"));
+            assert!(!row.camera_movement.trim().is_empty());
+            assert_ne!(row.camera_movement, row.shot_title);
+            assert_ne!(row.camera_movement, row.visual_description);
+            assert!(row.camera_movement.contains(&row.scene_scale));
+            assert!(contains_any_story_term(
+                &row.camera_movement,
+                &[
+                    "定机位",
+                    "推近",
+                    "跟随",
+                    "横移",
+                    "上摇",
+                    "过肩",
+                    "跟拍",
+                    "锁定",
+                    "观察",
+                    "捕捉",
+                ],
+            ));
+            assert!(row.prompt_text.contains(&row.camera_movement));
             assert!(row.prompt_text.contains(&row.shot_script));
             assert!(!row.prompt_text.contains("KB摘要"));
             assert!(!row.prompt_text.contains("KB上下文"));
@@ -6428,6 +6602,11 @@ mod tests {
                 !row.prompt_text_compilation_warnings
                     .iter()
                     .any(|warning| warning.code == "role_action_grounding_incomplete")
+            );
+            assert!(
+                !row.prompt_text_compilation_warnings
+                    .iter()
+                    .any(|warning| warning.code == "camera_movement_grounding_incomplete")
             );
             assert!(row.external_reference_handle_candidates.is_empty());
         }
@@ -6478,11 +6657,12 @@ mod tests {
             .iter()
             .map(|row| {
                 format!(
-                    "{} {} {} {} {}",
+                    "{} {} {} {} {} {}",
                     row.person,
                     row.shot_title,
                     row.visual_description,
                     row.character_action,
+                    row.camera_movement,
                     row.prompt_text
                 )
             })
@@ -6501,10 +6681,15 @@ mod tests {
             assert!(row.character_action.contains("从"));
             assert!(row.character_action.contains("到"));
             assert!(row.character_action.contains("镜头捕捉"));
+            assert!(!row.camera_movement.trim().is_empty());
+            assert_ne!(row.camera_movement, row.shot_title);
+            assert_ne!(row.camera_movement, row.visual_description);
+            assert!(row.camera_movement.contains(&row.scene_scale));
             assert!(
                 row.prompt_text.contains(&row.person)
                     || subject_label_mentions_any_name(&row.person, &row.prompt_text)
             );
+            assert!(row.prompt_text.contains(&row.camera_movement));
             assert_storyboard_row_has_no_vague_or_internal_terms(row);
             assert_prompt_text_has_no_internal_payload(&row.prompt_text);
         }
@@ -6548,7 +6733,12 @@ mod tests {
             assert!(row.character_action.contains("从"));
             assert!(row.character_action.contains("到"));
             assert!(row.character_action.contains("镜头捕捉"));
+            assert!(!row.camera_movement.trim().is_empty());
+            assert_ne!(row.camera_movement, row.shot_title);
+            assert_ne!(row.camera_movement, row.visual_description);
+            assert!(row.camera_movement.contains(&row.scene_scale));
             assert!(row.prompt_text.contains(&row.person));
+            assert!(row.prompt_text.contains(&row.camera_movement));
             assert_storyboard_row_has_no_vague_or_internal_terms(row);
             assert_prompt_text_has_no_internal_payload(&row.prompt_text);
         }
