@@ -2109,7 +2109,7 @@ qwen_request: {
               <div className="script-actions">
                 <button
                   type="button"
-                  className="action-button action-button--light"
+                  className="action-button action-button--dark"
                   onClick={handleImportStoryDocument}
                   disabled={bridgeBusy !== null}
                 >
@@ -2117,7 +2117,7 @@ qwen_request: {
                 </button>
                 <button
                   type="button"
-                  className="action-button action-button--light"
+                  className="action-button action-button--dark"
                   onClick={handleExpandStory}
                   disabled={
                     bridgeBusy !== null ||
