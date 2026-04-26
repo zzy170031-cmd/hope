@@ -528,7 +528,8 @@ textarea {
 .jump-form input,
 .edit-grid input,
 .edit-grid textarea,
-.synopsis-input {
+.synopsis-input,
+.synopsis-preview {
   width: 100%;
 }
 
@@ -555,6 +556,29 @@ textarea {
   overflow: auto;
 }
 
+.synopsis-preview {
+  height: 74px;
+  padding: 14px 92px 14px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--text);
+  overflow: hidden;
+}
+
+.synopsis-preview--empty {
+  color: #8b7280;
+}
+
+.synopsis-preview__text {
+  display: -webkit-box;
+  max-height: 44px;
+  overflow: hidden;
+  line-height: 22px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .text-control {
   position: relative;
   width: 100%;
@@ -564,7 +588,6 @@ textarea {
 
 .text-control .synopsis-input {
   min-height: 78px;
-  padding: 14px 92px 14px 14px;
 }
 
 .text-control__expand {

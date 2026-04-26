@@ -130,6 +130,8 @@ const DEFAULT_TASK_NAME = "第一集分镜生成";
 const DEFAULT_PROJECT_ID = "project-week3-001";
 const STORYBOARD_DURATION_SOURCE = "storyboard_duration_plan.allocated_row_duration_seconds";
 const EMPTY_PROMPT_TEXT_PLACEHOLDER = "prompt_text 未生成，等待主线镜头 grounding";
+const STORYBOARD_ROWS_HASH_MISMATCH_MESSAGE =
+  "当前分镜内容已变化，请先保存修改或重新生成后再确定使用。";
 const SCENE_SCALE_LABELS: Record<string, string> = {
   LS: "远景",
   WS: "全景",
@@ -1310,9 +1312,9 @@ export function App() {
 
   const buildFinalizedShotPayload = (
     sourceResult: GenerateStoryboardResponse,
-    sourceRows: StoryboardWorkbenchRow[],
+    sourceRows: GeneratedStoryboardRow[],
   ) => {
-    const backendRows = toGeneratedStoryboardRows(sourceRows);
+    const backendRows = sourceRows;
     const shotDuration = backendRows.reduce(
       (total, row) => total + Number(row.shot_duration_seconds || row.duration_seconds || 0),
       0,
@@ -1340,7 +1342,7 @@ export function App() {
       duration_source: backendRows[0]?.duration_source || STORYBOARD_DURATION_SOURCE,
       confirmed: true,
       updated_at_ms: Date.now(),
-      rows_hash: sourceResult.rows_hash ?? currentSceneTask?.rowsHash ?? "",
+      rows_hash: sourceResult.rows_hash || currentSceneTask?.rowsHash || "",
     };
   };
 
@@ -1362,7 +1364,7 @@ export function App() {
         return;
       }
 
-      const payload = buildFinalizedShotPayload(savedResult, rowsDirty ? savedResult.rows.map(mapGeneratedStoryboardRow) : rows);
+      const payload = buildFinalizedShotPayload(savedResult, savedResult.rows);
       if (!payload.script_id || !payload.shot_task_id || !payload.result_id || !payload.rows.length) {
         setExportMessage("确定使用失败：缺少剧本、镜头任务或分镜结果，请重新导入镜头任务后生成。");
         return;
@@ -1386,7 +1388,11 @@ export function App() {
         : await invokeSaveStoryboardShotResult(payload);
 
       if (response.status === "Blocked" || response.blockers.length) {
-        setExportMessage(`确定使用未完成：${formatWarnings(response.blockers)}`);
+        setExportMessage(
+          hasWarningCode(response.blockers, "storyboard_bank_rows_hash_mismatch")
+            ? STORYBOARD_ROWS_HASH_MISMATCH_MESSAGE
+            : `确定使用未完成：${formatWarnings(response.blockers)}`,
+        );
         return;
       }
       if (response.shot) {
@@ -1398,7 +1404,10 @@ export function App() {
         `已确定使用当前镜头：${response.shot?.shot_task_name ?? payload.shot_task_name} / ${payload.shot_duration_seconds} 秒，已进入已定稿分镜区。`,
       );
     } catch (error) {
-      setExportMessage(`确定使用失败：${formatProductError(error)}`);
+      const message = formatProductError(error);
+      setExportMessage(
+        message === STORYBOARD_ROWS_HASH_MISMATCH_MESSAGE ? message : `确定使用失败：${message}`,
+      );
     } finally {
       setBridgeBusy(null);
     }
@@ -1887,18 +1896,11 @@ qwen_request: {
                 </label>
               </div>
               <div className="text-control">
-                <textarea
-                  className="synopsis-input"
-                  value={synopsis}
-                  onChange={(event) => {
-                    setSynopsis(event.target.value);
-                    if (expandedScriptAccepted) {
-                      setExpandedScript(event.target.value);
-                      setAcceptedScript(event.target.value);
-                    }
-                  }}
-                  placeholder="请输入故事梗概"
-                />
+                <div className={synopsis.trim() ? "synopsis-preview" : "synopsis-preview synopsis-preview--empty"}>
+                  <span className="synopsis-preview__text">
+                    {synopsis.trim() ? truncatePreview(synopsis, 120) : "请输入故事梗概"}
+                  </span>
+                </div>
                 <button type="button" className="text-control__expand" onClick={openSynopsisDialog}>
                   放大编辑
                 </button>
@@ -2458,7 +2460,7 @@ qwen_request: {
                       ))}
                     </select>
                     <small className="task-draft-editor__duration-note">
-                      调整镜头时长会影响生成时长；不会自动改写当前镜头文本。
+                      调整镜头时长只影响生成后的分镜拆分，不会自动改写当前镜头文本。30 秒按 10 + 10 + 10 拆分，45 秒按 10 + 10 + 10 + 10 + 5 拆分。
                     </small>
                   </label>
                   <label className="task-draft-editor__text">
@@ -3006,6 +3008,11 @@ function toGeneratedStoryboardRows(rows: StoryboardWorkbenchRow[]): GeneratedSto
       fused_source_text: row.shotScript ?? row.visualDescription,
       sequence_grouping: sequenceGrouping,
     };
+    const backendPersonDisplay = formatInternalPlaceholder(backend?.person || "not_specified");
+    const backendShotDisplay = formatInternalPlaceholder(backend?.shot_title || backend?.shot_id || "");
+    const backendActionDisplay = formatInternalPlaceholder(backend?.character_action ?? "");
+    const backendDialogueDisplay = backend?.dialogue || "（无）";
+    const backendPromptDisplay = backend?.prompt_text?.trim() || EMPTY_PROMPT_TEXT_PLACEHOLDER;
     return {
       shot_id: shotId,
       order: row.order,
@@ -3018,13 +3025,23 @@ function toGeneratedStoryboardRows(rows: StoryboardWorkbenchRow[]): GeneratedSto
       shot_intent: row.shotIntent ?? backend?.shot_intent ?? "",
       adaptation_reason: row.adaptationReason ?? backend?.adaptation_reason ?? "",
       grounding_source: row.groundingSource ?? backend?.grounding_source ?? "expanded_script_text",
-      person: row.person,
-      shot_title: row.shot,
+      person: backend
+        ? preserveBackendValueWhenDisplayUnchanged(row.person, backend.person, backendPersonDisplay)
+        : row.person,
+      shot_title: backend
+        ? preserveBackendValueWhenDisplayUnchanged(row.shot, backend.shot_title, backendShotDisplay)
+        : row.shot,
       scene_scale: row.sceneScale,
       visual_description: row.visualDescription,
-      character_action: row.characterAction,
-      dialogue: row.dialogue,
-      prompt_text: row.prompt === EMPTY_PROMPT_TEXT_PLACEHOLDER ? "" : row.prompt,
+      character_action: backend
+        ? preserveBackendValueWhenDisplayUnchanged(row.characterAction, backend.character_action, backendActionDisplay)
+        : row.characterAction,
+      dialogue: backend
+        ? preserveBackendValueWhenDisplayUnchanged(row.dialogue, backend.dialogue, backendDialogueDisplay)
+        : row.dialogue,
+      prompt_text: backend
+        ? preserveBackendValueWhenDisplayUnchanged(row.prompt, backend.prompt_text, backendPromptDisplay)
+        : row.prompt === EMPTY_PROMPT_TEXT_PLACEHOLDER ? "" : row.prompt,
       prompt_text_compilation_status: backend?.prompt_text_compilation_status || "ReadyStub",
       prompt_text_compilation_warnings: backend?.prompt_text_compilation_warnings ?? [],
       prompt_text_source_row_id: backend?.prompt_text_source_row_id || shotId,
@@ -3036,6 +3053,15 @@ function toGeneratedStoryboardRows(rows: StoryboardWorkbenchRow[]): GeneratedSto
       sequence_grouping: sequenceGrouping,
     };
   });
+}
+
+function preserveBackendValueWhenDisplayUnchanged(
+  displayValue: string | undefined,
+  backendValue: string | undefined,
+  backendDisplayValue: string,
+) {
+  const nextValue = displayValue ?? "";
+  return nextValue === backendDisplayValue ? backendValue ?? "" : nextValue;
 }
 
 function collectPromptStatuses(rows: GeneratedStoryboardRow[]) {
@@ -3097,10 +3123,17 @@ function formatWarnings(warnings: ProductWarning[]) {
 }
 
 function formatWarningCode(code: string) {
+  if (code === "storyboard_bank_rows_hash_mismatch") {
+    return STORYBOARD_ROWS_HASH_MISMATCH_MESSAGE;
+  }
   if (code === "role_action_grounding_incomplete") {
     return "角色动作信息不完整，请重新生成或检查当前镜头脚本";
   }
   return code;
+}
+
+function hasWarningCode(warnings: ProductWarning[], code: string) {
+  return warnings.some((warning) => warning.code === code || warning.message?.includes(code));
 }
 
 function formatDurationSource(source: string | null | undefined) {
@@ -3121,6 +3154,9 @@ function formatProductError(error: unknown) {
   const raw = formatError(error);
   if (/storyboard_result_not_found/i.test(raw)) {
     return "没有找到可用的分镜结果，请先生成后再保存或导出。";
+  }
+  if (/storyboard_bank_rows_hash_mismatch/i.test(raw)) {
+    return STORYBOARD_ROWS_HASH_MISMATCH_MESSAGE;
   }
   if (/revision/i.test(raw)) {
     return "分镜内容版本已变化，请重新导入当前任务后再保存。";
