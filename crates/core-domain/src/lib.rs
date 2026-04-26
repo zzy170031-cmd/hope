@@ -4,10 +4,12 @@ pub mod kb;
 pub mod traits;
 
 pub use contracts::{
-    BridgeCallStatus, ExpandScriptRequest, ExpandScriptResponse, ExportArtifactRecord,
-    ExportBundleRequest, ExportBundleResponse, ExportStoryboardBankRequest,
+    AdaptChapterToScriptRequest, AdaptChapterToScriptResponse, BridgeCallStatus,
+    ChapterAcceptedState, ContinuityDeltaLog, ExpandScriptRequest, ExpandScriptResponse,
+    ExportArtifactRecord, ExportBundleRequest, ExportBundleResponse, ExportStoryboardBankRequest,
     ExportStoryboardBankResponse, ExportSummary, ExternalReferenceHandleCandidate,
-    FinalizedStoryboardShotResult, GenerateStoryboardRequest, GenerateStoryboardResponse,
+    FinalizedStoryboardRef, FinalizedStoryboardShotResult, GenerateNovelChapterRequest,
+    GenerateNovelChapterResponse, GenerateStoryboardRequest, GenerateStoryboardResponse,
     GeneratedStoryboardRow, GoldenSampleGateDecision, GoldenSampleSelectionResult,
     GoldenSampleSelectorInput, KbRouterExcludedCandidate, KbRouterRetrievalTrace,
     KbRouterRuntimeRequest, KbRouterRuntimeResponse, KbRouterSelectedRule, KbRouterSelectionReason,
@@ -16,12 +18,14 @@ pub use contracts::{
     PromptBodyCandidate, PromptPackageRecord, PromptTextCompilationRequest,
     PromptTextCompilationResponse, PromptTextCompilationRow, PromptTextCompilationStatus,
     RemoveStoryboardShotResultRequest, RemoveStoryboardShotResultResponse,
+    RunV0StoryToStoryboardChainRequest, RunV0StoryToStoryboardChainResponse,
     SaveStoryboardShotResultRequest, SaveStoryboardShotResultResponse, ScenePerformanceProjection,
-    SequenceFieldState, SequenceGrouping, ShotGroundingSource, ShotTask,
-    SplitScriptToShotTasksRequest, SplitScriptToShotTasksResponse, StoryboardDurationPlan,
-    StoryboardExportStatus, StructureMode, TextGenerationOutputSchema, TextGenerationRequest,
-    TextGenerationResponse, TextGenerationTask, TextModelProvider, TextModelProviderKind,
-    UpdateStoryboardRowsRequest, UpdateStoryboardShotResultRequest,
+    ScriptAcceptedState, SequenceFieldState, SequenceGrouping, ShotGroundingSource, ShotTask,
+    ShotTaskPlan, SplitScriptToShotTasksRequest, SplitScriptToShotTasksResponse,
+    StoryContinuityState, StoryboardDurationPlan, StoryboardExportStatus, StoryboardResult,
+    StructureMode, TextGenerationOutputSchema, TextGenerationRequest, TextGenerationResponse,
+    TextGenerationTask, TextModelProvider, TextModelProviderKind, UpdateContinuityStateRequest,
+    UpdateContinuityStateResponse, UpdateStoryboardRowsRequest, UpdateStoryboardShotResultRequest,
     UpdateStoryboardShotResultResponse, ValidationSummary,
 };
 pub use domain::{

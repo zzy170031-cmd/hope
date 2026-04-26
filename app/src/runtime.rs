@@ -6,9 +6,11 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use crate::state::AppState;
 
 use core_domain::{
-    BridgeCallStatus, ExpandScriptRequest, ExpandScriptResponse, ExportArtifactRecord,
-    ExportBundleRequest, ExportBundleResponse, ExportStoryboardBankRequest,
-    ExportStoryboardBankResponse, ExternalReferenceHandleCandidate, FinalizedStoryboardShotResult,
+    AdaptChapterToScriptRequest, AdaptChapterToScriptResponse, BridgeCallStatus,
+    ChapterAcceptedState, ContinuityDeltaLog, ExpandScriptRequest, ExpandScriptResponse,
+    ExportArtifactRecord, ExportBundleRequest, ExportBundleResponse, ExportStoryboardBankRequest,
+    ExportStoryboardBankResponse, ExternalReferenceHandleCandidate, FinalizedStoryboardRef,
+    FinalizedStoryboardShotResult, GenerateNovelChapterRequest, GenerateNovelChapterResponse,
     GenerateStoryboardRequest, GenerateStoryboardResponse, GeneratedStoryboardRow,
     GoldenSampleLibraryRecord, KbRouterExcludedCandidate, KbRouterRetrievalTrace,
     KbRouterRuntimeRequest, KbRouterRuntimeResponse, KbRouterSelectedRule, KbRouterSelectionReason,
@@ -16,12 +18,14 @@ use core_domain::{
     ListStoryboardShotResultsResponse, ProductWarning, PromptTextCompilationRequest,
     PromptTextCompilationResponse, PromptTextCompilationRow, PromptTextCompilationStatus,
     RemoveStoryboardShotResultRequest, RemoveStoryboardShotResultResponse,
+    RunV0StoryToStoryboardChainRequest, RunV0StoryToStoryboardChainResponse,
     SaveStoryboardShotResultRequest, SaveStoryboardShotResultResponse, ScenePerformanceProjection,
-    SequenceFieldState, SequenceGrouping, ShotGroundingSource, ShotTask,
-    SplitScriptToShotTasksRequest, SplitScriptToShotTasksResponse, StoryboardDurationPlan,
-    StoryboardExportStatus, StructureMode, TextGenerationOutputSchema, TextGenerationRequest,
-    TextGenerationResponse, TextGenerationTask, TextModelProvider, TextModelProviderKind,
-    UpdateStoryboardRowsRequest, UpdateStoryboardShotResultRequest,
+    ScriptAcceptedState, SequenceFieldState, SequenceGrouping, ShotGroundingSource, ShotTask,
+    ShotTaskPlan, SplitScriptToShotTasksRequest, SplitScriptToShotTasksResponse,
+    StoryContinuityState, StoryboardDurationPlan, StoryboardExportStatus, StoryboardResult,
+    StructureMode, TextGenerationOutputSchema, TextGenerationRequest, TextGenerationResponse,
+    TextGenerationTask, TextModelProvider, TextModelProviderKind, UpdateContinuityStateRequest,
+    UpdateContinuityStateResponse, UpdateStoryboardRowsRequest, UpdateStoryboardShotResultRequest,
     UpdateStoryboardShotResultResponse,
 };
 use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
@@ -147,6 +151,8 @@ const DEFAULT_EXPAND_SCRIPT_DURATION_SECONDS: u16 = 30;
 const SEEDANCE_STANDARD_SEGMENT_SECONDS: u16 = 10;
 const SEEDANCE_REMAINDER_SEGMENT_SECONDS: u16 = 5;
 const SEEDANCE_MAX_SEGMENT_SECONDS: u16 = 15;
+const V0_SHORT_STORY_PROFILE: &str = "short_story_2000_2500";
+const V0_TWO_MINUTE_STORY_PROFILE: &str = "two_minute_story_2500_3500";
 
 const FINALIZED_BANK_FORBIDDEN_TERMS: &[&str] = &[
     "raw prompt_body",
@@ -350,9 +356,727 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
     response
 }
 
+pub fn generate_novel_chapter(
+    state: &AppState,
+    request: GenerateNovelChapterRequest,
+) -> GenerateNovelChapterResponse {
+    let now_ms = now_epoch_ms();
+    let blockers = validate_generate_novel_chapter_request(&request);
+    if !blockers.is_empty() {
+        return GenerateNovelChapterResponse {
+            status: BridgeCallStatus::Blocked,
+            blockers,
+            warnings: vec![],
+            story_id: request.story_id,
+            chapter_id: request.chapter_id,
+            chapter_order: request.chapter_order,
+            chapter_title: String::new(),
+            chapter_text: String::new(),
+            chapter_summary: String::new(),
+            authoring_craft_summary: request.authoring_craft_summary,
+            premise_hook: String::new(),
+            character_desire: String::new(),
+            character_pressure: String::new(),
+            conflict_engine: String::new(),
+            emotional_turn: String::new(),
+            suspense_setup: String::new(),
+            payoff_setup: String::new(),
+            scene_purpose: String::new(),
+            visualizable_action: String::new(),
+            chapter_cliffhanger: String::new(),
+            director_bridge: String::new(),
+            character_motivation_summary: String::new(),
+            conflict_progression_summary: String::new(),
+            emotional_progression_summary: String::new(),
+            timeline_continuity_summary: String::new(),
+            prop_state_summary: String::new(),
+            next_scene_bridge: String::new(),
+            continuity_warnings: vec![],
+            continuity_delta: String::new(),
+        };
+    }
+
+    let router_request = KbRouterRuntimeRequest {
+        scene_type: "v0_authoring".to_string(),
+        synopsis_text: request.user_topic_or_synopsis.clone(),
+        duration_seconds: 0,
+        task_type: KbRouterTaskType::GenerateNovelChapter,
+        primary_scene_type: None,
+        primary_scene_label: None,
+        shot_scene_type: None,
+        shot_scene_label: None,
+        shot_intent: None,
+        structure_type: Some(request.story_length_profile.clone()),
+    };
+    let router_result = run_kb_router(state, router_request);
+    let kb_summary_available = !request.kb_context_summary.trim().is_empty()
+        || !router_result.kb_context_summary.trim().is_empty();
+    let chapter_title =
+        deterministic_chapter_title(request.chapter_order, &request.user_topic_or_synopsis);
+    let chapter_text = deterministic_v0_chapter_text(
+        &request.user_topic_or_synopsis,
+        &request.story_length_profile,
+        &request.authoring_craft_summary,
+        &request.continuity_context_summary,
+        kb_summary_available,
+    );
+    let chapter_summary = compact_product_summary(
+        &request.user_topic_or_synopsis,
+        "本章围绕用户梗概建立角色目标、压力、冲突推进和下一段承接。",
+        120,
+    );
+    let protagonist = derive_product_person(&request.user_topic_or_synopsis, &chapter_text);
+    let premise_hook = format!("{protagonist}在既定处境中被迫面对一个无法回避的选择。");
+    let character_desire = format!("{protagonist}想守住当前目标，同时确认对立压力的真实来源。");
+    let character_pressure = "外部冲突持续逼近，过往状态和新线索同时压向角色。".to_string();
+    let conflict_engine = "人物目标与对立力量持续碰撞，推动每一段行动都必须改变局面。".to_string();
+    let emotional_turn = "角色从被动承压转向主动判断，情绪由迟疑进入清醒。".to_string();
+    let suspense_setup = "关键信息只揭开一部分，下一段仍保留未解决的追问。".to_string();
+    let payoff_setup = "本章把角色目标、对手压力和可视化动作放到同一条后续线索上。".to_string();
+    let scene_purpose = "建立本章冲突、角色动机和可拆分的镜头行动。".to_string();
+    let visualizable_action = first_story_sentence(&chapter_text);
+    let chapter_cliffhanger = "下一段需要承接本章末尾的选择结果和未解压力。".to_string();
+    let director_bridge = "后续改编应优先保留角色目标、行动对象、空间关系和情绪转折。".to_string();
+    let character_motivation_summary = character_desire.clone();
+    let conflict_progression_summary = conflict_engine.clone();
+    let emotional_progression_summary = emotional_turn.clone();
+    let timeline_continuity_summary = format!(
+        "第{}章按单一连续段落推进，不静默跳时空。",
+        request.chapter_order
+    );
+    let prop_state_summary =
+        "道具状态仅按梗概中已出现的信息保留，未出现的关键道具不新增归属。".to_string();
+    let next_scene_bridge = chapter_cliffhanger.clone();
+    let continuity_delta = format!(
+        "chapter:{} established summary={}, motivation={}, next_bridge={}",
+        request.chapter_id, chapter_summary, character_motivation_summary, next_scene_bridge
+    );
+    let warnings = if !kb_summary_available {
+        vec![ProductWarning {
+            code: "v0_kb_context_summary_not_supplied".to_string(),
+            message:
+                "V0 chapter generation used neutral deterministic craft because no external KB summary was supplied."
+                    .to_string(),
+            related_sample_id: None,
+        }]
+    } else {
+        vec![]
+    };
+
+    let response = GenerateNovelChapterResponse {
+        status: if warnings.is_empty() {
+            BridgeCallStatus::Ready
+        } else {
+            BridgeCallStatus::WarningOnly
+        },
+        blockers: vec![],
+        warnings,
+        story_id: request.story_id.clone(),
+        chapter_id: request.chapter_id.clone(),
+        chapter_order: request.chapter_order,
+        chapter_title: chapter_title.clone(),
+        chapter_text: chapter_text.clone(),
+        chapter_summary: chapter_summary.clone(),
+        authoring_craft_summary: request.authoring_craft_summary,
+        premise_hook,
+        character_desire,
+        character_pressure,
+        conflict_engine,
+        emotional_turn,
+        suspense_setup,
+        payoff_setup,
+        scene_purpose,
+        visualizable_action,
+        chapter_cliffhanger,
+        director_bridge,
+        character_motivation_summary,
+        conflict_progression_summary,
+        emotional_progression_summary,
+        timeline_continuity_summary,
+        prop_state_summary,
+        next_scene_bridge,
+        continuity_warnings: vec![],
+        continuity_delta: continuity_delta.clone(),
+    };
+    state.remember_v0_chapter(ChapterAcceptedState {
+        story_id: response.story_id.clone(),
+        chapter_id: response.chapter_id.clone(),
+        chapter_order: response.chapter_order,
+        chapter_title,
+        chapter_text,
+        chapter_summary,
+        continuity_delta,
+        accepted_at_ms: now_ms,
+    });
+    state.append_v0_continuity_delta_log(ContinuityDeltaLog {
+        story_id: response.story_id.clone(),
+        chapter_id: response.chapter_id.clone(),
+        chapter_order: response.chapter_order,
+        stage: "generate_novel_chapter".to_string(),
+        continuity_delta: response.continuity_delta.clone(),
+        updated_at_ms: now_ms,
+    });
+    response
+}
+
+pub fn adapt_chapter_to_script(
+    state: &AppState,
+    request: AdaptChapterToScriptRequest,
+) -> AdaptChapterToScriptResponse {
+    let now_ms = now_epoch_ms();
+    let blockers = validate_adapt_chapter_to_script_request(&request);
+    if !blockers.is_empty() {
+        return AdaptChapterToScriptResponse {
+            status: BridgeCallStatus::Blocked,
+            blockers,
+            warnings: vec![],
+            script_id: String::new(),
+            story_id: request.story_id,
+            chapter_id: request.chapter_id,
+            chapter_order: request.chapter_order,
+            script_text: String::new(),
+            script_summary: String::new(),
+            screenwriting_adaptation_summary: request.screenwriting_adaptation_summary,
+            scene_beats: vec![],
+            dialogue_intent: String::new(),
+            action_blocks: vec![],
+            turning_points: vec![],
+            scene_purpose: String::new(),
+            continuity_delta: String::new(),
+        };
+    }
+
+    let router_request = KbRouterRuntimeRequest {
+        scene_type: "v0_screenwriting".to_string(),
+        synopsis_text: format!("{}\n{}", request.chapter_summary, request.chapter_text),
+        duration_seconds: 0,
+        task_type: KbRouterTaskType::AdaptChapterToScript,
+        primary_scene_type: None,
+        primary_scene_label: None,
+        shot_scene_type: None,
+        shot_scene_label: None,
+        shot_intent: None,
+        structure_type: Some("chapter_to_script".to_string()),
+    };
+    let _router_result = run_kb_router(state, router_request);
+    let script_id = format!(
+        "v0-script-{}",
+        &stable_hash_hex(&format!(
+            "{}\n{}\n{}",
+            request.story_id, request.chapter_id, request.chapter_text
+        ))[..12]
+    );
+    let scene_beats = deterministic_scene_beats(&request.chapter_text);
+    let action_blocks = scene_beats
+        .iter()
+        .enumerate()
+        .map(|(index, beat)| format!("动作段{}：{}", index + 1, beat))
+        .collect::<Vec<_>>();
+    let turning_points = vec![
+        "角色确认当前压力的来源。".to_string(),
+        "角色用可见行动改变局面。".to_string(),
+        "本段留下下一镜头可承接的状态。".to_string(),
+    ];
+    let dialogue_intent = "对白只服务角色目标、压力确认和关系变化，不替代行动。".to_string();
+    let scene_purpose = "把章节内容压缩为可表演、可拆镜头的连续剧本段落。".to_string();
+    let script_text = deterministic_v0_script_text(
+        &format!("第{}章改编剧本", request.chapter_order),
+        &scene_beats,
+        &dialogue_intent,
+        &request.chapter_summary,
+    );
+    let script_summary = format!(
+        "剧本保留章节主线：{}",
+        compact_product_summary(
+            &request.chapter_summary,
+            "角色目标、冲突和转折被保留。",
+            100
+        )
+    );
+    let continuity_delta = format!(
+        "script:{} adapted chapter:{} into {} ordered beats while preserving chapter facts",
+        script_id,
+        request.chapter_id,
+        scene_beats.len()
+    );
+
+    let response = AdaptChapterToScriptResponse {
+        status: BridgeCallStatus::Ready,
+        blockers: vec![],
+        warnings: vec![],
+        script_id: script_id.clone(),
+        story_id: request.story_id.clone(),
+        chapter_id: request.chapter_id.clone(),
+        chapter_order: request.chapter_order,
+        script_text: script_text.clone(),
+        script_summary: script_summary.clone(),
+        screenwriting_adaptation_summary: request.screenwriting_adaptation_summary,
+        scene_beats,
+        dialogue_intent,
+        action_blocks,
+        turning_points,
+        scene_purpose,
+        continuity_delta: continuity_delta.clone(),
+    };
+    state.remember_v0_script(ScriptAcceptedState {
+        script_id,
+        story_id: response.story_id.clone(),
+        chapter_id: response.chapter_id.clone(),
+        chapter_order: response.chapter_order,
+        script_text,
+        script_summary,
+        continuity_delta,
+        accepted_at_ms: now_ms,
+    });
+    state.append_v0_continuity_delta_log(ContinuityDeltaLog {
+        story_id: response.story_id.clone(),
+        chapter_id: response.chapter_id.clone(),
+        chapter_order: response.chapter_order,
+        stage: "adapt_chapter_to_script".to_string(),
+        continuity_delta: response.continuity_delta.clone(),
+        updated_at_ms: now_ms,
+    });
+    response
+}
+
+pub fn update_continuity_state(
+    state: &AppState,
+    request: UpdateContinuityStateRequest,
+) -> UpdateContinuityStateResponse {
+    let now_ms = now_epoch_ms();
+    let mut blockers = Vec::new();
+    for (field_name, value) in [
+        ("story_id", request.story_id.as_str()),
+        ("chapter_id", request.chapter_id.as_str()),
+        ("chapter_summary", request.chapter_summary.as_str()),
+        ("continuity_delta", request.continuity_delta.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            blockers.push(ProductWarning {
+                code: format!("{field_name}_required"),
+                message: format!("{field_name} is required before updating V0 continuity state."),
+                related_sample_id: None,
+            });
+        }
+    }
+    if contains_forbidden_v0_product_payload(&format!(
+        "{}\n{}\n{}\n{}\n{}",
+        request.chapter_summary,
+        request.character_state_summary,
+        request.location_state_summary,
+        request.prop_state_summary,
+        request.timeline_state_summary
+    )) {
+        blockers.push(ProductWarning {
+            code: "v0_continuity_forbidden_payload".to_string(),
+            message: "V0 continuity state rejected internal, raw, credential, or full-KB payload content."
+                .to_string(),
+            related_sample_id: None,
+        });
+    }
+    if !blockers.is_empty() {
+        return UpdateContinuityStateResponse {
+            status: BridgeCallStatus::Blocked,
+            blockers,
+            warnings: vec![],
+            continuity_state: None,
+        };
+    }
+
+    let ref_summary = request
+        .finalized_storyboard_refs
+        .iter()
+        .map(|item| item.label.clone())
+        .collect::<Vec<_>>()
+        .join("；");
+    let continuity_context_summary = format!(
+        "故事{}第{}章：{}。角色：{}。地点：{}。道具：{}。时间线：{}。未解线索：{}。定稿分镜引用：{}。最新变化：{}。",
+        request.story_id,
+        request.chapter_order,
+        compact_product_summary(&request.chapter_summary, "已接受章节摘要", 140),
+        compact_product_summary(&request.character_state_summary, "角色状态保持连续", 120),
+        compact_product_summary(&request.location_state_summary, "地点状态保持连续", 100),
+        compact_product_summary(&request.prop_state_summary, "道具状态保持连续", 100),
+        compact_product_summary(&request.timeline_state_summary, "时间线保持连续", 100),
+        if request.unresolved_threads.is_empty() {
+            "无新增未解线索".to_string()
+        } else {
+            request.unresolved_threads.join("；")
+        },
+        if ref_summary.trim().is_empty() {
+            "暂无".to_string()
+        } else {
+            ref_summary
+        },
+        compact_product_summary(&request.continuity_delta, "连续性已更新", 140),
+    );
+    let warnings = if request.finalized_storyboard_refs.is_empty() {
+        vec![ProductWarning {
+            code: "v0_continuity_without_finalized_refs".to_string(),
+            message: "Continuity was updated without finalized storyboard refs; next stage will rely on text summaries only."
+                .to_string(),
+            related_sample_id: None,
+        }]
+    } else {
+        vec![]
+    };
+    let continuity_state = StoryContinuityState {
+        story_id: request.story_id.clone(),
+        chapter_id: request.chapter_id.clone(),
+        chapter_order: request.chapter_order,
+        continuity_context_summary,
+        chapter_summary: request.chapter_summary,
+        character_state_summary: request.character_state_summary,
+        location_state_summary: request.location_state_summary,
+        prop_state_summary: request.prop_state_summary,
+        timeline_state_summary: request.timeline_state_summary,
+        unresolved_threads: request.unresolved_threads,
+        style_bible_summary: request.style_bible_summary,
+        finalized_storyboard_refs: request.finalized_storyboard_refs,
+        continuity_delta: request.continuity_delta.clone(),
+        updated_at_ms: now_ms,
+        warnings: warnings.clone(),
+    };
+    state.remember_v0_continuity_state(continuity_state.clone());
+    state.append_v0_continuity_delta_log(ContinuityDeltaLog {
+        story_id: request.story_id,
+        chapter_id: request.chapter_id,
+        chapter_order: request.chapter_order,
+        stage: "update_continuity_state".to_string(),
+        continuity_delta: request.continuity_delta,
+        updated_at_ms: now_ms,
+    });
+
+    UpdateContinuityStateResponse {
+        status: if warnings.is_empty() {
+            BridgeCallStatus::Ready
+        } else {
+            BridgeCallStatus::WarningOnly
+        },
+        blockers: vec![],
+        warnings,
+        continuity_state: Some(continuity_state),
+    }
+}
+
+pub fn run_v0_story_to_storyboard_chain(
+    state: &AppState,
+    request: RunV0StoryToStoryboardChainRequest,
+) -> RunV0StoryToStoryboardChainResponse {
+    let mut warnings = Vec::new();
+    let mut blockers = validate_run_v0_story_to_storyboard_chain_request(&request);
+    if !blockers.is_empty() {
+        return RunV0StoryToStoryboardChainResponse {
+            status: BridgeCallStatus::Blocked,
+            blockers,
+            warnings,
+            chapter: None,
+            script: None,
+            shot_task_plan: None,
+            storyboard_results: vec![],
+            finalized_storyboard_refs: vec![],
+            continuity_state: None,
+        };
+    }
+
+    let authoring_craft_summary = v0_required_summary_or_neutral(
+        &request.authoring_craft_summary,
+        "neutral authoring craft: premise hook, character desire, conflict engine, visible action, next scene bridge",
+    );
+    let screenwriting_adaptation_summary = v0_required_summary_or_neutral(
+        &request.screenwriting_adaptation_summary,
+        "neutral screenwriting adaptation: preserve accepted plot facts, compress into beats, keep action and dialogue playable",
+    );
+    let directing_kb_context_summary = v0_required_summary_or_neutral(
+        &request.directing_kb_context_summary,
+        "neutral directing guidance: camera and blocking serve story facts, shot_script remains authoritative",
+    );
+
+    let chapter = generate_novel_chapter(
+        state,
+        GenerateNovelChapterRequest {
+            story_id: request.story_id.clone(),
+            chapter_id: request.chapter_id.clone(),
+            chapter_order: request.chapter_order,
+            user_topic_or_synopsis: request.user_topic_or_synopsis.clone(),
+            story_length_profile: request.story_length_profile.clone(),
+            authoring_craft_summary,
+            continuity_context_summary: request.continuity_context_summary.clone(),
+            kb_context_summary: request.kb_context_summary.clone(),
+            selected_sample_ids: request.selected_sample_ids.clone(),
+            selected_kb_rules: request.selected_kb_rules.clone(),
+            retrieval_trace_user_summary: request.retrieval_trace_user_summary.clone(),
+            full_kb_rows_included: request.full_kb_rows_included,
+        },
+    );
+    warnings.extend(chapter.warnings.clone());
+    if !chapter.blockers.is_empty() {
+        blockers.extend(chapter.blockers.clone());
+        return RunV0StoryToStoryboardChainResponse {
+            status: BridgeCallStatus::Blocked,
+            blockers,
+            warnings,
+            chapter: Some(chapter),
+            script: None,
+            shot_task_plan: None,
+            storyboard_results: vec![],
+            finalized_storyboard_refs: vec![],
+            continuity_state: None,
+        };
+    }
+
+    let script = adapt_chapter_to_script(
+        state,
+        AdaptChapterToScriptRequest {
+            story_id: request.story_id.clone(),
+            chapter_id: request.chapter_id.clone(),
+            chapter_order: request.chapter_order,
+            chapter_text: chapter.chapter_text.clone(),
+            chapter_summary: chapter.chapter_summary.clone(),
+            screenwriting_adaptation_summary,
+            continuity_context_summary: request.continuity_context_summary.clone(),
+            kb_context_summary: request.kb_context_summary.clone(),
+            selected_sample_ids: request.selected_sample_ids.clone(),
+            selected_kb_rules: request.selected_kb_rules.clone(),
+            retrieval_trace_user_summary: request.retrieval_trace_user_summary.clone(),
+            full_kb_rows_included: request.full_kb_rows_included,
+        },
+    );
+    warnings.extend(script.warnings.clone());
+    if !script.blockers.is_empty() {
+        blockers.extend(script.blockers.clone());
+        return RunV0StoryToStoryboardChainResponse {
+            status: BridgeCallStatus::Blocked,
+            blockers,
+            warnings,
+            chapter: Some(chapter),
+            script: Some(script),
+            shot_task_plan: None,
+            storyboard_results: vec![],
+            finalized_storyboard_refs: vec![],
+            continuity_state: None,
+        };
+    }
+
+    let split_response = split_script_to_shot_tasks(SplitScriptToShotTasksRequest {
+        script_id: Some(script.script_id.clone()),
+        expanded_script_text: script.script_text.clone(),
+        selected_total_duration_seconds: request.selected_total_duration_seconds,
+        primary_scene_type: request.primary_scene_type.clone(),
+        primary_scene_label: request.primary_scene_label.clone(),
+        primary_scene_category: request.primary_scene_category.clone(),
+        task_type: Some("v0_story_to_storyboard_chain".to_string()),
+        shot_count_hint: None,
+        structure_type: Some(request.story_length_profile.clone()),
+        kb_context_summary: Some(request.kb_context_summary.clone()),
+        selected_kb_rules: request.selected_kb_rules.clone(),
+        selected_sample_ids: request.selected_sample_ids.clone(),
+    });
+    warnings.extend(split_response.warnings.clone());
+    let shot_task_plan = ShotTaskPlan {
+        script_id: script.script_id.clone(),
+        story_id: request.story_id.clone(),
+        chapter_id: request.chapter_id.clone(),
+        chapter_order: request.chapter_order,
+        shot_task_count: split_response.shot_tasks.len() as u32,
+        duration_plan_summary: format!(
+            "total={}s; rows={}; segments={}",
+            request.selected_total_duration_seconds,
+            split_response.shot_tasks.len(),
+            split_response
+                .shot_tasks
+                .iter()
+                .map(|task| task.duration_seconds.to_string())
+                .collect::<Vec<_>>()
+                .join("/")
+        ),
+        continuity_delta: format!(
+            "shot_task_plan:{} split script into {} grounded shot tasks",
+            script.script_id,
+            split_response.shot_tasks.len()
+        ),
+        warnings: split_response.warnings.clone(),
+        shot_tasks: split_response.shot_tasks.clone(),
+    };
+    state.remember_v0_shot_task_plan(shot_task_plan.clone());
+    state.append_v0_continuity_delta_log(ContinuityDeltaLog {
+        story_id: request.story_id.clone(),
+        chapter_id: request.chapter_id.clone(),
+        chapter_order: request.chapter_order,
+        stage: "split_script_to_shot_tasks".to_string(),
+        continuity_delta: shot_task_plan.continuity_delta.clone(),
+        updated_at_ms: now_epoch_ms(),
+    });
+
+    let mut storyboard_results = Vec::new();
+    let mut finalized_storyboard_refs = Vec::new();
+    for task in &shot_task_plan.shot_tasks {
+        let storyboard = generate_storyboard_with_live_text(
+            state,
+            GenerateStoryboardRequest {
+                task_name: v0_shot_task_name(task),
+                script_id: Some(script.script_id.clone()),
+                shot_script: Some(task.shot_script.clone()),
+                expanded_script_text: Some(script.script_text.clone()),
+                primary_scene_type: Some(request.primary_scene_type.clone()),
+                primary_scene_label: request.primary_scene_label.clone(),
+                primary_scene_category: request.primary_scene_category.clone(),
+                shot_scene_type: Some(task.shot_scene_type.clone()),
+                shot_scene_label: Some(task.shot_scene_label.clone()),
+                shot_intent: Some(task.shot_intent.clone()),
+                adaptation_reason: Some(task.adaptation_reason.clone()),
+                selected_total_duration_seconds: task.duration_seconds,
+            },
+            false,
+        );
+        warnings.extend(storyboard.export_status.warnings.clone());
+        if !storyboard.export_status.blockers.is_empty() {
+            blockers.extend(storyboard.export_status.blockers.clone());
+            continue;
+        }
+        let prompt_text = storyboard
+            .rows
+            .iter()
+            .map(|row| row.prompt_text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let storyboard_result = StoryboardResult {
+            status: storyboard.export_status.status,
+            blockers: storyboard.export_status.blockers.clone(),
+            warnings: storyboard.export_status.warnings.clone(),
+            storyboard_result_id: storyboard.result_id.clone(),
+            story_id: request.story_id.clone(),
+            chapter_id: request.chapter_id.clone(),
+            chapter_order: request.chapter_order,
+            script_id: script.script_id.clone(),
+            shot_task_id: task.shot_task_id.clone(),
+            shot_order: task.shot_order,
+            rows: storyboard.rows.clone(),
+            prompt_text: prompt_text.clone(),
+            shot_duration_seconds: task.duration_seconds,
+            duration_source: STORYBOARD_DURATION_SOURCE.to_string(),
+            director_intent_summary: format!(
+                "镜头{}服务当前剧情片段，不改写角色事实。",
+                task.shot_order
+            ),
+            performance_focus: task.shot_intent.clone(),
+            blocking_hint: "按 shot_script 保持主体、对象和空间关系清晰。".to_string(),
+            rhythm_hint: format!("使用 {} 秒 Seedance 友好分段节奏。", task.duration_seconds),
+            visual_focus: task.shot_scene_label.clone(),
+            continuity_note: format!(
+                "承接脚本{}第{}个镜头任务。",
+                script.script_id, task.shot_order
+            ),
+            directing_kb_context_summary: directing_kb_context_summary.clone(),
+            continuity_delta: format!(
+                "storyboard:{} produced {} row(s) for shot_task:{}",
+                storyboard.result_id,
+                storyboard.rows.len(),
+                task.shot_task_id
+            ),
+        };
+        let save_response = save_storyboard_shot_result(
+            state,
+            SaveStoryboardShotResultRequest {
+                project_id: request.story_id.clone(),
+                script_id: script.script_id.clone(),
+                shot_task_id: task.shot_task_id.clone(),
+                result_id: storyboard.result_id.clone(),
+                shot_order: task.shot_order,
+                shot_task_name: v0_shot_task_name(task),
+                rows: storyboard.rows.clone(),
+                prompt_text,
+                shot_duration_seconds: task.duration_seconds,
+                duration_source: STORYBOARD_DURATION_SOURCE.to_string(),
+                confirmed: request.confirm_storyboard_results,
+                updated_at_ms: 0,
+                rows_hash: storyboard.rows_hash.clone(),
+            },
+        );
+        warnings.extend(save_response.warnings.clone());
+        if !save_response.blockers.is_empty() {
+            blockers.extend(save_response.blockers.clone());
+        } else if let Some(saved) = save_response.shot {
+            finalized_storyboard_refs.push(finalized_ref_from_saved_shot(
+                &request.story_id,
+                &request.chapter_id,
+                request.chapter_order,
+                &saved,
+            ));
+        }
+        storyboard_results.push(storyboard_result);
+    }
+
+    if !blockers.is_empty() {
+        return RunV0StoryToStoryboardChainResponse {
+            status: BridgeCallStatus::Blocked,
+            blockers,
+            warnings,
+            chapter: Some(chapter),
+            script: Some(script),
+            shot_task_plan: Some(shot_task_plan),
+            storyboard_results,
+            finalized_storyboard_refs,
+            continuity_state: None,
+        };
+    }
+
+    let continuity_response = update_continuity_state(
+        state,
+        UpdateContinuityStateRequest {
+            story_id: request.story_id.clone(),
+            chapter_id: request.chapter_id.clone(),
+            chapter_order: request.chapter_order,
+            chapter_summary: chapter.chapter_summary.clone(),
+            character_state_summary: chapter.character_motivation_summary.clone(),
+            location_state_summary: "地点连续性按章节和脚本中已确认的空间关系保留。".to_string(),
+            prop_state_summary: chapter.prop_state_summary.clone(),
+            timeline_state_summary: chapter.timeline_continuity_summary.clone(),
+            unresolved_threads: vec![chapter.next_scene_bridge.clone()],
+            style_bible_summary: "中性故事语气，禁止真实作者、导演、IP 或品牌风格模仿。"
+                .to_string(),
+            finalized_storyboard_refs: finalized_storyboard_refs.clone(),
+            continuity_delta: format!(
+                "{} | {} | {}",
+                chapter.continuity_delta, script.continuity_delta, shot_task_plan.continuity_delta
+            ),
+        },
+    );
+    warnings.extend(continuity_response.warnings.clone());
+    if !continuity_response.blockers.is_empty() {
+        blockers.extend(continuity_response.blockers.clone());
+    }
+
+    RunV0StoryToStoryboardChainResponse {
+        status: if !blockers.is_empty() {
+            BridgeCallStatus::Blocked
+        } else if !warnings.is_empty() {
+            BridgeCallStatus::WarningOnly
+        } else {
+            BridgeCallStatus::Ready
+        },
+        blockers,
+        warnings,
+        chapter: Some(chapter),
+        script: Some(script),
+        shot_task_plan: Some(shot_task_plan),
+        storyboard_results,
+        finalized_storyboard_refs,
+        continuity_state: continuity_response.continuity_state,
+    }
+}
+
 pub fn generate_storyboard(
     state: &AppState,
     request: GenerateStoryboardRequest,
+) -> GenerateStoryboardResponse {
+    generate_storyboard_with_live_text(state, request, true)
+}
+
+fn generate_storyboard_with_live_text(
+    state: &AppState,
+    request: GenerateStoryboardRequest,
+    allow_live_text: bool,
 ) -> GenerateStoryboardResponse {
     let now_ms = now_epoch_ms();
     let expanded_script_text = request
@@ -480,7 +1204,14 @@ pub fn generate_storyboard(
         }
     };
     let row_count = row_durations.len();
-    let provider = default_text_model_provider();
+    let provider = if allow_live_text {
+        default_text_model_provider()
+    } else {
+        TextModelProvider {
+            enabled: false,
+            ..default_text_model_provider()
+        }
+    };
     let generation_request = build_text_generation_request(
         TextGenerationTask::GenerateStoryboard,
         Some(grounding.shot_scene_type.clone()),
@@ -1781,6 +2512,9 @@ fn run_kb_router(state: &AppState, request: KbRouterRuntimeRequest) -> KbRouterR
 
 fn router_top_k(request: &KbRouterRuntimeRequest) -> (u8, u8) {
     match request.task_type {
+        KbRouterTaskType::GenerateNovelChapter => (2, 6),
+        KbRouterTaskType::AdaptChapterToScript => (2, 6),
+        KbRouterTaskType::SplitScriptToShotTasks => (2, 6),
         KbRouterTaskType::ExpandScript => (2, 6),
         KbRouterTaskType::GenerateStoryboard => {
             if request.duration_seconds >= 45 {
@@ -1791,6 +2525,7 @@ fn router_top_k(request: &KbRouterRuntimeRequest) -> (u8, u8) {
         }
         KbRouterTaskType::RepairStoryboard => (2, 10),
         KbRouterTaskType::CompileSeedancePromptText => (1, 6),
+        KbRouterTaskType::UpdateContinuityState => (1, 6),
     }
 }
 
@@ -1994,6 +2729,318 @@ pub fn split_script_to_shot_tasks(
         script_id: request.script_id,
         shot_tasks,
         warnings: vec![],
+    }
+}
+
+fn validate_generate_novel_chapter_request(
+    request: &GenerateNovelChapterRequest,
+) -> Vec<ProductWarning> {
+    let mut blockers = Vec::new();
+    push_required_warning(&mut blockers, "story_id", &request.story_id);
+    push_required_warning(&mut blockers, "chapter_id", &request.chapter_id);
+    push_required_warning(
+        &mut blockers,
+        "user_topic_or_synopsis",
+        &request.user_topic_or_synopsis,
+    );
+    push_required_warning(
+        &mut blockers,
+        "authoring_craft_summary",
+        &request.authoring_craft_summary,
+    );
+    if !is_supported_v0_story_length_profile(&request.story_length_profile) {
+        blockers.push(ProductWarning {
+            code: "story_length_profile_unsupported".to_string(),
+            message: "V0 story_length_profile must be short_story_2000_2500 or two_minute_story_2500_3500."
+                .to_string(),
+            related_sample_id: None,
+        });
+    }
+    if request.full_kb_rows_included != 0 {
+        blockers.push(ProductWarning {
+            code: "full_kb_rows_must_be_zero".to_string(),
+            message:
+                "V0 stage contracts only allow summary KB context; full_kb_rows_included must be 0."
+                    .to_string(),
+            related_sample_id: None,
+        });
+    }
+    if contains_forbidden_v0_product_payload(&request.user_topic_or_synopsis)
+        || contains_forbidden_generation_terms(&request.authoring_craft_summary)
+    {
+        blockers.push(ProductWarning {
+            code: "v0_authoring_forbidden_payload".to_string(),
+            message: "V0 chapter input rejected internal, credential, or style-imitation payload content."
+                .to_string(),
+            related_sample_id: None,
+        });
+    }
+    blockers
+}
+
+fn validate_adapt_chapter_to_script_request(
+    request: &AdaptChapterToScriptRequest,
+) -> Vec<ProductWarning> {
+    let mut blockers = Vec::new();
+    push_required_warning(&mut blockers, "story_id", &request.story_id);
+    push_required_warning(&mut blockers, "chapter_id", &request.chapter_id);
+    push_required_warning(&mut blockers, "chapter_text", &request.chapter_text);
+    push_required_warning(&mut blockers, "chapter_summary", &request.chapter_summary);
+    push_required_warning(
+        &mut blockers,
+        "screenwriting_adaptation_summary",
+        &request.screenwriting_adaptation_summary,
+    );
+    if request.full_kb_rows_included != 0 {
+        blockers.push(ProductWarning {
+            code: "full_kb_rows_must_be_zero".to_string(),
+            message: "V0 screenwriting adaptation only accepts summary KB context.".to_string(),
+            related_sample_id: None,
+        });
+    }
+    if contains_forbidden_v0_product_payload(&format!(
+        "{}\n{}",
+        request.chapter_text, request.chapter_summary
+    )) {
+        blockers.push(ProductWarning {
+            code: "v0_screenwriting_forbidden_payload".to_string(),
+            message: "V0 script adaptation rejected internal, raw, credential, or full-KB payload content."
+                .to_string(),
+            related_sample_id: None,
+        });
+    }
+    blockers
+}
+
+fn validate_run_v0_story_to_storyboard_chain_request(
+    request: &RunV0StoryToStoryboardChainRequest,
+) -> Vec<ProductWarning> {
+    let mut blockers = Vec::new();
+    push_required_warning(&mut blockers, "story_id", &request.story_id);
+    push_required_warning(&mut blockers, "chapter_id", &request.chapter_id);
+    push_required_warning(
+        &mut blockers,
+        "user_topic_or_synopsis",
+        &request.user_topic_or_synopsis,
+    );
+    push_required_warning(
+        &mut blockers,
+        "primary_scene_type",
+        &request.primary_scene_type,
+    );
+    if !is_supported_v0_story_length_profile(&request.story_length_profile) {
+        blockers.push(ProductWarning {
+            code: "story_length_profile_unsupported".to_string(),
+            message: "V0 chain supports short_story_2000_2500 and two_minute_story_2500_3500."
+                .to_string(),
+            related_sample_id: None,
+        });
+    }
+    if !is_supported_storyboard_duration(request.selected_total_duration_seconds) {
+        blockers.push(ProductWarning {
+            code: "duration_not_supported".to_string(),
+            message: "V0 chain storyboard duration must use the Seedance-friendly 5-second grid within 5-60 seconds."
+                .to_string(),
+            related_sample_id: None,
+        });
+    }
+    if request.full_kb_rows_included != 0 {
+        blockers.push(ProductWarning {
+            code: "full_kb_rows_must_be_zero".to_string(),
+            message: "V0 chain must keep full_kb_rows_included at 0.".to_string(),
+            related_sample_id: None,
+        });
+    }
+    if contains_forbidden_v0_product_payload(&request.user_topic_or_synopsis) {
+        blockers.push(ProductWarning {
+            code: "v0_chain_forbidden_payload".to_string(),
+            message:
+                "V0 chain input rejected internal, raw, credential, or full-KB payload content."
+                    .to_string(),
+            related_sample_id: None,
+        });
+    }
+    blockers
+}
+
+fn push_required_warning(blockers: &mut Vec<ProductWarning>, field_name: &str, value: &str) {
+    if value.trim().is_empty() {
+        blockers.push(ProductWarning {
+            code: format!("{field_name}_required"),
+            message: format!("{field_name} is required for the V0 story-to-storyboard chain."),
+            related_sample_id: None,
+        });
+    }
+}
+
+fn is_supported_v0_story_length_profile(value: &str) -> bool {
+    matches!(
+        value.trim(),
+        V0_SHORT_STORY_PROFILE | V0_TWO_MINUTE_STORY_PROFILE
+    )
+}
+
+fn deterministic_chapter_title(chapter_order: u32, topic: &str) -> String {
+    format!(
+        "第{}章：{}",
+        chapter_order,
+        compact_product_summary(topic, "故事转折", 18)
+    )
+}
+
+fn deterministic_v0_chapter_text(
+    topic: &str,
+    story_length_profile: &str,
+    authoring_craft_summary: &str,
+    continuity_context_summary: &str,
+    kb_summary_available: bool,
+) -> String {
+    let beat_count = if story_length_profile == V0_TWO_MINUTE_STORY_PROFILE {
+        6
+    } else {
+        4
+    };
+    let topic_summary = compact_product_summary(topic, "主角在压力中推进目标", 160);
+    let craft_summary = compact_product_summary(
+        authoring_craft_summary,
+        "角色目标、冲突推进、可视化行动",
+        120,
+    );
+    let continuity_summary = compact_product_summary(
+        continuity_context_summary,
+        "当前章节从用户梗概开始，不重置已接受事实。",
+        120,
+    );
+    let kb_note = if kb_summary_available {
+        "压缩知识摘要只作为结构提醒，角色事实仍以用户梗概和连续性为准。"
+    } else {
+        "当前使用中性创作规则，不依赖未确认的能力画像。"
+    };
+    let mut lines = vec![format!(
+        "本章围绕“{}”展开。{} {}",
+        topic_summary, craft_summary, kb_note
+    )];
+    for index in 0..beat_count {
+        let beat_no = index + 1;
+        let beat = match index {
+            0 => "开端：角色从上一状态接入，目标和压力同时被看见。",
+            1 => "推进：对立力量逼近，角色必须用行动回应，而不是停留在解释。",
+            2 => "转折：角色发现新的限制或线索，原本的选择变得更困难。",
+            3 => "承接：角色做出可被镜头捕捉的动作，留下下一段状态。",
+            4 => "加压：关系、地点或道具状态出现更明确的后果。",
+            _ => "收束：本章不解决全部问题，只把下一段的冲突桥接清楚。",
+        };
+        lines.push(format!("段落{beat_no}：{beat} 章节事实：{topic_summary}"));
+    }
+    lines.push(format!("连续性约束：{continuity_summary}"));
+    lines.join("\n")
+}
+
+fn deterministic_scene_beats(chapter_text: &str) -> Vec<String> {
+    let mut beats = split_story_segments(chapter_text)
+        .into_iter()
+        .filter(|segment| !segment.contains("连续性约束"))
+        .take(6)
+        .collect::<Vec<_>>();
+    if beats.len() < 3 {
+        beats.push("角色确认目标和当前压力。".to_string());
+        beats.push("角色对对立力量做出可见行动。".to_string());
+        beats.push("镜头留下下一段需要承接的状态。".to_string());
+    }
+    beats
+}
+
+fn deterministic_v0_script_text(
+    title: &str,
+    scene_beats: &[String],
+    dialogue_intent: &str,
+    chapter_summary: &str,
+) -> String {
+    let mut lines = vec![
+        format!("剧本标题：{title}"),
+        format!(
+            "剧本摘要：{}",
+            compact_product_summary(chapter_summary, "保留章节主线", 120)
+        ),
+        format!("对白意图：{dialogue_intent}"),
+    ];
+    for (index, beat) in scene_beats.iter().enumerate() {
+        let scene_no = index + 1;
+        lines.push(format!(
+            "场景{scene_no}：{}。角色从上一状态进入，面向当前对立压力完成明确动作，镜头可继续拆分。",
+            compact_product_summary(beat, "角色推进当前冲突", 180)
+        ));
+    }
+    lines.join("\n")
+}
+
+fn first_story_sentence(text: &str) -> String {
+    split_story_segments(text)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| text.trim().to_string())
+}
+
+fn compact_product_summary(value: &str, fallback: &str, max_chars: usize) -> String {
+    let trimmed = value.trim();
+    let source = if trimmed.is_empty() {
+        fallback
+    } else {
+        trimmed
+    };
+    let mut summary = source.chars().take(max_chars).collect::<String>();
+    if source.chars().count() > max_chars {
+        summary.push_str("...");
+    }
+    summary
+}
+
+fn v0_required_summary_or_neutral(value: &str, neutral: &str) -> String {
+    non_blank_string(value).unwrap_or_else(|| neutral.to_string())
+}
+
+fn contains_forbidden_v0_product_payload(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    FINALIZED_BANK_FORBIDDEN_TERMS
+        .iter()
+        .any(|term| lower.contains(term))
+        || contains_forbidden_generation_terms(value)
+}
+
+fn v0_shot_task_name(task: &ShotTask) -> String {
+    format!(
+        "镜头{}：{}",
+        task.shot_order,
+        compact_product_summary(&task.shot_script, "分镜任务", 24)
+    )
+}
+
+fn finalized_ref_from_saved_shot(
+    story_id: &str,
+    chapter_id: &str,
+    chapter_order: u32,
+    shot: &FinalizedStoryboardShotResult,
+) -> FinalizedStoryboardRef {
+    let label = shot
+        .rows
+        .first()
+        .map(|row| format!("镜头{}：{}", shot.shot_order, row.shot_title))
+        .unwrap_or_else(|| format!("镜头{}：{}", shot.shot_order, shot.shot_task_name));
+    FinalizedStoryboardRef {
+        story_id: story_id.to_string(),
+        chapter_id: chapter_id.to_string(),
+        chapter_order,
+        script_id: shot.script_id.clone(),
+        shot_task_id: shot.shot_task_id.clone(),
+        storyboard_result_id: shot.result_id.clone(),
+        finalized_result_id: shot.result_id.clone(),
+        shot_order: shot.shot_order,
+        shot_task_name: shot.shot_task_name.clone(),
+        confirmed: shot.confirmed,
+        updated_at_ms: shot.updated_at_ms,
+        rows_hash: shot.rows_hash.clone(),
+        shot_duration_seconds: shot.shot_duration_seconds,
+        label,
     }
 }
 
@@ -4248,9 +5295,10 @@ mod tests {
         KbBundleRecordCounts, KbGoldenSampleRuntimePackage, KbRouterRuntimeRequest,
         KbRouterTaskType, KbRuntimeSummary, KbSnapshotRecord, ListStoryboardShotResultsRequest,
         PromptTemplateRecord, PromptTextCompilationStatus, RemoveStoryboardShotResultRequest,
-        SaveStoryboardShotResultRequest, SceneTaxonomyRecord, ShotGroundingSource,
-        StoryboardDurationPlan, TextGenerationOutputSchema, TextGenerationTask,
-        TextModelProviderKind, UpdateStoryboardRowsRequest, UpdateStoryboardShotResultRequest,
+        RunV0StoryToStoryboardChainRequest, SaveStoryboardShotResultRequest, SceneTaxonomyRecord,
+        ShotGroundingSource, StoryboardDurationPlan, TextGenerationOutputSchema,
+        TextGenerationTask, TextModelProviderKind, UpdateStoryboardRowsRequest,
+        UpdateStoryboardShotResultRequest,
     };
     use project_store::{
         DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeHandle, StoreSkeleton,
@@ -4266,9 +5314,10 @@ mod tests {
         default_text_model_provider, expand_script, export_bundle, export_storyboard_bank,
         generate_storyboard, list_storyboard_shot_results, project_scene_performance,
         remove_storyboard_shot_result, resolve_scene_taxonomy, run_kb_router,
-        run_qwen_text_generation_with_transport, save_storyboard_rows, save_storyboard_shot_result,
-        select_golden_sample_records, serialize_storyboard_rows, stable_hash_hex,
-        subject_label_mentions_any_name, update_storyboard_shot_result,
+        run_qwen_text_generation_with_transport, run_v0_story_to_storyboard_chain,
+        save_storyboard_rows, save_storyboard_shot_result, select_golden_sample_records,
+        serialize_storyboard_rows, stable_hash_hex, subject_label_mentions_any_name,
+        update_storyboard_shot_result,
     };
     use crate::state::AppState;
     use validators::{WEEK3_SHARED_FIXTURE_PATH, load_week3_shared_fixture};
@@ -5548,6 +6597,144 @@ mod tests {
         assert_eq!(
             storyboard.duration_plan.per_row_seconds,
             SEEDANCE_STANDARD_SEGMENT_SECONDS
+        );
+    }
+
+    #[test]
+    fn v0_story_to_storyboard_chain_runs_neutral_deterministic_scaffold() {
+        let state = test_state();
+
+        let response = run_v0_story_to_storyboard_chain(
+            &state,
+            RunV0StoryToStoryboardChainRequest {
+                story_id: "story-v0-001".to_string(),
+                chapter_id: "chapter-v0-001".to_string(),
+                chapter_order: 1,
+                user_topic_or_synopsis: "男主林峰和女主叶倾颜在断桥重逢，敌将萧寒追杀而至。"
+                    .to_string(),
+                story_length_profile: "short_story_2000_2500".to_string(),
+                selected_total_duration_seconds: 20,
+                primary_scene_type: "daily_dialogue".to_string(),
+                primary_scene_label: Some("断桥重逢".to_string()),
+                primary_scene_category: Some("action_dialogue".to_string()),
+                authoring_craft_summary: "以角色目标、冲突压力、情绪转折和下一场承接组织章节。"
+                    .to_string(),
+                screenwriting_adaptation_summary: "将章节压缩为可表演的动作、对白意图和转折节拍。"
+                    .to_string(),
+                directing_kb_context_summary: "镜头调度只服务当前剧情事实，shot_script 优先。"
+                    .to_string(),
+                continuity_context_summary: "第一章从断桥重逢开始，无前置定稿分镜。".to_string(),
+                kb_context_summary: "压缩 KB 摘要：仅保留结构、连续性和时长规则。".to_string(),
+                selected_sample_ids: vec!["GS-BRIDGE-01".to_string()],
+                selected_kb_rules: vec!["summary-only continuity and duration guard".to_string()],
+                retrieval_trace_user_summary: "scene match and continuity need".to_string(),
+                full_kb_rows_included: 0,
+                confirm_storyboard_results: true,
+            },
+        );
+
+        assert_ne!(response.status, BridgeCallStatus::Blocked, "{response:#?}");
+        let chapter = response.chapter.as_ref().expect("chapter should exist");
+        let script = response.script.as_ref().expect("script should exist");
+        let plan = response
+            .shot_task_plan
+            .as_ref()
+            .expect("shot task plan should exist");
+        assert_eq!(chapter.story_id, "story-v0-001");
+        assert_eq!(script.chapter_id, "chapter-v0-001");
+        assert_eq!(
+            plan.shot_tasks
+                .iter()
+                .map(|task| task.duration_seconds)
+                .collect::<Vec<_>>(),
+            vec![10, 10]
+        );
+        assert_eq!(response.storyboard_results.len(), 2);
+        assert_eq!(response.finalized_storyboard_refs.len(), 2);
+        assert!(response.continuity_state.is_some());
+
+        let continuity = response.continuity_state.as_ref().unwrap();
+        assert!(
+            continuity
+                .continuity_context_summary
+                .contains("story-v0-001")
+        );
+        assert_eq!(continuity.finalized_storyboard_refs.len(), 2);
+        assert!(
+            state
+                .find_v0_chapter("story-v0-001", "chapter-v0-001")
+                .is_some()
+        );
+        assert!(state.find_v0_script(&script.script_id).is_some());
+        assert!(state.find_v0_shot_task_plan(&script.script_id).is_some());
+        assert!(state.find_v0_continuity_state("story-v0-001").is_some());
+        let logs = state.list_v0_continuity_delta_logs("story-v0-001");
+        assert!(logs.iter().any(|log| log.stage == "generate_novel_chapter"));
+        assert!(
+            logs.iter()
+                .any(|log| log.stage == "update_continuity_state")
+        );
+
+        let prompt_payload = response
+            .storyboard_results
+            .iter()
+            .map(|result| result.prompt_text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_prompt_text_has_no_internal_payload(&prompt_payload);
+        for forbidden in [
+            "raw prompt_body",
+            "prompt_body",
+            "source_register",
+            "overlay JSON",
+            "full raw KB rows",
+            "API key",
+            "director_style_ref",
+        ] {
+            assert!(
+                !continuity.continuity_context_summary.contains(forbidden),
+                "continuity leaked forbidden payload term {forbidden}: {}",
+                continuity.continuity_context_summary
+            );
+        }
+    }
+
+    #[test]
+    fn v0_story_to_storyboard_chain_blocks_full_kb_rows() {
+        let state = test_state();
+
+        let response = run_v0_story_to_storyboard_chain(
+            &state,
+            RunV0StoryToStoryboardChainRequest {
+                story_id: "story-v0-blocked".to_string(),
+                chapter_id: "chapter-v0-blocked".to_string(),
+                chapter_order: 1,
+                user_topic_or_synopsis: "主角与对手在城门前对峙。".to_string(),
+                story_length_profile: "short_story_2000_2500".to_string(),
+                selected_total_duration_seconds: 10,
+                primary_scene_type: "daily_dialogue".to_string(),
+                primary_scene_label: Some("城门对峙".to_string()),
+                primary_scene_category: Some("dialogue".to_string()),
+                authoring_craft_summary: "保持角色目标和下一场承接。".to_string(),
+                screenwriting_adaptation_summary: "改编为可表演节拍。".to_string(),
+                directing_kb_context_summary: "镜头服务剧情。".to_string(),
+                continuity_context_summary: String::new(),
+                kb_context_summary: String::new(),
+                selected_sample_ids: vec![],
+                selected_kb_rules: vec![],
+                retrieval_trace_user_summary: String::new(),
+                full_kb_rows_included: 1,
+                confirm_storyboard_results: true,
+            },
+        );
+
+        assert_eq!(response.status, BridgeCallStatus::Blocked);
+        assert!(response.chapter.is_none());
+        assert!(
+            response
+                .blockers
+                .iter()
+                .any(|blocker| blocker.code == "full_kb_rows_must_be_zero")
         );
     }
 

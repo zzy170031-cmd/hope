@@ -90,19 +90,27 @@ pub struct TextGenerationResponse {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum KbRouterTaskType {
+    GenerateNovelChapter,
+    AdaptChapterToScript,
+    SplitScriptToShotTasks,
     ExpandScript,
     GenerateStoryboard,
     RepairStoryboard,
     CompileSeedancePromptText,
+    UpdateContinuityState,
 }
 
 impl KbRouterTaskType {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::GenerateNovelChapter => "generate_novel_chapter",
+            Self::AdaptChapterToScript => "adapt_chapter_to_script",
+            Self::SplitScriptToShotTasks => "split_script_to_shot_tasks",
             Self::ExpandScript => "expand_script",
             Self::GenerateStoryboard => "generate_storyboard",
             Self::RepairStoryboard => "repair_storyboard",
             Self::CompileSeedancePromptText => "compile_seedance_prompt_text",
+            Self::UpdateContinuityState => "update_continuity_state",
         }
     }
 }
@@ -271,6 +279,115 @@ pub struct ProductWarning {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GenerateNovelChapterRequest {
+    pub story_id: String,
+    pub chapter_id: String,
+    pub chapter_order: u32,
+    pub user_topic_or_synopsis: String,
+    pub story_length_profile: String,
+    pub authoring_craft_summary: String,
+    pub continuity_context_summary: String,
+    pub kb_context_summary: String,
+    pub selected_sample_ids: Vec<String>,
+    pub selected_kb_rules: Vec<String>,
+    pub retrieval_trace_user_summary: String,
+    pub full_kb_rows_included: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GenerateNovelChapterResponse {
+    pub status: BridgeCallStatus,
+    pub blockers: Vec<ProductWarning>,
+    pub warnings: Vec<ProductWarning>,
+    pub story_id: String,
+    pub chapter_id: String,
+    pub chapter_order: u32,
+    pub chapter_title: String,
+    pub chapter_text: String,
+    pub chapter_summary: String,
+    pub authoring_craft_summary: String,
+    pub premise_hook: String,
+    pub character_desire: String,
+    pub character_pressure: String,
+    pub conflict_engine: String,
+    pub emotional_turn: String,
+    pub suspense_setup: String,
+    pub payoff_setup: String,
+    pub scene_purpose: String,
+    pub visualizable_action: String,
+    pub chapter_cliffhanger: String,
+    pub director_bridge: String,
+    pub character_motivation_summary: String,
+    pub conflict_progression_summary: String,
+    pub emotional_progression_summary: String,
+    pub timeline_continuity_summary: String,
+    pub prop_state_summary: String,
+    pub next_scene_bridge: String,
+    pub continuity_warnings: Vec<ProductWarning>,
+    pub continuity_delta: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChapterAcceptedState {
+    pub story_id: String,
+    pub chapter_id: String,
+    pub chapter_order: u32,
+    pub chapter_title: String,
+    pub chapter_text: String,
+    pub chapter_summary: String,
+    pub continuity_delta: String,
+    pub accepted_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdaptChapterToScriptRequest {
+    pub story_id: String,
+    pub chapter_id: String,
+    pub chapter_order: u32,
+    pub chapter_text: String,
+    pub chapter_summary: String,
+    pub screenwriting_adaptation_summary: String,
+    pub continuity_context_summary: String,
+    pub kb_context_summary: String,
+    pub selected_sample_ids: Vec<String>,
+    pub selected_kb_rules: Vec<String>,
+    pub retrieval_trace_user_summary: String,
+    pub full_kb_rows_included: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdaptChapterToScriptResponse {
+    pub status: BridgeCallStatus,
+    pub blockers: Vec<ProductWarning>,
+    pub warnings: Vec<ProductWarning>,
+    pub script_id: String,
+    pub story_id: String,
+    pub chapter_id: String,
+    pub chapter_order: u32,
+    pub script_text: String,
+    pub script_summary: String,
+    pub screenwriting_adaptation_summary: String,
+    pub scene_beats: Vec<String>,
+    pub dialogue_intent: String,
+    pub action_blocks: Vec<String>,
+    pub turning_points: Vec<String>,
+    pub scene_purpose: String,
+    pub continuity_delta: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScriptAcceptedState {
+    pub script_id: String,
+    pub story_id: String,
+    pub chapter_id: String,
+    pub chapter_order: u32,
+    pub script_text: String,
+    pub script_summary: String,
+    pub continuity_delta: String,
+    pub accepted_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SequenceGrouping {
     pub structure_mode: StructureMode,
     pub sequence_id: Option<String>,
@@ -387,6 +504,19 @@ pub struct SplitScriptToShotTasksResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShotTaskPlan {
+    pub script_id: String,
+    pub story_id: String,
+    pub chapter_id: String,
+    pub chapter_order: u32,
+    pub shot_tasks: Vec<ShotTask>,
+    pub shot_task_count: u32,
+    pub duration_plan_summary: String,
+    pub continuity_delta: String,
+    pub warnings: Vec<ProductWarning>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExpandScriptRequest {
     pub scene_type: String,
     pub synopsis_text: String,
@@ -488,6 +618,32 @@ pub struct GenerateStoryboardResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoryboardResult {
+    pub status: BridgeCallStatus,
+    pub blockers: Vec<ProductWarning>,
+    pub warnings: Vec<ProductWarning>,
+    pub storyboard_result_id: String,
+    pub story_id: String,
+    pub chapter_id: String,
+    pub chapter_order: u32,
+    pub script_id: String,
+    pub shot_task_id: String,
+    pub shot_order: u32,
+    pub rows: Vec<GeneratedStoryboardRow>,
+    pub prompt_text: String,
+    pub shot_duration_seconds: u16,
+    pub duration_source: String,
+    pub director_intent_summary: String,
+    pub performance_focus: String,
+    pub blocking_hint: String,
+    pub rhythm_hint: String,
+    pub visual_focus: String,
+    pub continuity_note: String,
+    pub directing_kb_context_summary: String,
+    pub continuity_delta: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FinalizedStoryboardShotResult {
     pub project_id: String,
     pub script_id: String,
@@ -502,6 +658,24 @@ pub struct FinalizedStoryboardShotResult {
     pub confirmed: bool,
     pub updated_at_ms: u64,
     pub rows_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FinalizedStoryboardRef {
+    pub story_id: String,
+    pub chapter_id: String,
+    pub chapter_order: u32,
+    pub script_id: String,
+    pub shot_task_id: String,
+    pub storyboard_result_id: String,
+    pub finalized_result_id: String,
+    pub shot_order: u32,
+    pub shot_task_name: String,
+    pub confirmed: bool,
+    pub updated_at_ms: u64,
+    pub rows_hash: String,
+    pub shot_duration_seconds: u16,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -604,6 +778,95 @@ pub struct ExportStoryboardBankResponse {
     pub artifacts: Vec<ExportArtifactRecord>,
     pub warnings: Vec<ProductWarning>,
     pub blockers: Vec<ProductWarning>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateContinuityStateRequest {
+    pub story_id: String,
+    pub chapter_id: String,
+    pub chapter_order: u32,
+    pub chapter_summary: String,
+    pub character_state_summary: String,
+    pub location_state_summary: String,
+    pub prop_state_summary: String,
+    pub timeline_state_summary: String,
+    pub unresolved_threads: Vec<String>,
+    pub style_bible_summary: String,
+    pub finalized_storyboard_refs: Vec<FinalizedStoryboardRef>,
+    pub continuity_delta: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoryContinuityState {
+    pub story_id: String,
+    pub chapter_id: String,
+    pub chapter_order: u32,
+    pub continuity_context_summary: String,
+    pub chapter_summary: String,
+    pub character_state_summary: String,
+    pub location_state_summary: String,
+    pub prop_state_summary: String,
+    pub timeline_state_summary: String,
+    pub unresolved_threads: Vec<String>,
+    pub style_bible_summary: String,
+    pub finalized_storyboard_refs: Vec<FinalizedStoryboardRef>,
+    pub continuity_delta: String,
+    pub updated_at_ms: u64,
+    pub warnings: Vec<ProductWarning>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateContinuityStateResponse {
+    pub status: BridgeCallStatus,
+    pub blockers: Vec<ProductWarning>,
+    pub warnings: Vec<ProductWarning>,
+    pub continuity_state: Option<StoryContinuityState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContinuityDeltaLog {
+    pub story_id: String,
+    pub chapter_id: String,
+    pub chapter_order: u32,
+    pub stage: String,
+    pub continuity_delta: String,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunV0StoryToStoryboardChainRequest {
+    pub story_id: String,
+    pub chapter_id: String,
+    pub chapter_order: u32,
+    pub user_topic_or_synopsis: String,
+    pub story_length_profile: String,
+    pub selected_total_duration_seconds: u16,
+    pub primary_scene_type: String,
+    pub primary_scene_label: Option<String>,
+    pub primary_scene_category: Option<String>,
+    pub authoring_craft_summary: String,
+    pub screenwriting_adaptation_summary: String,
+    pub directing_kb_context_summary: String,
+    pub continuity_context_summary: String,
+    pub kb_context_summary: String,
+    pub selected_sample_ids: Vec<String>,
+    pub selected_kb_rules: Vec<String>,
+    pub retrieval_trace_user_summary: String,
+    pub full_kb_rows_included: u32,
+    pub confirm_storyboard_results: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunV0StoryToStoryboardChainResponse {
+    pub status: BridgeCallStatus,
+    pub blockers: Vec<ProductWarning>,
+    pub warnings: Vec<ProductWarning>,
+    pub chapter: Option<GenerateNovelChapterResponse>,
+    pub script: Option<AdaptChapterToScriptResponse>,
+    pub shot_task_plan: Option<ShotTaskPlan>,
+    pub storyboard_results: Vec<StoryboardResult>,
+    pub finalized_storyboard_refs: Vec<FinalizedStoryboardRef>,
+    pub continuity_state: Option<StoryContinuityState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

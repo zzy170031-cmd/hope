@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use core_domain::contracts::{
-    ExpandScriptResponse, FinalizedStoryboardShotResult, GenerateStoryboardResponse,
+    ChapterAcceptedState, ContinuityDeltaLog, ExpandScriptResponse, FinalizedStoryboardShotResult,
+    GenerateStoryboardResponse, ScriptAcceptedState, ShotTaskPlan, StoryContinuityState,
 };
 use core_domain::kb::KbGoldenSampleRuntimePackage;
 use project_store::{KbKnowledgeBundle, KbRuntimeHandle, StoreSkeleton};
@@ -16,6 +17,11 @@ pub struct AppState {
     bridge_scripts: Arc<Mutex<HashMap<String, ExpandScriptResponse>>>,
     bridge_storyboards: Arc<Mutex<HashMap<String, GenerateStoryboardResponse>>>,
     storyboard_tasks: Arc<Mutex<HashMap<String, String>>>,
+    v0_chapters: Arc<Mutex<HashMap<String, ChapterAcceptedState>>>,
+    v0_scripts: Arc<Mutex<HashMap<String, ScriptAcceptedState>>>,
+    v0_shot_task_plans: Arc<Mutex<HashMap<String, ShotTaskPlan>>>,
+    v0_continuity_states: Arc<Mutex<HashMap<String, StoryContinuityState>>>,
+    v0_continuity_delta_logs: Arc<Mutex<HashMap<String, Vec<ContinuityDeltaLog>>>>,
     finalized_storyboard_bank:
         Arc<Mutex<HashMap<String, HashMap<String, FinalizedStoryboardShotResult>>>>,
 }
@@ -35,6 +41,11 @@ impl AppState {
             bridge_scripts: Arc::new(Mutex::new(HashMap::new())),
             bridge_storyboards: Arc::new(Mutex::new(HashMap::new())),
             storyboard_tasks: Arc::new(Mutex::new(HashMap::new())),
+            v0_chapters: Arc::new(Mutex::new(HashMap::new())),
+            v0_scripts: Arc::new(Mutex::new(HashMap::new())),
+            v0_shot_task_plans: Arc::new(Mutex::new(HashMap::new())),
+            v0_continuity_states: Arc::new(Mutex::new(HashMap::new())),
+            v0_continuity_delta_logs: Arc::new(Mutex::new(HashMap::new())),
             finalized_storyboard_bank: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -84,6 +95,91 @@ impl AppState {
             .cloned()?;
 
         self.find_storyboard(&result_id)
+    }
+
+    pub fn remember_v0_chapter(&self, chapter: ChapterAcceptedState) {
+        self.v0_chapters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                v0_story_chapter_key(&chapter.story_id, &chapter.chapter_id),
+                chapter,
+            );
+    }
+
+    pub fn find_v0_chapter(
+        &self,
+        story_id: &str,
+        chapter_id: &str,
+    ) -> Option<ChapterAcceptedState> {
+        self.v0_chapters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&v0_story_chapter_key(story_id, chapter_id))
+            .cloned()
+    }
+
+    pub fn remember_v0_script(&self, script: ScriptAcceptedState) {
+        self.v0_scripts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(script.script_id.clone(), script);
+    }
+
+    pub fn find_v0_script(&self, script_id: &str) -> Option<ScriptAcceptedState> {
+        self.v0_scripts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(script_id)
+            .cloned()
+    }
+
+    pub fn remember_v0_shot_task_plan(&self, plan: ShotTaskPlan) {
+        self.v0_shot_task_plans
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(plan.script_id.clone(), plan);
+    }
+
+    pub fn find_v0_shot_task_plan(&self, script_id: &str) -> Option<ShotTaskPlan> {
+        self.v0_shot_task_plans
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(script_id)
+            .cloned()
+    }
+
+    pub fn remember_v0_continuity_state(&self, continuity: StoryContinuityState) {
+        self.v0_continuity_states
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(continuity.story_id.clone(), continuity);
+    }
+
+    pub fn find_v0_continuity_state(&self, story_id: &str) -> Option<StoryContinuityState> {
+        self.v0_continuity_states
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(story_id)
+            .cloned()
+    }
+
+    pub fn append_v0_continuity_delta_log(&self, log: ContinuityDeltaLog) {
+        self.v0_continuity_delta_logs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(log.story_id.clone())
+            .or_default()
+            .push(log);
+    }
+
+    pub fn list_v0_continuity_delta_logs(&self, story_id: &str) -> Vec<ContinuityDeltaLog> {
+        self.v0_continuity_delta_logs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(story_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn remember_finalized_storyboard_shot(&self, shot: FinalizedStoryboardShotResult) {
@@ -143,4 +239,8 @@ impl AppState {
             .and_then(|shots| shots.remove(result_id))
             .is_some()
     }
+}
+
+fn v0_story_chapter_key(story_id: &str, chapter_id: &str) -> String {
+    format!("{story_id}::{chapter_id}")
 }
