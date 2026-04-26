@@ -16,15 +16,20 @@ use crate::{
 
 use core_domain::{
     BridgeCallStatus, ExpandScriptRequest, ExpandScriptResponse, ExportArtifactRecord,
-    ExportBundleRequest, ExportBundleResponse, ExternalReferenceHandleCandidate,
+    ExportBundleRequest, ExportBundleResponse, ExportStoryboardBankRequest,
+    ExportStoryboardBankResponse, ExternalReferenceHandleCandidate, FinalizedStoryboardShotResult,
     GenerateStoryboardRequest, GenerateStoryboardResponse, GeneratedStoryboardRow,
     GoldenSampleLibraryRecord, KbRouterExcludedCandidate, KbRouterRetrievalTrace,
     KbRouterRuntimeRequest, KbRouterRuntimeResponse, KbRouterSelectedRule, KbRouterSelectionReason,
-    KbRouterTaskType, KbRouterTokenBudget, ModelConfigSummary, ProductWarning,
-    PromptTextCompilationStatus, ScenePerformanceProjection, SequenceFieldState, SequenceGrouping,
-    ShotGroundingSource, StoryboardDurationPlan, StoryboardExportStatus, StructureMode,
-    TextGenerationOutputSchema, TextGenerationRequest, TextGenerationResponse,
+    KbRouterTaskType, KbRouterTokenBudget, ListStoryboardShotResultsRequest,
+    ListStoryboardShotResultsResponse, ModelConfigSummary, ProductWarning,
+    PromptTextCompilationStatus, RemoveStoryboardShotResultRequest,
+    RemoveStoryboardShotResultResponse, SaveStoryboardShotResultRequest,
+    SaveStoryboardShotResultResponse, ScenePerformanceProjection, SequenceFieldState,
+    SequenceGrouping, ShotGroundingSource, StoryboardDurationPlan, StoryboardExportStatus,
+    StructureMode, TextGenerationOutputSchema, TextGenerationRequest, TextGenerationResponse,
     TextGenerationTask, TextModelProvider, TextModelProviderKind, UpdateStoryboardRowsRequest,
+    UpdateStoryboardShotResultRequest, UpdateStoryboardShotResultResponse,
 };
 use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
 use reqwest::blocking::Client;
@@ -169,6 +174,30 @@ struct StoryboardGroundingContext {
     shot_intent: String,
     adaptation_reason: String,
 }
+
+const STORYBOARD_DURATION_SOURCE: &str = "storyboard_duration_plan.allocated_row_duration_seconds";
+
+const FINALIZED_BANK_FORBIDDEN_TERMS: &[&str] = &[
+    "raw prompt_body",
+    "prompt_body",
+    "prompt body",
+    "prompt_body_candidate",
+    "source_register",
+    "source register",
+    "overlay json",
+    "overlay_json",
+    "api key",
+    "api_key",
+    "authorization",
+    "bearer ",
+    "provider secret",
+    "plaintext secret",
+    "token",
+    "full raw kb",
+    "full raw kb rows",
+    "full_kb_rows",
+    "full_kb_rows_included",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ShotGroundedRowDraft {
@@ -803,6 +832,559 @@ pub fn save_storyboard_rows(
     snapshot
 }
 
+pub fn save_storyboard_shot_result(
+    state: &AppState,
+    request: SaveStoryboardShotResultRequest,
+) -> SaveStoryboardShotResultResponse {
+    let now_ms = now_epoch_ms();
+    let (mut blockers, rows_hash) = validate_finalized_storyboard_shot_payload(
+        &request.project_id,
+        &request.script_id,
+        &request.shot_task_id,
+        &request.result_id,
+        &request.shot_task_name,
+        &request.rows,
+        &request.prompt_text,
+        request.shot_duration_seconds,
+        &request.duration_source,
+        &request.rows_hash,
+    );
+    if state
+        .find_finalized_storyboard_shot(&request.project_id, &request.result_id)
+        .is_some()
+    {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_result_already_exists".to_string(),
+            message: "已定稿分镜集合中已存在这个镜头结果。".to_string(),
+            related_sample_id: Some(request.result_id.clone()),
+        });
+    }
+    if !blockers.is_empty() {
+        return SaveStoryboardShotResultResponse {
+            status: BridgeCallStatus::Blocked,
+            shot: None,
+            blockers,
+            warnings: vec![],
+        };
+    }
+
+    let shot = FinalizedStoryboardShotResult {
+        project_id: request.project_id,
+        script_id: request.script_id,
+        shot_task_id: request.shot_task_id,
+        result_id: request.result_id,
+        shot_order: request.shot_order,
+        shot_task_name: request.shot_task_name,
+        rows: request.rows,
+        prompt_text: request.prompt_text,
+        shot_duration_seconds: request.shot_duration_seconds,
+        duration_source: request.duration_source,
+        confirmed: request.confirmed,
+        updated_at_ms: if request.updated_at_ms == 0 {
+            now_ms
+        } else {
+            request.updated_at_ms
+        },
+        rows_hash,
+    };
+
+    state.remember_finalized_storyboard_shot(shot.clone());
+    SaveStoryboardShotResultResponse {
+        status: BridgeCallStatus::Ready,
+        shot: Some(shot),
+        blockers: vec![],
+        warnings: vec![],
+    }
+}
+
+pub fn list_storyboard_shot_results(
+    state: &AppState,
+    request: ListStoryboardShotResultsRequest,
+) -> ListStoryboardShotResultsResponse {
+    let warnings = if request.project_id.trim().is_empty() {
+        vec![ProductWarning {
+            code: "project_id_required".to_string(),
+            message: "查看已定稿分镜前需要有效项目。".to_string(),
+            related_sample_id: None,
+        }]
+    } else {
+        vec![]
+    };
+    let shots = if request.project_id.trim().is_empty() {
+        vec![]
+    } else {
+        state.list_finalized_storyboard_shots(
+            &request.project_id,
+            request.script_id.as_deref(),
+            request.confirmed,
+        )
+    };
+
+    ListStoryboardShotResultsResponse {
+        project_id: request.project_id,
+        script_id: request.script_id,
+        shots,
+        warnings,
+    }
+}
+
+pub fn update_storyboard_shot_result(
+    state: &AppState,
+    request: UpdateStoryboardShotResultRequest,
+) -> UpdateStoryboardShotResultResponse {
+    let Some(existing) =
+        state.find_finalized_storyboard_shot(&request.project_id, &request.result_id)
+    else {
+        return UpdateStoryboardShotResultResponse {
+            status: BridgeCallStatus::Blocked,
+            shot: None,
+            blockers: vec![ProductWarning {
+                code: "storyboard_bank_result_not_found".to_string(),
+                message: "没有找到可更新的已定稿镜头。".to_string(),
+                related_sample_id: Some(request.result_id),
+            }],
+            warnings: vec![],
+        };
+    };
+
+    let (blockers, rows_hash) = validate_finalized_storyboard_shot_payload(
+        &existing.project_id,
+        &existing.script_id,
+        &existing.shot_task_id,
+        &existing.result_id,
+        &request.shot_task_name,
+        &request.rows,
+        &request.prompt_text,
+        request.shot_duration_seconds,
+        &request.duration_source,
+        &request.rows_hash,
+    );
+    if !blockers.is_empty() {
+        return UpdateStoryboardShotResultResponse {
+            status: BridgeCallStatus::Blocked,
+            shot: None,
+            blockers,
+            warnings: vec![],
+        };
+    }
+
+    let shot = FinalizedStoryboardShotResult {
+        project_id: existing.project_id,
+        script_id: existing.script_id,
+        shot_task_id: existing.shot_task_id,
+        result_id: existing.result_id,
+        shot_order: request.shot_order,
+        shot_task_name: request.shot_task_name,
+        rows: request.rows,
+        prompt_text: request.prompt_text,
+        shot_duration_seconds: request.shot_duration_seconds,
+        duration_source: request.duration_source,
+        confirmed: request.confirmed,
+        updated_at_ms: if request.updated_at_ms == 0 {
+            now_epoch_ms()
+        } else {
+            request.updated_at_ms
+        },
+        rows_hash,
+    };
+
+    state.remember_finalized_storyboard_shot(shot.clone());
+    UpdateStoryboardShotResultResponse {
+        status: BridgeCallStatus::Ready,
+        shot: Some(shot),
+        blockers: vec![],
+        warnings: vec![],
+    }
+}
+
+pub fn remove_storyboard_shot_result(
+    state: &AppState,
+    request: RemoveStoryboardShotResultRequest,
+) -> RemoveStoryboardShotResultResponse {
+    if request.project_id.trim().is_empty() || request.result_id.trim().is_empty() {
+        return RemoveStoryboardShotResultResponse {
+            status: BridgeCallStatus::Blocked,
+            project_id: request.project_id,
+            result_id: request.result_id,
+            removed: false,
+            warnings: vec![],
+            blockers: vec![ProductWarning {
+                code: "storyboard_bank_remove_selector_required".to_string(),
+                message: "移除已定稿镜头前需要项目和镜头结果。".to_string(),
+                related_sample_id: None,
+            }],
+        };
+    }
+
+    let removed = state.remove_finalized_storyboard_shot(&request.project_id, &request.result_id);
+    RemoveStoryboardShotResultResponse {
+        status: if removed {
+            BridgeCallStatus::Ready
+        } else {
+            BridgeCallStatus::Blocked
+        },
+        project_id: request.project_id,
+        result_id: request.result_id.clone(),
+        removed,
+        warnings: vec![],
+        blockers: if removed {
+            vec![]
+        } else {
+            vec![ProductWarning {
+                code: "storyboard_bank_result_not_found".to_string(),
+                message: "没有找到要移除的已定稿镜头。".to_string(),
+                related_sample_id: Some(request.result_id),
+            }]
+        },
+    }
+}
+
+pub fn export_storyboard_bank(
+    state: &AppState,
+    request: ExportStoryboardBankRequest,
+) -> ExportStoryboardBankResponse {
+    let export_manifest_id = format!(
+        "storyboard-bank-export-{}",
+        &stable_hash_hex(&format!(
+            "{}\n{}\n{}",
+            request.project_id,
+            request.script_id.as_deref().unwrap_or_default(),
+            request.export_format
+        ))[..12]
+    );
+    let mut blockers = Vec::new();
+    if request.project_id.trim().is_empty() {
+        blockers.push(ProductWarning {
+            code: "project_id_required".to_string(),
+            message: "导出已定稿分镜集合前需要有效项目。".to_string(),
+            related_sample_id: None,
+        });
+    }
+    if request.include_unconfirmed {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_include_unconfirmed_not_supported".to_string(),
+            message: "V1 已定稿分镜集合只导出已确认镜头。".to_string(),
+            related_sample_id: None,
+        });
+    }
+    if !blockers.is_empty() {
+        return ExportStoryboardBankResponse {
+            export_manifest_id,
+            project_id: request.project_id,
+            script_id: request.script_id,
+            status: BridgeCallStatus::Blocked,
+            no_export: true,
+            confirmed_shot_count: 0,
+            exported_result_ids: vec![],
+            total_shot_duration_seconds: 0,
+            artifacts: vec![],
+            warnings: vec![],
+            blockers,
+        };
+    }
+
+    let confirmed_shots = state.list_finalized_storyboard_shots(
+        &request.project_id,
+        request.script_id.as_deref(),
+        Some(true),
+    );
+    if confirmed_shots.is_empty() {
+        return ExportStoryboardBankResponse {
+            export_manifest_id,
+            project_id: request.project_id,
+            script_id: request.script_id,
+            status: BridgeCallStatus::Gated,
+            no_export: true,
+            confirmed_shot_count: 0,
+            exported_result_ids: vec![],
+            total_shot_duration_seconds: 0,
+            artifacts: vec![],
+            warnings: vec![ProductWarning {
+                code: "storyboard_bank_no_confirmed_shots".to_string(),
+                message: "暂无已确认分镜，无法导出完整分镜包。".to_string(),
+                related_sample_id: None,
+            }],
+            blockers: vec![],
+        };
+    }
+
+    let mut total_shot_duration_seconds = 0u16;
+    let mut rows = Vec::new();
+    for shot in &confirmed_shots {
+        let (shot_blockers, expected_rows_hash) = validate_finalized_storyboard_shot_payload(
+            &shot.project_id,
+            &shot.script_id,
+            &shot.shot_task_id,
+            &shot.result_id,
+            &shot.shot_task_name,
+            &shot.rows,
+            &shot.prompt_text,
+            shot.shot_duration_seconds,
+            &shot.duration_source,
+            &shot.rows_hash,
+        );
+        if !shot_blockers.is_empty() {
+            return blocked_storyboard_bank_export_response(
+                export_manifest_id,
+                request.project_id,
+                request.script_id,
+                shot_blockers,
+            );
+        }
+        if expected_rows_hash != shot.rows_hash {
+            return blocked_storyboard_bank_export_response(
+                export_manifest_id,
+                request.project_id,
+                request.script_id,
+                vec![ProductWarning {
+                    code: "storyboard_bank_rows_hash_mismatch".to_string(),
+                    message: "已定稿镜头的 rows_hash 与当前 rows 不一致，已停止导出。".to_string(),
+                    related_sample_id: Some(shot.result_id.clone()),
+                }],
+            );
+        }
+        let Some(total) = total_shot_duration_seconds.checked_add(shot.shot_duration_seconds)
+        else {
+            return blocked_storyboard_bank_export_response(
+                export_manifest_id,
+                request.project_id,
+                request.script_id,
+                vec![ProductWarning {
+                    code: "storyboard_bank_duration_overflow".to_string(),
+                    message: "已定稿分镜集合总时长超出 V1 导出范围。".to_string(),
+                    related_sample_id: Some(shot.result_id.clone()),
+                }],
+            );
+        };
+        total_shot_duration_seconds = total;
+        rows.extend(shot.rows.clone());
+    }
+
+    let exported_result_ids = confirmed_shots
+        .iter()
+        .map(|shot| shot.result_id.clone())
+        .collect::<Vec<_>>();
+    match export_v120_storyboard_bundle(&V120StoryboardExportRequest {
+        export_manifest_id: export_manifest_id.clone(),
+        result_id: "finalized_storyboard_bank".to_string(),
+        selected_total_duration_seconds: total_shot_duration_seconds,
+        source_result_id: exported_result_ids.join(","),
+        edited_rows_applied: false,
+        rows,
+    }) {
+        Ok(bundle) => ExportStoryboardBankResponse {
+            export_manifest_id: export_manifest_id.clone(),
+            project_id: request.project_id,
+            script_id: request.script_id,
+            status: BridgeCallStatus::Ready,
+            no_export: false,
+            confirmed_shot_count: confirmed_shots.len() as u32,
+            exported_result_ids,
+            total_shot_duration_seconds,
+            artifacts: bundle
+                .artifacts
+                .into_iter()
+                .map(|artifact| ExportArtifactRecord {
+                    artifact_id: format!("{}-{}", export_manifest_id, artifact.artifact_kind),
+                    artifact_kind: artifact.artifact_kind.to_string(),
+                    export_format: artifact.export_format.to_string(),
+                    ready: true,
+                    blocked_reason: None,
+                    artifact_path: Some(artifact.path.display().to_string()),
+                    content_hash: Some(artifact.content_hash),
+                    byte_size: Some(artifact.byte_size),
+                    row_count: Some(artifact.row_count),
+                    selected_total_duration_seconds: Some(total_shot_duration_seconds),
+                    source_result_id: Some("finalized_storyboard_bank".to_string()),
+                    edited_rows_applied: false,
+                    prompt_text_compilation_statuses: vec![],
+                    prompt_text_compilation_warning_codes: vec![],
+                    selected_sample_ids: vec![],
+                    selected_kb_rule_ids: vec![],
+                    kb_context_summary: None,
+                    retrieval_trace: None,
+                    full_kb_rows_included: 0,
+                })
+                .collect(),
+            warnings: vec![],
+            blockers: vec![],
+        },
+        Err(error) => blocked_storyboard_bank_export_response(
+            export_manifest_id,
+            request.project_id,
+            request.script_id,
+            vec![ProductWarning {
+                code: "storyboard_bank_export_artifact_generation_failed".to_string(),
+                message: format!("已定稿分镜集合导出失败：{error:?}"),
+                related_sample_id: None,
+            }],
+        ),
+    }
+}
+
+fn validate_finalized_storyboard_shot_payload(
+    project_id: &str,
+    script_id: &str,
+    shot_task_id: &str,
+    result_id: &str,
+    shot_task_name: &str,
+    rows: &[GeneratedStoryboardRow],
+    prompt_text: &str,
+    shot_duration_seconds: u16,
+    duration_source: &str,
+    rows_hash: &str,
+) -> (Vec<ProductWarning>, String) {
+    let mut blockers = Vec::new();
+    for (field_name, value) in [
+        ("project_id", project_id),
+        ("script_id", script_id),
+        ("shot_task_id", shot_task_id),
+        ("result_id", result_id),
+        ("shot_task_name", shot_task_name),
+    ] {
+        if value.trim().is_empty() {
+            blockers.push(ProductWarning {
+                code: format!("{field_name}_required"),
+                message: format!("已定稿分镜集合缺少必要字段：{field_name}。"),
+                related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+            });
+        }
+    }
+    if rows.is_empty() {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_rows_required".to_string(),
+            message: "确认定稿前需要至少一行分镜。".to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+    if prompt_text.trim().is_empty() {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_prompt_text_required".to_string(),
+            message: "确认定稿前需要干净的分镜提示词。".to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+    if shot_duration_seconds == 0 {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_shot_duration_required".to_string(),
+            message: "确认定稿前需要镜头时长。".to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+    if duration_source != STORYBOARD_DURATION_SOURCE {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_duration_source_unsupported".to_string(),
+            message: "镜头时长来源必须来自系统分镜时长分配。".to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+    if rows.iter().any(|row| row.shot_duration_seconds == 0) {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_row_duration_required".to_string(),
+            message: "每行已定稿分镜都需要镜头时长。".to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+    let row_duration_sum = rows
+        .iter()
+        .map(|row| row.shot_duration_seconds)
+        .sum::<u16>();
+    if shot_duration_seconds != 0 && row_duration_sum != shot_duration_seconds {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_shot_duration_mismatch".to_string(),
+            message: "镜头总时长必须等于行时长合计。".to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+
+    if finalized_storyboard_payload_contains_forbidden_terms(shot_task_name, prompt_text, rows) {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_forbidden_payload".to_string(),
+            message: "已定稿分镜集合拒绝保存内部原始提示、密钥或全量知识库内容。".to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+
+    let expected_rows_hash = stable_hash_hex(&serialize_storyboard_rows(rows));
+    if !rows_hash.trim().is_empty() && rows_hash.trim() != expected_rows_hash {
+        blockers.push(ProductWarning {
+            code: "storyboard_bank_rows_hash_mismatch".to_string(),
+            message: "rows_hash 与已定稿 rows 不一致，无法确认定稿。".to_string(),
+            related_sample_id: Some(result_id.to_string()).filter(|value| !value.is_empty()),
+        });
+    }
+
+    (blockers, expected_rows_hash)
+}
+
+fn finalized_storyboard_payload_contains_forbidden_terms(
+    shot_task_name: &str,
+    prompt_text: &str,
+    rows: &[GeneratedStoryboardRow],
+) -> bool {
+    let row_product_text = rows
+        .iter()
+        .map(|row| {
+            format!(
+                "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                row.shot_script,
+                row.person,
+                row.shot_title,
+                row.scene_scale,
+                row.visual_description,
+                row.character_action,
+                row.dialogue,
+                row.prompt_text
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let payload = format!("{shot_task_name}\n{prompt_text}\n{row_product_text}").to_lowercase();
+    FINALIZED_BANK_FORBIDDEN_TERMS
+        .iter()
+        .any(|term| payload.contains(term))
+        || contains_secret_like_sk_token(&payload)
+}
+
+fn contains_secret_like_sk_token(payload: &str) -> bool {
+    payload
+        .split(|character: char| {
+            character.is_whitespace()
+                || matches!(
+                    character,
+                    '"' | '\'' | ',' | ';' | ':' | '(' | ')' | '[' | ']' | '{' | '}'
+                )
+        })
+        .any(|token| {
+            token.starts_with("sk-")
+                && token.len() >= 16
+                && token.chars().skip(3).all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                })
+        })
+}
+
+fn blocked_storyboard_bank_export_response(
+    export_manifest_id: String,
+    project_id: String,
+    script_id: Option<String>,
+    blockers: Vec<ProductWarning>,
+) -> ExportStoryboardBankResponse {
+    ExportStoryboardBankResponse {
+        export_manifest_id,
+        project_id,
+        script_id,
+        status: BridgeCallStatus::Blocked,
+        no_export: true,
+        confirmed_shot_count: 0,
+        exported_result_ids: vec![],
+        total_shot_duration_seconds: 0,
+        artifacts: vec![],
+        warnings: vec![],
+        blockers,
+    }
+}
+
 pub fn export_bundle(state: &AppState, request: ExportBundleRequest) -> ExportBundleResponse {
     let export_manifest_id = format!(
         "export-manifest-{}",
@@ -1274,10 +1856,15 @@ fn build_qwen_request_payload(
         (TextGenerationTask::ExpandScript, TextGenerationOutputSchema::PlainText) => {
             "你是 Hope 的受控剧本扩写层。只把用户的故事梗概扩写为连续、可读的剧情剧本正文；只能参考压缩知识库摘要和样本/规则 ID，不得输出全量知识库，不得输出真实导演/IP/品牌名。"
         }
-        (TextGenerationTask::GenerateStoryboard, TextGenerationOutputSchema::StoryboardRowsJson) => {
+        (
+            TextGenerationTask::GenerateStoryboard,
+            TextGenerationOutputSchema::StoryboardRowsJson,
+        ) => {
             "你是 Hope 的受控分镜生成层。根据剧本片段生成结构化分镜 rows 和当前文本提示词；只能使用压缩知识库摘要和样本/规则 ID，不得输出全量知识库，不得输出真实导演/IP/品牌名。"
         }
-        _ => "你是 Hope 的受控文本生成层。只能使用收到的压缩知识库摘要和样本/规则 ID，不得扩展为全量知识库，不得输出真实导演/IP/品牌名。",
+        _ => {
+            "你是 Hope 的受控文本生成层。只能使用收到的压缩知识库摘要和样本/规则 ID，不得扩展为全量知识库，不得输出真实导演/IP/品牌名。"
+        }
     };
     let user_prompt = match (request.task_type, request.output_schema) {
         (TextGenerationTask::ExpandScript, TextGenerationOutputSchema::PlainText) => format!(
@@ -1289,7 +1876,10 @@ fn build_qwen_request_payload(
             request.selected_sample_ids.join(","),
             request.selected_kb_rules.join(" | "),
         ),
-        (TextGenerationTask::GenerateStoryboard, TextGenerationOutputSchema::StoryboardRowsJson) => format!(
+        (
+            TextGenerationTask::GenerateStoryboard,
+            TextGenerationOutputSchema::StoryboardRowsJson,
+        ) => format!(
             "任务=生成分镜提示词\nscene_type={}\nduration_seconds={}\nshot_script={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=storyboard_rows_json\nconstraints=输出 JSON object，包含 rows 数组；每行必须包含人物、镜头、景别、画面描述、角色动作、对话/旁白、分镜提示词 prompt_text、duration_seconds；总时长必须守恒；不要输出 full KB rows；不要把内部候选提示证据当最终 prompt_text；不要输出 source_register 或 overlay JSON。",
             scene_type,
             duration_seconds,
@@ -1458,9 +2048,11 @@ fn looks_like_storyboard_or_prompt_text(text: &str) -> bool {
         .filter(|marker| lower.contains(**marker))
         .count();
     marker_count >= 2
-        || ["0-3s", "3-6s", "6-9s", "9-15s", "0–3s", "3–6s", "6–9s", "9–15s"]
-            .iter()
-            .any(|marker| lower.contains(marker))
+        || [
+            "0-3s", "3-6s", "6-9s", "9-15s", "0–3s", "3–6s", "6–9s", "9–15s",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
 }
 
 fn build_deterministic_expanded_story_script(
@@ -2194,7 +2786,10 @@ fn derive_shot_intent(text: &str) -> String {
 fn build_adaptation_reason(text: &str, shot_scene_type: &str) -> String {
     let evidence = story_anchor_terms(text);
     if evidence.is_empty() {
-        format!("shot_script supports local {} classification", shot_scene_type)
+        format!(
+            "shot_script supports local {} classification",
+            shot_scene_type
+        )
     } else {
         format!(
             "shot_script evidence [{}] supports local {} classification",
@@ -2236,7 +2831,8 @@ fn derive_character_action_from_story(segment: &str, full_text: &str) -> String 
     } else {
         segment
     };
-    if contains_any_story_term(source, &["掌心银辉", "银辉觉醒", "沿手臂上升", "觉醒"]) {
+    if contains_any_story_term(source, &["掌心银辉", "银辉觉醒", "沿手臂上升", "觉醒"])
+    {
         "觉醒者从格挡后的短暂停滞开始，将掌心朝向当前对手，银辉自掌心亮起并沿手臂上升，到力量完全爬上前臂时结束，镜头捕捉银辉开始蔓延的觉醒瞬间。"
             .to_string()
     } else if contains_any_story_term(source, &["震退七步", "震退"]) {

@@ -114,10 +114,10 @@ textarea {
 
 .reference-topbar {
   display: grid;
-  grid-template-columns: minmax(420px, 1.25fr) minmax(560px, 0.92fr);
+  grid-template-columns: minmax(360px, 1fr) minmax(680px, auto);
   align-items: center;
-  gap: 18px;
-  padding: clamp(12px, 1vh, 15px) clamp(18px, 1.5vw, 28px);
+  gap: 14px;
+  padding: 10px clamp(18px, 1.5vw, 28px);
   border-bottom: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 248, 242, 0.98));
 }
@@ -130,8 +130,8 @@ textarea {
 }
 
 .reference-brand__logo {
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
   object-fit: contain;
   flex: none;
   filter: drop-shadow(0 6px 16px rgba(17, 28, 51, 0.18));
@@ -151,22 +151,23 @@ textarea {
   justify-content: flex-end;
   justify-self: end;
   min-width: 0;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 8px;
+  flex-wrap: nowrap;
 }
 
 .top-select {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   color: var(--navy);
   font-size: 14px;
   font-weight: 600;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 
 .top-select select {
-  width: clamp(198px, 13vw, 242px);
+  width: clamp(190px, 12vw, 230px);
   height: 42px;
   padding: 0 14px;
 }
@@ -178,6 +179,7 @@ textarea {
   font-size: 11px;
   font-weight: 500;
   line-height: 1.25;
+  white-space: nowrap;
 }
 
 .top-select__status {
@@ -480,7 +482,7 @@ textarea {
 }
 
 .script-row {
-  grid-template-columns: minmax(430px, 1.12fr) minmax(0, 3.25fr) minmax(238px, 0.82fr);
+  grid-template-columns: minmax(360px, 0.86fr) minmax(0, 3.2fr) minmax(238px, 0.58fr);
   padding: 8px 10px;
 }
 
@@ -700,7 +702,31 @@ textarea {
 }
 
 .task-row {
-  grid-template-columns: minmax(260px, 1fr) minmax(320px, 0.62fr) minmax(168px, 0.24fr);
+  grid-template-columns: minmax(160px, 0.78fr) minmax(132px, 0.44fr) minmax(142px, 0.46fr) minmax(108px, 0.34fr) minmax(86px, 0.28fr) minmax(118px, 0.38fr) minmax(118px, 0.38fr) minmax(132px, 0.42fr);
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.task-row--compact .action-button,
+.task-row--compact .duration-pill {
+  width: 100%;
+}
+
+.section-name--inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.section-status {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .task-source {
@@ -735,10 +761,16 @@ textarea {
 }
 
 .storyboard-toolbar {
-  grid-template-columns: minmax(320px, 1fr) auto;
+  grid-template-columns: minmax(280px, 380px);
   align-items: stretch;
-  justify-content: stretch;
-  padding: 8px 10px;
+  justify-content: start;
+  padding: 0 0 6px;
+  border: 0;
+  background: transparent;
+}
+
+.storyboard-toolbar--summary-only {
+  margin-top: -2px;
 }
 
 .storyboard-toolbar__actions {
@@ -751,12 +783,12 @@ textarea {
 
 .storyboard-summary-panel {
   display: grid;
-  align-content: start;
-  gap: 4px;
+  align-content: center;
+  gap: 0;
   min-width: 0;
-  height: 60px;
+  height: var(--control-height);
   overflow: hidden;
-  padding: 6px 8px;
+  padding: 0 10px;
   border: 1px solid rgba(93, 214, 220, 0.34);
   border-radius: var(--radius-sm);
   background: #f7ffff;
@@ -791,7 +823,7 @@ textarea {
 }
 
 .storyboard-summary-panel .grounding-note {
-  margin: 0;
+  display: none;
 }
 
 .duration-select {
@@ -855,6 +887,18 @@ textarea {
   border-color: rgba(93, 214, 220, 0.45);
 }
 
+.action-button--danger {
+  background: #fff;
+  border-color: rgba(193, 64, 56, 0.5);
+  color: #b42318;
+}
+
+.action-button--danger:hover {
+  background: #fff4f2;
+  border-color: rgba(193, 64, 56, 0.74);
+  color: #9f1d14;
+}
+
 .action-button:disabled,
 .toolbar-button:disabled,
 .page-number:disabled,
@@ -868,7 +912,7 @@ textarea {
 }
 
 .table-wrapper {
-  margin-top: 12px;
+  margin-top: 8px;
   display: flex;
   flex: 1;
   min-height: clamp(360px, 44vh, 640px);
@@ -876,6 +920,10 @@ textarea {
   border-radius: var(--radius-md) var(--radius-md) 0 0;
   overflow: hidden;
   background: #fff;
+}
+
+.table-wrapper--single-page {
+  border-radius: var(--radius-md);
 }
 
 .storyboard-table {
@@ -1178,7 +1226,10 @@ textarea {
 
 .task-draft-dialog {
   width: min(1180px, calc(100vw - 48px));
+  height: min(820px, calc(100vh - 48px));
   max-height: calc(100vh - 48px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   border-radius: 14px;
   border: 1px solid var(--line-strong);
@@ -1256,6 +1307,79 @@ textarea {
   background: #fffdf8;
 }
 
+.finalized-bank {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 520px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  color: var(--text-soft);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.finalized-bank strong {
+  color: var(--navy);
+}
+
+.finalized-bank span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.finalized-bank-dialog {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  width: min(1180px, calc(100vw - 80px));
+  max-height: min(760px, calc(100vh - 72px));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: #fffdf8;
+  box-shadow: var(--shadow-strong);
+}
+
+.finalized-bank-dialog__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.finalized-bank-table-wrap {
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 20px 20px;
+}
+
+.finalized-bank-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+}
+
+.finalized-bank-table th,
+.finalized-bank-table td {
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.finalized-bank-table th {
+  background: #fff8ea;
+  color: var(--navy);
+  font-weight: 800;
+}
+
 .edit-dialog__footer span {
   color: var(--text-soft);
   font-size: 12px;
@@ -1273,14 +1397,19 @@ textarea {
   display: grid;
   grid-template-columns: minmax(280px, 0.46fr) minmax(0, 1fr);
   gap: 16px;
+  min-height: 0;
+  overflow: hidden;
   padding: 18px 22px 22px;
 }
 
 .task-draft-sidebar {
   display: grid;
-  align-content: start;
+  grid-template-rows: auto minmax(0, 1fr) minmax(0, 0.72fr);
   gap: 12px;
+  min-height: 0;
   min-width: 0;
+  overflow: hidden;
+  padding-right: 4px;
 }
 
 .task-draft-summary {
@@ -1303,10 +1432,10 @@ textarea {
   display: grid;
   align-content: start;
   gap: 8px;
-  max-height: min(58vh, 520px);
+  min-height: 0;
   min-width: 0;
   overflow: auto;
-  padding-right: 4px;
+  padding-right: 3px;
 }
 
 .shot-candidate {
@@ -1370,7 +1499,11 @@ textarea {
 
 .task-queue {
   display: grid;
+  align-content: start;
   gap: 8px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 3px;
 }
 
 .task-queue__item {
@@ -1403,7 +1536,9 @@ textarea {
 
 .task-draft-editor {
   display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 12px;
+  min-height: 0;
   min-width: 0;
 }
 
@@ -1426,11 +1561,16 @@ textarea {
 
 .task-draft-editor textarea {
   width: 100%;
-  min-height: min(52vh, 460px);
+  height: 100%;
+  min-height: 0;
   padding: 14px 16px;
   line-height: 1.65;
   overflow: auto;
-  resize: both;
+  resize: none;
+}
+
+.task-draft-editor__text {
+  min-height: 0;
 }
 
 .task-draft-actions {
@@ -1438,6 +1578,9 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  background: #fff;
 }
 
 .task-draft-actions__buttons {
@@ -1646,7 +1789,7 @@ textarea {
   }
 
   .reference-topbar {
-    grid-template-columns: minmax(460px, 1.3fr) minmax(620px, 1fr);
+    grid-template-columns: minmax(460px, 1fr) minmax(760px, auto);
     padding-left: 24px;
     padding-right: 24px;
   }
@@ -1657,11 +1800,11 @@ textarea {
   }
 
   .script-row {
-    grid-template-columns: minmax(470px, 1.14fr) minmax(0, 3.85fr) minmax(250px, 0.78fr);
+    grid-template-columns: minmax(380px, 0.84fr) minmax(0, 3.8fr) minmax(250px, 0.56fr);
   }
 
   .task-row {
-    grid-template-columns: minmax(320px, 1fr) minmax(360px, 0.62fr) minmax(182px, 0.22fr);
+    grid-template-columns: minmax(210px, 0.9fr) minmax(154px, 0.5fr) minmax(164px, 0.5fr) minmax(128px, 0.38fr) minmax(104px, 0.32fr) minmax(146px, 0.42fr) minmax(156px, 0.46fr);
   }
 
   .table-wrapper {

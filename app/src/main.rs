@@ -1,17 +1,28 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use core_domain::{ExpandScriptResponse, ExportBundleResponse, GenerateStoryboardResponse};
+use core_domain::{
+    ExpandScriptResponse, ExportBundleResponse, ExportStoryboardBankResponse,
+    GenerateStoryboardResponse, ListStoryboardShotResultsResponse,
+    RemoveStoryboardShotResultResponse, SaveStoryboardShotResultResponse,
+    UpdateStoryboardShotResultResponse,
+};
 use hope_app::{
     desktop_bridge::{DesktopInvokeRequest, DesktopInvokeResponse, invoke_desktop_command},
     ipc::{
         CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND, ConfigureTextModelProviderRequest,
-        EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, ExpandScriptRequest, ExportBundleRequest,
-        GENERATE_STORYBOARD_COMMAND, GenerateStoryboardRequest, PROJECT_CREATE_OR_SWITCH_COMMAND,
-        ProjectCreateOrSwitchRequest, STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
-        StoryboardRenderSegmentCutPreviewSnapshotRequest, TextModelProviderStatus,
-        UPDATE_STORYBOARD_ROWS_COMMAND, UpdateStoryboardRowsRequest,
-        VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND, ValidationExportPanelSnapshotRequest,
-        WRITER_ENTRY_SNAPSHOT_COMMAND, WriterEntrySnapshotRequest,
+        EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, EXPORT_STORYBOARD_BANK_COMMAND,
+        ExpandScriptRequest, ExportBundleRequest, ExportStoryboardBankRequest,
+        GENERATE_STORYBOARD_COMMAND, GenerateStoryboardRequest,
+        LIST_STORYBOARD_SHOT_RESULTS_COMMAND, ListStoryboardShotResultsRequest,
+        PROJECT_CREATE_OR_SWITCH_COMMAND, ProjectCreateOrSwitchRequest,
+        REMOVE_STORYBOARD_SHOT_RESULT_COMMAND, RemoveStoryboardShotResultRequest,
+        SAVE_STORYBOARD_SHOT_RESULT_COMMAND, STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
+        SaveStoryboardShotResultRequest, StoryboardRenderSegmentCutPreviewSnapshotRequest,
+        TextModelProviderStatus, UPDATE_STORYBOARD_ROWS_COMMAND,
+        UPDATE_STORYBOARD_SHOT_RESULT_COMMAND, UpdateStoryboardRowsRequest,
+        UpdateStoryboardShotResultRequest, VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
+        ValidationExportPanelSnapshotRequest, WRITER_ENTRY_SNAPSHOT_COMMAND,
+        WriterEntrySnapshotRequest,
     },
     runtime::{
         ProjectCreateOrSwitchSnapshot, StoryboardRenderSegmentCutPreviewSnapshot,
@@ -48,6 +59,11 @@ fn run_native_host() {
             generate_storyboard,
             update_storyboard_rows,
             export_bundle,
+            save_storyboard_shot_result,
+            list_storyboard_shot_results,
+            update_storyboard_shot_result,
+            remove_storyboard_shot_result,
+            export_storyboard_bank,
             configure_text_model_provider
         ])
         .run(tauri::generate_context!())
@@ -169,6 +185,95 @@ fn export_bundle(request: ExportBundleRequest) -> Result<ExportBundleResponse, S
     {
         DesktopInvokeResponse::ExportBundle(response) => Ok(response),
         _ => Err("desktop invoke returned an unexpected export_bundle response".to_string()),
+    }
+}
+
+#[tauri::command]
+fn save_storyboard_shot_result(
+    request: SaveStoryboardShotResultRequest,
+) -> Result<SaveStoryboardShotResultResponse, String> {
+    match invoke_desktop_command(
+        SAVE_STORYBOARD_SHOT_RESULT_COMMAND,
+        DesktopInvokeRequest::SaveStoryboardShotResult(request),
+    )
+    .map_err(|error| error.to_string())?
+    {
+        DesktopInvokeResponse::SaveStoryboardShotResult(response) => Ok(response),
+        _ => Err(
+            "desktop invoke returned an unexpected save_storyboard_shot_result response"
+                .to_string(),
+        ),
+    }
+}
+
+#[tauri::command]
+fn list_storyboard_shot_results(
+    request: ListStoryboardShotResultsRequest,
+) -> Result<ListStoryboardShotResultsResponse, String> {
+    match invoke_desktop_command(
+        LIST_STORYBOARD_SHOT_RESULTS_COMMAND,
+        DesktopInvokeRequest::ListStoryboardShotResults(request),
+    )
+    .map_err(|error| error.to_string())?
+    {
+        DesktopInvokeResponse::ListStoryboardShotResults(response) => Ok(response),
+        _ => Err(
+            "desktop invoke returned an unexpected list_storyboard_shot_results response"
+                .to_string(),
+        ),
+    }
+}
+
+#[tauri::command]
+fn update_storyboard_shot_result(
+    request: UpdateStoryboardShotResultRequest,
+) -> Result<UpdateStoryboardShotResultResponse, String> {
+    match invoke_desktop_command(
+        UPDATE_STORYBOARD_SHOT_RESULT_COMMAND,
+        DesktopInvokeRequest::UpdateStoryboardShotResult(request),
+    )
+    .map_err(|error| error.to_string())?
+    {
+        DesktopInvokeResponse::UpdateStoryboardShotResult(response) => Ok(response),
+        _ => Err(
+            "desktop invoke returned an unexpected update_storyboard_shot_result response"
+                .to_string(),
+        ),
+    }
+}
+
+#[tauri::command]
+fn remove_storyboard_shot_result(
+    request: RemoveStoryboardShotResultRequest,
+) -> Result<RemoveStoryboardShotResultResponse, String> {
+    match invoke_desktop_command(
+        REMOVE_STORYBOARD_SHOT_RESULT_COMMAND,
+        DesktopInvokeRequest::RemoveStoryboardShotResult(request),
+    )
+    .map_err(|error| error.to_string())?
+    {
+        DesktopInvokeResponse::RemoveStoryboardShotResult(response) => Ok(response),
+        _ => Err(
+            "desktop invoke returned an unexpected remove_storyboard_shot_result response"
+                .to_string(),
+        ),
+    }
+}
+
+#[tauri::command]
+fn export_storyboard_bank(
+    request: ExportStoryboardBankRequest,
+) -> Result<ExportStoryboardBankResponse, String> {
+    match invoke_desktop_command(
+        EXPORT_STORYBOARD_BANK_COMMAND,
+        DesktopInvokeRequest::ExportStoryboardBank(request),
+    )
+    .map_err(|error| error.to_string())?
+    {
+        DesktopInvokeResponse::ExportStoryboardBank(response) => Ok(response),
+        _ => {
+            Err("desktop invoke returned an unexpected export_storyboard_bank response".to_string())
+        }
     }
 }
 

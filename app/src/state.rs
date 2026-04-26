@@ -6,7 +6,10 @@ use std::{
 };
 
 use crate::ipc::{ConfigureTextModelProviderRequest, TextModelProviderStatus};
-use core_domain::{ExpandScriptResponse, GenerateStoryboardResponse, KbGoldenSampleRuntimePackage};
+use core_domain::{
+    ExpandScriptResponse, FinalizedStoryboardShotResult, GenerateStoryboardResponse,
+    KbGoldenSampleRuntimePackage,
+};
 use project_store::{
     DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeError, KbRuntimeHandle, StoreSkeleton,
     load_kb_golden_sample_runtime_package, load_kb_knowledge_bundle, load_kb_runtime,
@@ -262,6 +265,8 @@ pub struct AppState {
     bridge_scripts: Arc<Mutex<HashMap<String, ExpandScriptResponse>>>,
     bridge_storyboards: Arc<Mutex<HashMap<String, GenerateStoryboardResponse>>>,
     storyboard_tasks: Arc<Mutex<HashMap<String, String>>>,
+    finalized_storyboard_bank:
+        Arc<Mutex<HashMap<String, HashMap<String, FinalizedStoryboardShotResult>>>>,
     text_model_provider_session: Arc<Mutex<Option<TextModelProviderSessionConfig>>>,
 }
 
@@ -306,6 +311,7 @@ impl AppState {
             bridge_scripts: Arc::new(Mutex::new(HashMap::new())),
             bridge_storyboards: Arc::new(Mutex::new(HashMap::new())),
             storyboard_tasks: Arc::new(Mutex::new(HashMap::new())),
+            finalized_storyboard_bank: Arc::new(Mutex::new(HashMap::new())),
             text_model_provider_session: Arc::new(Mutex::new(None)),
         }
     }
@@ -425,6 +431,64 @@ impl AppState {
             .cloned()?;
 
         self.find_storyboard(&result_id)
+    }
+
+    pub fn remember_finalized_storyboard_shot(&self, shot: FinalizedStoryboardShotResult) {
+        self.finalized_storyboard_bank
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(shot.project_id.clone())
+            .or_default()
+            .insert(shot.result_id.clone(), shot);
+    }
+
+    pub fn find_finalized_storyboard_shot(
+        &self,
+        project_id: &str,
+        result_id: &str,
+    ) -> Option<FinalizedStoryboardShotResult> {
+        self.finalized_storyboard_bank
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(project_id)
+            .and_then(|shots| shots.get(result_id))
+            .cloned()
+    }
+
+    pub fn list_finalized_storyboard_shots(
+        &self,
+        project_id: &str,
+        script_id: Option<&str>,
+        confirmed: Option<bool>,
+    ) -> Vec<FinalizedStoryboardShotResult> {
+        let mut shots = self
+            .finalized_storyboard_bank
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(project_id)
+            .map(|shots| shots.values().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+
+        shots.retain(|shot| {
+            script_id.is_none_or(|script_id| shot.script_id == script_id)
+                && confirmed.is_none_or(|confirmed| shot.confirmed == confirmed)
+        });
+        shots.sort_by(|left, right| {
+            left.shot_order
+                .cmp(&right.shot_order)
+                .then(left.updated_at_ms.cmp(&right.updated_at_ms))
+                .then(left.result_id.cmp(&right.result_id))
+        });
+        shots
+    }
+
+    pub fn remove_finalized_storyboard_shot(&self, project_id: &str, result_id: &str) -> bool {
+        self.finalized_storyboard_bank
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_mut(project_id)
+            .and_then(|shots| shots.remove(result_id))
+            .is_some()
     }
 
     pub fn configure_text_model_provider(

@@ -5,7 +5,12 @@ import {
   configureTextModelProvider,
   expandScript as invokeExpandScript,
   exportBundle as invokeExportBundle,
+  exportStoryboardBank as invokeExportStoryboardBank,
   generateStoryboard as invokeGenerateStoryboard,
+  listStoryboardShotResults as invokeListStoryboardShotResults,
+  removeStoryboardShotResult as invokeRemoveStoryboardShotResult,
+  saveStoryboardShotResult as invokeSaveStoryboardShotResult,
+  updateStoryboardShotResult as invokeUpdateStoryboardShotResult,
   updateStoryboardRows as invokeUpdateStoryboardRows,
 } from "./bridge/hopeBridge";
 import { ROUTES, resolveRoute } from "./routes";
@@ -13,6 +18,8 @@ import type {
   ExpandScriptResponse,
   ExportArtifactRecord,
   ExportBundleResponse,
+  ExportStoryboardBankResponse,
+  FinalizedStoryboardShotResult,
   GenerateStoryboardResponse,
   GeneratedStoryboardRow,
   KbRouterRuntimeResponse,
@@ -53,7 +60,7 @@ interface ModelConfigDraft extends ModelConfigState {
 type LongTextField = "visualDescription" | "characterAction" | "dialogue" | "prompt";
 
 interface TextDialogState {
-  kind: "synopsis" | "expandedScript" | "storyboardCell";
+  kind: "synopsis" | "expandedScript" | "storyboardCell" | "summary";
   title: string;
   value: string;
   helper: string;
@@ -121,6 +128,9 @@ const DURATION_OPTIONS = [5, 10, 15, 30, 45, 60];
 const DEFAULT_SYNOPSIS = "主角在废墟城市中与敌人激烈战斗，最终觉醒新力量，击败敌人。";
 const DEFAULT_SCENE: SceneFusionOption = "hot_blood_battle";
 const DEFAULT_TASK_NAME = "第一集分镜生成";
+const DEFAULT_PROJECT_ID = "project-week3-001";
+const STORYBOARD_DURATION_SOURCE = "storyboard_duration_plan.allocated_row_duration_seconds";
+const EMPTY_PROMPT_TEXT_PLACEHOLDER = "prompt_text 未生成，等待主线镜头 grounding";
 
 const MODEL_OPTIONS: Array<Option<WorkbenchModelId>> = [
   { value: "qwen", label: "千问 Qwen" },
@@ -282,8 +292,21 @@ export function App() {
   const [sceneTasks, setSceneTasks] = useState<SceneTaskRecord[]>([]);
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [bridgeBusy, setBridgeBusy] = useState<
-    "expand" | "generate" | "save_rows" | "export_words" | "export_script" | null
+    | "expand"
+    | "generate"
+    | "save_rows"
+    | "save_shot"
+    | "list_shots"
+    | "remove_shot"
+    | "export_words"
+    | "export_script"
+    | "export_bank"
+    | null
   >(null);
+  const [finalizedShots, setFinalizedShots] = useState<FinalizedStoryboardShotResult[]>([]);
+  const [finalizedBankOpen, setFinalizedBankOpen] = useState(false);
+  const [lastStoryboardBankExport, setLastStoryboardBankExport] =
+    useState<ExportStoryboardBankResponse | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [jumpPage, setJumpPage] = useState("1");
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
@@ -292,7 +315,6 @@ export function App() {
   const [taskDraft, setTaskDraft] = useState<TaskDraftState | null>(null);
   const [isTaskPickerOpen, setIsTaskPickerOpen] = useState(false);
   const [taskSerial, setTaskSerial] = useState(0);
-  const [isKbSummaryExpanded, setIsKbSummaryExpanded] = useState(false);
   const [exportMessage, setExportMessage] = useState("等待主线 bridge 返回结果。");
 
   const editingRow = editingDraft;
@@ -351,6 +373,17 @@ export function App() {
     () => sceneTasks.filter((task) => task.status === "generated").length,
     [sceneTasks],
   );
+  const finalizedStoryboardTotalDuration = useMemo(
+    () =>
+      finalizedShots
+        .filter((shot) => shot.confirmed)
+        .reduce((total, shot) => total + normalizeDurationOption(shot.shot_duration_seconds, 15), 0),
+    [finalizedShots],
+  );
+  const confirmedShotCount = useMemo(
+    () => finalizedShots.filter((shot) => shot.confirmed).length,
+    [finalizedShots],
+  );
   const pageTokens = useMemo(() => buildPageTokens(pageCount, currentPage), [pageCount, currentPage]);
   const sceneOptionGroups = useMemo(() => groupSceneOptions(SCENE_OPTIONS), []);
   const selectedModelLabel = useMemo(() => resolveModelLabel(modelConfig.provider), [modelConfig.provider]);
@@ -367,6 +400,77 @@ export function App() {
   );
   const activeKbRouterResult = storyboardResult?.kb_router_result ?? expandedScriptResult?.kb_router_result ?? null;
   const shotGroundingSummary = useMemo(() => buildShotGroundingSummary(rows), [rows]);
+
+  const openKbSummaryDialog = () => {
+    const details: string[] = [];
+
+    if (activeKbRouterResult) {
+      const sampleCount = activeKbRouterResult.selected_sample_ids.length;
+      const ruleCount = activeKbRouterResult.selected_kb_rules.length;
+      details.push(
+        [
+          "已匹配知识库规则",
+          `已匹配 ${sampleCount} 个参考样本`,
+          `已应用 ${ruleCount} 条规则`,
+          (activeKbRouterResult.full_kb_rows_included ?? 0) === 0
+            ? "未全量调用知识库"
+            : "知识库调用已被限制",
+          formatUserKbSummary(activeKbRouterResult),
+        ].join("\n"),
+      );
+    }
+
+    if (rows.length) {
+      details.push("当前人物/动作若显示为占位文案，表示桌面端仅做显示层产品化；主线仍需补全人物/动作 grounding。");
+    }
+
+    if (shotGroundingSummary) {
+      details.push(
+        [
+          "镜头强绑定",
+          `镜头意图：${shotGroundingSummary.intent}`,
+          `局部场景：${shotGroundingSummary.scene}`,
+          `适配说明：${shotGroundingSummary.reason}`,
+        ].join("\n"),
+      );
+    }
+
+    setTextDialog({
+      kind: "summary",
+      title: "知识库与镜头摘要",
+      helper: "这里只展示产品化摘要，不展示内部原始提示、来源登记或覆盖层配置。",
+      value: details.join("\n\n") || "还没有知识库摘要，请先扩写剧本或生成分镜。",
+      editable: false,
+    });
+  };
+
+  const refreshFinalizedShots = async (openDialog = false) => {
+    setBridgeBusy("list_shots");
+    try {
+      const response = await invokeListStoryboardShotResults({
+        project_id: DEFAULT_PROJECT_ID,
+        script_id: acceptedScriptId ?? taskScriptId ?? null,
+        confirmed: null,
+      });
+      setFinalizedShots(response.shots);
+      if (openDialog) {
+        setFinalizedBankOpen(true);
+      }
+      if (response.warnings.length) {
+        setExportMessage(formatWarnings(response.warnings));
+      }
+      return response.shots;
+    } catch (error) {
+      setExportMessage(`读取已定稿分镜集合失败：${formatProductError(error)}`);
+      return null;
+    } finally {
+      setBridgeBusy(null);
+    }
+  };
+
+  const handleOpenFinalizedStoryboardDialog = () => {
+    void refreshFinalizedShots(true);
+  };
 
   const confirmDiscardDirty = (actionLabel: string) => {
     if (!rowsDirty) {
@@ -1214,6 +1318,236 @@ export function App() {
     }
   };
 
+  const buildFinalizedShotPayload = (
+    sourceResult: GenerateStoryboardResponse,
+    sourceRows: StoryboardWorkbenchRow[],
+  ) => {
+    const backendRows = toGeneratedStoryboardRows(sourceRows);
+    const shotDuration = backendRows.reduce(
+      (total, row) => total + Number(row.shot_duration_seconds || row.duration_seconds || 0),
+      0,
+    );
+    const scriptId = currentSceneTask?.scriptId ?? taskScriptId ?? acceptedScriptId ?? "";
+    const shotTaskId = currentSceneTask?.id ?? sourceResult.task_id ?? currentTaskId ?? "";
+    const shotOrder = currentSceneTask
+      ? Math.max(1, sceneTasks.findIndex((task) => task.id === currentSceneTask.id) + 1)
+      : Math.max(1, finalizedShots.length + 1);
+    const promptText = backendRows
+      .map((row) => row.prompt_text.trim())
+      .filter(Boolean)
+      .join("\n\n");
+
+    return {
+      project_id: DEFAULT_PROJECT_ID,
+      script_id: scriptId,
+      shot_task_id: shotTaskId,
+      result_id: sourceResult.result_id,
+      shot_order: shotOrder,
+      shot_task_name: taskName.trim() || currentSceneTask?.name || "未命名镜头任务",
+      rows: backendRows,
+      prompt_text: promptText,
+      shot_duration_seconds: shotDuration,
+      duration_source: backendRows[0]?.duration_source || STORYBOARD_DURATION_SOURCE,
+      confirmed: true,
+      updated_at_ms: Date.now(),
+      rows_hash: sourceResult.rows_hash ?? currentSceneTask?.rowsHash ?? "",
+    };
+  };
+
+  const handleConfirmFinalizedShot = async () => {
+    if (bridgeBusy) {
+      return;
+    }
+    if (!storyboardResult || !rows.length) {
+      setExportMessage("当前没有可确认定稿的镜头结果，请先生成分镜。");
+      return;
+    }
+
+    setBridgeBusy("save_shot");
+    try {
+      const savedResult = rowsDirty
+        ? await persistCurrentRows("desktop_confirm_finalized_shot_autosave")
+        : storyboardResult;
+      if (!savedResult) {
+        return;
+      }
+
+      const payload = buildFinalizedShotPayload(savedResult, rowsDirty ? savedResult.rows.map(mapGeneratedStoryboardRow) : rows);
+      if (!payload.script_id || !payload.shot_task_id || !payload.result_id || !payload.rows.length) {
+        setExportMessage("确认定稿失败：缺少剧本、镜头任务或分镜结果，请重新导入镜头任务后生成。");
+        return;
+      }
+
+      const existing = finalizedShots.find((shot) => shot.result_id === payload.result_id);
+      const response = existing
+        ? await invokeUpdateStoryboardShotResult({
+            project_id: payload.project_id,
+            result_id: payload.result_id,
+            shot_order: payload.shot_order,
+            shot_task_name: payload.shot_task_name,
+            rows: payload.rows,
+            prompt_text: payload.prompt_text,
+            shot_duration_seconds: payload.shot_duration_seconds,
+            duration_source: payload.duration_source,
+            confirmed: true,
+            updated_at_ms: payload.updated_at_ms,
+            rows_hash: payload.rows_hash,
+          })
+        : await invokeSaveStoryboardShotResult(payload);
+
+      if (response.status === "Blocked" || response.blockers.length) {
+        setExportMessage(`确认定稿未完成：${formatWarnings(response.blockers)}`);
+        return;
+      }
+      if (response.shot) {
+        setFinalizedShots((current) => upsertFinalizedShot(current, response.shot!));
+      }
+      setLastStoryboardBankExport(null);
+      setExportMessage(
+        `已确认定稿：${response.shot?.shot_task_name ?? payload.shot_task_name} / ${payload.shot_duration_seconds} 秒`,
+      );
+    } catch (error) {
+      setExportMessage(`确认定稿失败：${formatProductError(error)}`);
+    } finally {
+      setBridgeBusy(null);
+    }
+  };
+
+  const handleEditFinalizedShot = (shot: FinalizedStoryboardShotResult) => {
+    if (!confirmDiscardDirty("载入已定稿镜头")) {
+      return;
+    }
+    const nextRows = shot.rows.map(mapGeneratedStoryboardRow);
+    setRows(nextRows);
+    setRowsDirty(false);
+    setTaskName(shot.shot_task_name);
+    setTaskScriptId(shot.script_id);
+    setTaskSourceScript(shot.rows[0]?.shot_script ?? "");
+    setDurationSeconds(normalizeDurationOption(shot.shot_duration_seconds, durationSeconds));
+    setStoryboardResult((current) =>
+      current && current.result_id === shot.result_id
+        ? current
+        : {
+            task_id: shot.shot_task_id,
+            result_id: shot.result_id,
+            rows: shot.rows,
+            selected_total_duration_seconds: shot.shot_duration_seconds,
+            duration_plan: {
+              total_duration_seconds: shot.shot_duration_seconds,
+              row_count: shot.rows.length,
+              per_row_seconds: shot.rows.length
+                ? Math.round(shot.shot_duration_seconds / shot.rows.length)
+                : shot.shot_duration_seconds,
+              allocated_seconds: shot.shot_duration_seconds,
+            },
+            export_status: {
+              status: "Ready",
+              blockers: [],
+              warnings: [],
+              ready_row_count: shot.rows.length,
+              blocked_row_count: 0,
+            },
+            operation_id: "",
+            revision: 0,
+            updated_at_ms: shot.updated_at_ms,
+            rows_hash: shot.rows_hash,
+            dirty: false,
+          },
+    );
+    setFinalizedBankOpen(false);
+    setExportMessage(`已载入已定稿镜头：${shot.shot_task_name}。可继续查看或修改后保存。`);
+  };
+
+  const openFinalizedShotTextDialog = (shot: FinalizedStoryboardShotResult) => {
+    const rowLines = shot.rows.map((row) =>
+      [
+        `${row.order}. ${formatInternalPlaceholder(row.shot_title)}`,
+        `人物：${formatInternalPlaceholder(row.person)}`,
+        `关键动作：${formatInternalPlaceholder(row.character_action)}`,
+        `prompt_text：${row.prompt_text?.trim() || EMPTY_PROMPT_TEXT_PLACEHOLDER}`,
+      ].join("\n"),
+    );
+    setTextDialog({
+      kind: "summary",
+      title: `已定稿镜头：${shot.shot_task_name}`,
+      helper: "这里展示已定稿集合中的产品字段，不展示内部原始提示、来源登记或密钥。",
+      value: [
+        `镜头序号：${shot.shot_order}`,
+        `镜头时长：${shot.shot_duration_seconds} 秒`,
+        `确认状态：${shot.confirmed ? "已确认" : "未确认"}`,
+        `rows_hash：${shot.rows_hash ? "已记录" : "未记录"}`,
+        "",
+        ...rowLines,
+      ].join("\n\n"),
+      editable: false,
+    });
+  };
+
+  const handleRemoveFinalizedShot = async (shot: FinalizedStoryboardShotResult) => {
+    if (bridgeBusy) {
+      return;
+    }
+    if (!window.confirm(`确认移除已定稿镜头“${shot.shot_task_name}”？`)) {
+      return;
+    }
+
+    setBridgeBusy("remove_shot");
+    try {
+      const response = await invokeRemoveStoryboardShotResult({
+        project_id: DEFAULT_PROJECT_ID,
+        result_id: shot.result_id,
+      });
+      if (response.status === "Blocked" || response.blockers.length) {
+        setExportMessage(`移除失败：${formatWarnings(response.blockers)}`);
+        return;
+      }
+      if (response.removed) {
+        setFinalizedShots((current) =>
+          current.filter((item) => item.result_id !== response.result_id),
+        );
+        setLastStoryboardBankExport(null);
+      }
+      setExportMessage(response.removed ? "已移除该已定稿镜头。" : "未找到需要移除的已定稿镜头。");
+    } catch (error) {
+      setExportMessage(`移除已定稿镜头失败：${formatProductError(error)}`);
+    } finally {
+      setBridgeBusy(null);
+    }
+  };
+
+  const handleExportStoryboardBank = async () => {
+    if (bridgeBusy) {
+      return;
+    }
+
+    setBridgeBusy("export_bank");
+    try {
+      const response = await invokeExportStoryboardBank({
+        project_id: DEFAULT_PROJECT_ID,
+        script_id: acceptedScriptId ?? taskScriptId ?? null,
+        export_format: "storyboard_bank",
+        include_unconfirmed: false,
+      });
+      setLastStoryboardBankExport(response);
+      if (response.no_export) {
+        setExportMessage("暂无已确认分镜，无法导出完整分镜包。");
+        return;
+      }
+      if (response.status === "Blocked" || response.blockers.length) {
+        setExportMessage(`完整分镜包导出未完成：${formatWarnings(response.blockers)}`);
+        return;
+      }
+      const readyArtifacts = response.artifacts.filter((artifact) => artifact.ready);
+      setExportMessage(
+        `已导出完整分镜包：${response.export_manifest_id} / 已确认 ${response.confirmed_shot_count} 个镜头 / 总时长 ${response.total_shot_duration_seconds} 秒 / ready ${readyArtifacts.length}/${response.artifacts.length}`,
+      );
+    } catch (error) {
+      setExportMessage(`导出完整分镜包失败：${formatProductError(error)}`);
+    } finally {
+      setBridgeBusy(null);
+    }
+  };
+
   const handleExportWords = async () => {
     if (bridgeBusy) {
       return;
@@ -1271,7 +1605,7 @@ export function App() {
 
     if (generatedSceneTaskCount > 1 || generatedSceneTasks.length > 1) {
       setExportMessage(
-        `完整剧本应汇总 ${generatedSceneTaskCount || generatedSceneTasks.length} 个已生成场景；当前 bridge 仍只支持单 result_id 导出，多场景完整提示词导出为 gated。`,
+        "多镜头完整导出等待已定稿分镜集合接入；当前不会把单镜头结果伪造成全片导出。",
       );
       return;
     }
@@ -1587,18 +1921,18 @@ qwen_request: {
           </section>
 
           <section className="panel-section panel-section--task">
-            <div className="section-name">镜头拆解</div>
-            <div className="task-row">
+            <div className="section-name section-name--inline">
+              <span>镜头拆解</span>
+              <span className="section-status">拆解状态：{taskSourceLabel}</span>
+            </div>
+            <div className="task-row task-row--compact">
               <input
                 className="task-name-input"
                 value={taskName}
                 onChange={(event) => setTaskName(event.target.value)}
-                placeholder="请输入任务名称（如：第一集分镜生成）"
+                aria-label="当前镜头任务名称"
+                placeholder="第 1 个镜头"
               />
-              <div className={hasTaskScript ? "task-source task-source--ready" : "task-source"}>
-                <strong>{hasTaskScript ? "镜头剧本" : "拆解状态"}</strong>
-                <span>{taskSourceLabel}</span>
-              </div>
               <button
                 type="button"
                 className="action-button action-button--light"
@@ -1607,83 +1941,67 @@ qwen_request: {
               >
                 新建镜头任务
               </button>
+              <button
+                type="button"
+                className="action-button action-button--light"
+                onClick={handleImportScript}
+                disabled={!sceneTasks.length || bridgeBusy !== null}
+              >
+                导入镜头任务
+              </button>
+              <div className="duration-pill">
+                <strong>镜头时长</strong>
+                <span>{currentTaskDuration} 秒</span>
+              </div>
+              <button
+                type="button"
+                className="action-button action-button--light"
+                onClick={handleClear}
+                disabled={bridgeBusy !== null}
+              >
+                清空
+              </button>
+              <button
+                type="button"
+                className="action-button action-button--light"
+                onClick={handleSaveRows}
+                disabled={!rowsDirty || bridgeBusy !== null}
+              >
+                {bridgeBusy === "save_rows" ? "保存中" : "保存修改"}
+              </button>
+              <button
+                type="button"
+                className="action-button action-button--light"
+                onClick={handleConfirmFinalizedShot}
+                disabled={!storyboardResult || !rows.length || bridgeBusy !== null}
+              >
+                {bridgeBusy === "save_shot" ? "定稿中" : "确认定稿"}
+              </button>
+              <button
+                type="button"
+                className="action-button action-button--danger"
+                onClick={handleGenerate}
+                disabled={!canGenerate || bridgeBusy !== null}
+              >
+                {bridgeBusy === "generate" ? "生成中" : "开始生成"}
+              </button>
             </div>
           </section>
 
           <section className="panel-section panel-section--storyboard">
-            <div className="section-name">分镜产出区</div>
-            <div className="storyboard-toolbar">
-              <div className={isKbSummaryExpanded ? "storyboard-summary-panel storyboard-summary-panel--expanded" : "storyboard-summary-panel"}>
-                {activeKbRouterResult ? (
-                  <KbRouterSummary
-                    router={activeKbRouterResult}
-                    expanded={isKbSummaryExpanded}
-                    onToggle={() => setIsKbSummaryExpanded((value) => !value)}
-                  />
-                ) : (
-                  <div className="storyboard-summary-empty">
-                    生成后在这里显示知识库匹配与镜头强绑定摘要。
-                  </div>
-                )}
-
-                {rows.length ? (
-                  <div className="grounding-note grounding-note--compact">
-                    当前人物/动作若显示为占位文案，表示桌面端仅做显示层产品化；主线仍需补全人物/动作 grounding。
-                  </div>
-                ) : null}
-
-                {shotGroundingSummary ? (
-                  <div className="grounding-note grounding-note--details grounding-note--compact">
-                    <strong>镜头强绑定</strong>
-                    <span>镜头意图：{shotGroundingSummary.intent}</span>
-                    <span>局部场景：{shotGroundingSummary.scene}</span>
-                    <span>适配说明：{shotGroundingSummary.reason}</span>
-                  </div>
-                ) : null}
-              </div>
-              <div className="storyboard-toolbar__actions">
-                <button
-                  type="button"
-                  className="action-button action-button--light"
-                  onClick={handleImportScript}
-                  disabled={!sceneTasks.length || bridgeBusy !== null}
-                >
-                  导入镜头任务
-                </button>
-
-                <div className="duration-pill">
-                  <strong>镜头时长</strong>
-                  <span>{currentTaskDuration} 秒</span>
-                </div>
-
-                <button
-                  type="button"
-                  className="action-button action-button--light"
-                  onClick={handleClear}
-                  disabled={bridgeBusy !== null}
-                >
-                  清空
-                </button>
-                <button
-                  type="button"
-                  className="action-button action-button--light"
-                  onClick={handleSaveRows}
-                  disabled={!rowsDirty || bridgeBusy !== null}
-                >
-                  {bridgeBusy === "save_rows" ? "保存中" : "保存修改"}
-                </button>
-                <button
-                  type="button"
-                  className="action-button action-button--dark"
-                  onClick={handleGenerate}
-                  disabled={!canGenerate || bridgeBusy !== null}
-                >
-                  {bridgeBusy === "generate" ? "生成中" : "开始生成"}
-                </button>
+            <div className="section-name">当前镜头结果</div>
+            {activeKbRouterResult ? (
+            <div className="storyboard-toolbar storyboard-toolbar--summary-only">
+              <div className="storyboard-summary-panel">
+                <KbRouterSummary
+                  router={activeKbRouterResult}
+                  onOpen={openKbSummaryDialog}
+                />
               </div>
             </div>
+            ) : null}
 
-            <div className="table-wrapper">
+            <div className={rows.length > PAGE_SIZE ? "table-wrapper" : "table-wrapper table-wrapper--single-page"}>
               <table className="storyboard-table">
                 <thead>
                   <tr>
@@ -1781,6 +2099,7 @@ qwen_request: {
               </table>
             </div>
 
+            {rows.length > PAGE_SIZE ? (
             <div className="pagination-row">
               <div className="page-size-control">
                 <span>每页显示：</span>
@@ -1837,13 +2156,29 @@ qwen_request: {
                 <button type="submit">跳转</button>
               </form>
             </div>
+            ) : null}
           </section>
 
           <section className="export-row">
+            <div className="finalized-bank">
+              <strong>已定稿分镜区</strong>
+              <span>已确认 {confirmedShotCount}/{sceneTasks.length} 个镜头</span>
+              <span>总时长 {finalizedStoryboardTotalDuration} 秒</span>
+              <button type="button" className="link-button" onClick={handleOpenFinalizedStoryboardDialog}>
+                查看全部
+              </button>
+            </div>
             <div className="export-message">{exportMessage.trim()}</div>
             {lastExportResult ? (
               <div className="export-artifacts">
                 {lastExportResult.artifacts.map((artifact) => (
+                  <span key={artifact.artifact_id}>{formatArtifact(artifact)}</span>
+                ))}
+              </div>
+            ) : null}
+            {lastStoryboardBankExport ? (
+              <div className="export-artifacts">
+                {lastStoryboardBankExport.artifacts.map((artifact) => (
                   <span key={artifact.artifact_id}>{formatArtifact(artifact)}</span>
                 ))}
               </div>
@@ -1860,14 +2195,113 @@ qwen_request: {
               <button
                 type="button"
                 className="action-button action-button--dark"
-                onClick={handleExportScript}
-                disabled={!storyboardResult || bridgeBusy !== null}
+                onClick={handleExportStoryboardBank}
+                disabled={bridgeBusy !== null}
               >
-                {bridgeBusy === "export_script" ? "导出中" : "导出完整剧本"}
+                {bridgeBusy === "export_bank" ? "导出中" : "导出完整剧本"}
               </button>
             </div>
           </section>
         </div>
+
+        {finalizedBankOpen ? (
+          <div className="edit-dialog-backdrop" onClick={() => setFinalizedBankOpen(false)}>
+            <div className="finalized-bank-dialog" onClick={(event) => event.stopPropagation()}>
+              <div className="edit-dialog__header">
+                <div>
+                  <strong>已定稿分镜区</strong>
+                  <span>这里展示已确认进入完整分镜包的镜头，不会把当前单镜头结果伪造成全片结果。</span>
+                </div>
+                <button type="button" className="toolbar-button" onClick={() => setFinalizedBankOpen(false)}>
+                  关闭
+                </button>
+              </div>
+              <div className="finalized-bank-dialog__summary">
+                <span>已确认 {confirmedShotCount}/{sceneTasks.length} 个镜头</span>
+                <span>总时长 {finalizedStoryboardTotalDuration} 秒</span>
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => void refreshFinalizedShots(false)}
+                  disabled={bridgeBusy !== null}
+                >
+                  刷新
+                </button>
+              </div>
+              <div className="finalized-bank-table-wrap">
+                <table className="finalized-bank-table">
+                  <thead>
+                    <tr>
+                      <th>镜头序号</th>
+                      <th>镜头任务名</th>
+                      <th>镜头时长</th>
+                      <th>人物</th>
+                      <th>关键动作</th>
+                      <th>prompt_text 状态</th>
+                      <th>确认</th>
+                      <th>rows_hash</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {finalizedShots.length ? (
+                      finalizedShots.map((shot) => {
+                        const firstRow = shot.rows[0];
+                        const promptReady = shot.prompt_text.trim()
+                          ? "已生成"
+                          : EMPTY_PROMPT_TEXT_PLACEHOLDER;
+                        return (
+                          <tr key={shot.result_id}>
+                            <td>{shot.shot_order}</td>
+                            <td>{shot.shot_task_name}</td>
+                            <td>{shot.shot_duration_seconds} 秒</td>
+                            <td>{formatInternalPlaceholder(firstRow?.person ?? "not_specified")}</td>
+                            <td>{formatInternalPlaceholder(firstRow?.character_action ?? "待明确")}</td>
+                            <td>{promptReady}</td>
+                            <td>{shot.confirmed ? "已确认" : "未确认"}</td>
+                            <td>{shot.rows_hash ? "已记录" : "未记录"}</td>
+                            <td>
+                              <div className="row-actions">
+                                <button
+                                  type="button"
+                                  className="link-button"
+                                  onClick={() => openFinalizedShotTextDialog(shot)}
+                                >
+                                  查看
+                                </button>
+                                <button
+                                  type="button"
+                                  className="link-button"
+                                  onClick={() => handleEditFinalizedShot(shot)}
+                                >
+                                  编辑
+                                </button>
+                                <button
+                                  type="button"
+                                  className="link-button link-button--danger"
+                                  onClick={() => void handleRemoveFinalizedShot(shot)}
+                                  disabled={bridgeBusy !== null}
+                                >
+                                  移除
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      <tr>
+                        <td colSpan={9} className="empty-table-cell">
+                          暂无已确认分镜。请先生成当前镜头结果，再点击“确认定稿”。
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {taskDraft ? (
           <div className="edit-dialog-backdrop" onClick={() => setTaskDraft(null)}>
@@ -2204,16 +2638,13 @@ function LongTextCell({
 
 function KbRouterSummary({
   router,
-  expanded,
-  onToggle,
+  onOpen,
 }: {
   router: KbRouterRuntimeResponse;
-  expanded: boolean;
-  onToggle: () => void;
+  onOpen: () => void;
 }) {
   const sampleCount = router.selected_sample_ids.length;
   const ruleCount = router.selected_kb_rules.length;
-  const summary = formatUserKbSummary(router);
 
   return (
     <div className="kb-router-summary">
@@ -2222,13 +2653,10 @@ function KbRouterSummary({
         <span>已匹配 {sampleCount} 个参考样本</span>
         <span>已应用 {ruleCount} 条规则</span>
         <span>{(router.full_kb_rows_included ?? 0) === 0 ? "未全量调用知识库" : "知识库调用已被限制"}</span>
-        <button type="button" className="link-button" onClick={onToggle}>
-          {expanded ? "收起摘要" : "展开摘要"}
+        <button type="button" className="link-button" onClick={onOpen}>
+          查看摘要
         </button>
       </div>
-      {expanded ? (
-        <p className="kb-router-summary__detail">{summary}</p>
-      ) : null}
     </div>
   );
 }
@@ -2520,7 +2948,7 @@ function mapGeneratedStoryboardRow(row: GeneratedStoryboardRow): StoryboardWorkb
     visualDescription: row.visual_description,
     characterAction: formatInternalPlaceholder(row.character_action),
     dialogue: row.dialogue || "（无）",
-    prompt: promptText || "prompt_text 未生成，等待主线镜头 grounding",
+    prompt: promptText || EMPTY_PROMPT_TEXT_PLACEHOLDER,
     durationSeconds: row.duration_seconds,
     shotDurationSeconds: row.shot_duration_seconds || row.duration_seconds,
     durationSource: row.duration_source,
@@ -2573,13 +3001,13 @@ function toGeneratedStoryboardRows(rows: StoryboardWorkbenchRow[]): GeneratedSto
       visual_description: row.visualDescription,
       character_action: row.characterAction,
       dialogue: row.dialogue,
-      prompt_text: row.prompt === "prompt_text 未生成，等待主线镜头 grounding" ? "" : row.prompt,
+      prompt_text: row.prompt === EMPTY_PROMPT_TEXT_PLACEHOLDER ? "" : row.prompt,
       prompt_text_compilation_status: backend?.prompt_text_compilation_status || "ReadyStub",
       prompt_text_compilation_warnings: backend?.prompt_text_compilation_warnings ?? [],
       prompt_text_source_row_id: backend?.prompt_text_source_row_id || shotId,
       duration_seconds: row.durationSeconds,
       shot_duration_seconds: row.shotDurationSeconds ?? backend?.shot_duration_seconds ?? row.durationSeconds,
-      duration_source: row.durationSource ?? backend?.duration_source ?? "",
+      duration_source: row.durationSource ?? backend?.duration_source ?? STORYBOARD_DURATION_SOURCE,
       scene_performance_projection: scenePerformanceProjection,
       external_reference_handle_candidates: backend?.external_reference_handle_candidates ?? [],
       sequence_grouping: sequenceGrouping,
@@ -2798,6 +3226,20 @@ function renumberRows(rows: StoryboardWorkbenchRow[]) {
     ...row,
     order: index + 1,
   }));
+}
+
+function upsertFinalizedShot(
+  shots: FinalizedStoryboardShotResult[],
+  nextShot: FinalizedStoryboardShotResult,
+) {
+  const existingIndex = shots.findIndex((shot) => shot.result_id === nextShot.result_id);
+  if (existingIndex === -1) {
+    return [...shots, nextShot].sort((left, right) => left.shot_order - right.shot_order);
+  }
+
+  const next = [...shots];
+  next[existingIndex] = nextShot;
+  return next.sort((left, right) => left.shot_order - right.shot_order);
 }
 
 function createRowId() {

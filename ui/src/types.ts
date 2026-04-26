@@ -242,6 +242,114 @@ export interface UpdateStoryboardRowsRequest {
   dirty_source_note?: string | null;
 }
 
+export interface FinalizedStoryboardShotResult {
+  project_id: string;
+  script_id: string;
+  shot_task_id: string;
+  result_id: string;
+  shot_order: number;
+  shot_task_name: string;
+  rows: GeneratedStoryboardRow[];
+  prompt_text: string;
+  shot_duration_seconds: number;
+  duration_source: string;
+  confirmed: boolean;
+  updated_at_ms: number;
+  rows_hash: string;
+}
+
+export interface SaveStoryboardShotResultRequest {
+  project_id: string;
+  script_id: string;
+  shot_task_id: string;
+  result_id: string;
+  shot_order: number;
+  shot_task_name: string;
+  rows: GeneratedStoryboardRow[];
+  prompt_text: string;
+  shot_duration_seconds: number;
+  duration_source: string;
+  confirmed: boolean;
+  updated_at_ms?: number;
+  rows_hash?: string;
+}
+
+export interface SaveStoryboardShotResultResponse {
+  status: BridgeCallStatus;
+  shot?: FinalizedStoryboardShotResult | null;
+  blockers: ProductWarning[];
+  warnings: ProductWarning[];
+}
+
+export interface ListStoryboardShotResultsRequest {
+  project_id: string;
+  script_id?: string | null;
+  confirmed?: boolean | null;
+}
+
+export interface ListStoryboardShotResultsResponse {
+  project_id: string;
+  script_id?: string | null;
+  shots: FinalizedStoryboardShotResult[];
+  warnings: ProductWarning[];
+}
+
+export interface UpdateStoryboardShotResultRequest {
+  project_id: string;
+  result_id: string;
+  shot_order: number;
+  shot_task_name: string;
+  rows: GeneratedStoryboardRow[];
+  prompt_text: string;
+  shot_duration_seconds: number;
+  duration_source: string;
+  confirmed: boolean;
+  updated_at_ms?: number;
+  rows_hash?: string;
+}
+
+export interface UpdateStoryboardShotResultResponse {
+  status: BridgeCallStatus;
+  shot?: FinalizedStoryboardShotResult | null;
+  blockers: ProductWarning[];
+  warnings: ProductWarning[];
+}
+
+export interface RemoveStoryboardShotResultRequest {
+  project_id: string;
+  result_id: string;
+}
+
+export interface RemoveStoryboardShotResultResponse {
+  status: BridgeCallStatus;
+  project_id: string;
+  result_id: string;
+  removed: boolean;
+  warnings: ProductWarning[];
+  blockers: ProductWarning[];
+}
+
+export interface ExportStoryboardBankRequest {
+  project_id: string;
+  script_id?: string | null;
+  export_format: string;
+  include_unconfirmed: boolean;
+}
+
+export interface ExportStoryboardBankResponse {
+  export_manifest_id: string;
+  project_id: string;
+  script_id?: string | null;
+  status: BridgeCallStatus;
+  no_export: boolean;
+  confirmed_shot_count: number;
+  exported_result_ids: string[];
+  total_shot_duration_seconds: number;
+  artifacts: ExportArtifactRecord[];
+  warnings: ProductWarning[];
+  blockers: ProductWarning[];
+}
+
 export interface ExportArtifactRecord {
   artifact_id: string;
   artifact_kind: string;

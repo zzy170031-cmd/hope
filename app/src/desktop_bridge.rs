@@ -3,13 +3,19 @@ use std::{io, sync::OnceLock};
 use crate::{
     ipc::{
         CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND, ConfigureTextModelProviderRequest,
-        EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, ExpandScriptRequest, ExportBundleRequest,
-        GENERATE_STORYBOARD_COMMAND, GenerateStoryboardRequest, PROJECT_CREATE_OR_SWITCH_COMMAND,
-        ProjectCreateOrSwitchRequest, STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
-        StoryboardRenderSegmentCutPreviewSnapshotRequest, TextModelProviderStatus,
-        UPDATE_STORYBOARD_ROWS_COMMAND, UpdateStoryboardRowsRequest,
-        VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND, ValidationExportPanelSnapshotRequest,
-        WRITER_ENTRY_SNAPSHOT_COMMAND, WriterEntrySnapshotRequest,
+        EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, EXPORT_STORYBOARD_BANK_COMMAND,
+        ExpandScriptRequest, ExportBundleRequest, ExportStoryboardBankRequest,
+        GENERATE_STORYBOARD_COMMAND, GenerateStoryboardRequest,
+        LIST_STORYBOARD_SHOT_RESULTS_COMMAND, ListStoryboardShotResultsRequest,
+        PROJECT_CREATE_OR_SWITCH_COMMAND, ProjectCreateOrSwitchRequest,
+        REMOVE_STORYBOARD_SHOT_RESULT_COMMAND, RemoveStoryboardShotResultRequest,
+        SAVE_STORYBOARD_SHOT_RESULT_COMMAND, STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
+        SaveStoryboardShotResultRequest, StoryboardRenderSegmentCutPreviewSnapshotRequest,
+        TextModelProviderStatus, UPDATE_STORYBOARD_ROWS_COMMAND,
+        UPDATE_STORYBOARD_SHOT_RESULT_COMMAND, UpdateStoryboardRowsRequest,
+        UpdateStoryboardShotResultRequest, VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
+        ValidationExportPanelSnapshotRequest, WRITER_ENTRY_SNAPSHOT_COMMAND,
+        WriterEntrySnapshotRequest,
     },
     runtime::{
         ProjectCreateOrSwitchSnapshot, StoryboardRenderSegmentCutPreviewSnapshot,
@@ -17,7 +23,9 @@ use crate::{
         build_project_create_or_switch_snapshot,
         build_storyboard_rendersegment_cut_preview_snapshot,
         build_validation_export_panel_snapshot, build_writer_entry_snapshot, expand_script,
-        export_bundle, generate_storyboard, save_storyboard_rows,
+        export_bundle, export_storyboard_bank, generate_storyboard, list_storyboard_shot_results,
+        remove_storyboard_shot_result, save_storyboard_rows, save_storyboard_shot_result,
+        update_storyboard_shot_result,
     },
     state::AppState,
 };
@@ -32,6 +40,11 @@ pub const DESKTOP_INVOKE_COMMANDS: &[&str] = &[
     UPDATE_STORYBOARD_ROWS_COMMAND,
     EXPORT_BUNDLE_COMMAND,
     CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND,
+    SAVE_STORYBOARD_SHOT_RESULT_COMMAND,
+    LIST_STORYBOARD_SHOT_RESULTS_COMMAND,
+    UPDATE_STORYBOARD_SHOT_RESULT_COMMAND,
+    REMOVE_STORYBOARD_SHOT_RESULT_COMMAND,
+    EXPORT_STORYBOARD_BANK_COMMAND,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +58,11 @@ pub enum DesktopInvokeRequest {
     UpdateStoryboardRows(UpdateStoryboardRowsRequest),
     ExportBundle(ExportBundleRequest),
     ConfigureTextModelProvider(ConfigureTextModelProviderRequest),
+    SaveStoryboardShotResult(SaveStoryboardShotResultRequest),
+    ListStoryboardShotResults(ListStoryboardShotResultsRequest),
+    UpdateStoryboardShotResult(UpdateStoryboardShotResultRequest),
+    RemoveStoryboardShotResult(RemoveStoryboardShotResultRequest),
+    ExportStoryboardBank(ExportStoryboardBankRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +76,11 @@ pub enum DesktopInvokeResponse {
     UpdateStoryboardRows(core_domain::GenerateStoryboardResponse),
     ExportBundle(core_domain::ExportBundleResponse),
     ConfigureTextModelProvider(TextModelProviderStatus),
+    SaveStoryboardShotResult(core_domain::SaveStoryboardShotResultResponse),
+    ListStoryboardShotResults(core_domain::ListStoryboardShotResultsResponse),
+    UpdateStoryboardShotResult(core_domain::UpdateStoryboardShotResultResponse),
+    RemoveStoryboardShotResult(core_domain::RemoveStoryboardShotResultResponse),
+    ExportStoryboardBank(core_domain::ExportStoryboardBankResponse),
 }
 
 #[derive(Debug)]
@@ -122,6 +145,26 @@ fn command_accepts_request(command: &str, request: &DesktopInvokeRequest) -> boo
                 CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND,
                 DesktopInvokeRequest::ConfigureTextModelProvider(_)
             )
+            | (
+                SAVE_STORYBOARD_SHOT_RESULT_COMMAND,
+                DesktopInvokeRequest::SaveStoryboardShotResult(_)
+            )
+            | (
+                LIST_STORYBOARD_SHOT_RESULTS_COMMAND,
+                DesktopInvokeRequest::ListStoryboardShotResults(_)
+            )
+            | (
+                UPDATE_STORYBOARD_SHOT_RESULT_COMMAND,
+                DesktopInvokeRequest::UpdateStoryboardShotResult(_)
+            )
+            | (
+                REMOVE_STORYBOARD_SHOT_RESULT_COMMAND,
+                DesktopInvokeRequest::RemoveStoryboardShotResult(_)
+            )
+            | (
+                EXPORT_STORYBOARD_BANK_COMMAND,
+                DesktopInvokeRequest::ExportStoryboardBank(_)
+            )
     )
 }
 
@@ -178,6 +221,35 @@ fn invoke_desktop_command_with_state(
         ) => Ok(DesktopInvokeResponse::ConfigureTextModelProvider(
             state.configure_text_model_provider(request),
         )),
+        (
+            SAVE_STORYBOARD_SHOT_RESULT_COMMAND,
+            DesktopInvokeRequest::SaveStoryboardShotResult(request),
+        ) => Ok(DesktopInvokeResponse::SaveStoryboardShotResult(
+            save_storyboard_shot_result(state, request),
+        )),
+        (
+            LIST_STORYBOARD_SHOT_RESULTS_COMMAND,
+            DesktopInvokeRequest::ListStoryboardShotResults(request),
+        ) => Ok(DesktopInvokeResponse::ListStoryboardShotResults(
+            list_storyboard_shot_results(state, request),
+        )),
+        (
+            UPDATE_STORYBOARD_SHOT_RESULT_COMMAND,
+            DesktopInvokeRequest::UpdateStoryboardShotResult(request),
+        ) => Ok(DesktopInvokeResponse::UpdateStoryboardShotResult(
+            update_storyboard_shot_result(state, request),
+        )),
+        (
+            REMOVE_STORYBOARD_SHOT_RESULT_COMMAND,
+            DesktopInvokeRequest::RemoveStoryboardShotResult(request),
+        ) => Ok(DesktopInvokeResponse::RemoveStoryboardShotResult(
+            remove_storyboard_shot_result(state, request),
+        )),
+        (EXPORT_STORYBOARD_BANK_COMMAND, DesktopInvokeRequest::ExportStoryboardBank(request)) => {
+            Ok(DesktopInvokeResponse::ExportStoryboardBank(
+                export_storyboard_bank(state, request),
+            ))
+        }
         _ => Err(DesktopInvokeError::UnsupportedCommand {
             command: command.to_string(),
         }),
@@ -227,10 +299,12 @@ mod tests {
 
     use crate::ipc::{
         CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND, ConfigureTextModelProviderRequest,
-        EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, GENERATE_STORYBOARD_COMMAND,
-        ProjectCreateOrSwitchRequest, StoryboardRenderSegmentCutPreviewSnapshotRequest,
-        UPDATE_STORYBOARD_ROWS_COMMAND, ValidationExportPanelSnapshotRequest,
-        WriterEntrySnapshotRequest,
+        EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, EXPORT_STORYBOARD_BANK_COMMAND,
+        GENERATE_STORYBOARD_COMMAND, LIST_STORYBOARD_SHOT_RESULTS_COMMAND,
+        ProjectCreateOrSwitchRequest, REMOVE_STORYBOARD_SHOT_RESULT_COMMAND,
+        SAVE_STORYBOARD_SHOT_RESULT_COMMAND, StoryboardRenderSegmentCutPreviewSnapshotRequest,
+        UPDATE_STORYBOARD_ROWS_COMMAND, UPDATE_STORYBOARD_SHOT_RESULT_COMMAND,
+        ValidationExportPanelSnapshotRequest, WriterEntrySnapshotRequest,
     };
 
     use super::{
@@ -256,6 +330,11 @@ mod tests {
                 UPDATE_STORYBOARD_ROWS_COMMAND,
                 EXPORT_BUNDLE_COMMAND,
                 CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND,
+                SAVE_STORYBOARD_SHOT_RESULT_COMMAND,
+                LIST_STORYBOARD_SHOT_RESULTS_COMMAND,
+                UPDATE_STORYBOARD_SHOT_RESULT_COMMAND,
+                REMOVE_STORYBOARD_SHOT_RESULT_COMMAND,
+                EXPORT_STORYBOARD_BANK_COMMAND,
             ]
         );
     }
@@ -327,11 +406,7 @@ mod tests {
 
         match expand {
             DesktopInvokeResponse::ExpandScript(response) => {
-                assert!(
-                    !response
-                        .expanded_script_text
-                        .contains("api_key_present")
-                );
+                assert!(!response.expanded_script_text.contains("api_key_present"));
                 assert!(!response.expanded_script_text.contains("prompt_text"));
                 assert!(
                     response
@@ -517,26 +592,10 @@ mod tests {
         let (script_id, expanded_script_text) = match expand {
             DesktopInvokeResponse::ExpandScript(response) => {
                 assert!(response.script_id.starts_with("script-"));
-                assert!(
-                    !response
-                        .expanded_script_text
-                        .contains("source_package")
-                );
-                assert!(
-                    !response
-                        .expanded_script_text
-                        .contains("scene_type:")
-                );
-                assert!(
-                    !response
-                        .expanded_script_text
-                        .contains("prompt_text")
-                );
-                assert!(
-                    !response
-                        .expanded_script_text
-                        .contains("0-3s")
-                );
+                assert!(!response.expanded_script_text.contains("source_package"));
+                assert!(!response.expanded_script_text.contains("scene_type:"));
+                assert!(!response.expanded_script_text.contains("prompt_text"));
+                assert!(!response.expanded_script_text.contains("0-3s"));
                 assert!(
                     !response
                         .expanded_script_text

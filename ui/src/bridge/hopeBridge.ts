@@ -7,7 +7,10 @@ import type {
   ExportBundleRequest,
   ExportBundleResponse,
   ExportArtifactRecord,
+  ExportStoryboardBankRequest,
+  ExportStoryboardBankResponse,
   ExportValidationItem,
+  FinalizedStoryboardShotResult,
   GenerateStoryboardRequest,
   GenerateStoryboardResponse,
   GeneratedStoryboardRow,
@@ -17,8 +20,16 @@ import type {
   ProductWarning,
   ProjectCreateOrSwitchRequest,
   ProjectSummary,
+  ListStoryboardShotResultsRequest,
+  ListStoryboardShotResultsResponse,
+  RemoveStoryboardShotResultRequest,
+  RemoveStoryboardShotResultResponse,
+  SaveStoryboardShotResultRequest,
+  SaveStoryboardShotResultResponse,
   StoryboardRenderSegmentCutPreviewSnapshotRequest,
   TextModelProviderStatus,
+  UpdateStoryboardShotResultRequest,
+  UpdateStoryboardShotResultResponse,
   UpdateStoryboardRowsRequest,
   ValidationExportPanelSnapshot,
   ValidationExportPanelSnapshotRequest,
@@ -43,6 +54,11 @@ export const HOPE_TAURI_COMMANDS = {
   generateStoryboard: "generate_storyboard",
   updateStoryboardRows: "update_storyboard_rows",
   exportBundle: "export_bundle",
+  saveStoryboardShotResult: "save_storyboard_shot_result",
+  listStoryboardShotResults: "list_storyboard_shot_results",
+  updateStoryboardShotResult: "update_storyboard_shot_result",
+  removeStoryboardShotResult: "remove_storyboard_shot_result",
+  exportStoryboardBank: "export_storyboard_bank",
   configureTextModelProvider: "configure_text_model_provider",
 } as const;
 
@@ -57,6 +73,11 @@ type HopeCommandPayload =
   | GenerateStoryboardRequest
   | UpdateStoryboardRowsRequest
   | ExportBundleRequest
+  | SaveStoryboardShotResultRequest
+  | ListStoryboardShotResultsRequest
+  | UpdateStoryboardShotResultRequest
+  | RemoveStoryboardShotResultRequest
+  | ExportStoryboardBankRequest
   | ConfigureTextModelProviderRequest
   | undefined;
 
@@ -91,6 +112,11 @@ const PHASE1_REAL_COMMANDS = new Set<HopeCommandName>([
   HOPE_TAURI_COMMANDS.generateStoryboard,
   HOPE_TAURI_COMMANDS.updateStoryboardRows,
   HOPE_TAURI_COMMANDS.exportBundle,
+  HOPE_TAURI_COMMANDS.saveStoryboardShotResult,
+  HOPE_TAURI_COMMANDS.listStoryboardShotResults,
+  HOPE_TAURI_COMMANDS.updateStoryboardShotResult,
+  HOPE_TAURI_COMMANDS.removeStoryboardShotResult,
+  HOPE_TAURI_COMMANDS.exportStoryboardBank,
   HOPE_TAURI_COMMANDS.configureTextModelProvider,
 ]);
 
@@ -703,6 +729,110 @@ function normalizeExportBundleResponse(raw: unknown): ExportBundleResponse {
   };
 }
 
+function normalizeFinalizedStoryboardShotResult(raw: unknown): FinalizedStoryboardShotResult {
+  const shot = readObject(raw, "finalized storyboard shot");
+  return {
+    project_id: String(shot.project_id ?? shot.projectId ?? ""),
+    script_id: String(shot.script_id ?? shot.scriptId ?? ""),
+    shot_task_id: String(shot.shot_task_id ?? shot.shotTaskId ?? ""),
+    result_id: String(shot.result_id ?? shot.resultId ?? ""),
+    shot_order: Number(shot.shot_order ?? shot.shotOrder ?? 0),
+    shot_task_name: String(shot.shot_task_name ?? shot.shotTaskName ?? ""),
+    rows: Array.isArray(shot.rows)
+      ? shot.rows.map((item) => normalizeGeneratedStoryboardRow(item))
+      : [],
+    prompt_text: String(shot.prompt_text ?? shot.promptText ?? ""),
+    shot_duration_seconds: Number(
+      shot.shot_duration_seconds ?? shot.shotDurationSeconds ?? 0,
+    ),
+    duration_source: String(shot.duration_source ?? shot.durationSource ?? ""),
+    confirmed: Boolean(shot.confirmed),
+    updated_at_ms: Number(shot.updated_at_ms ?? shot.updatedAtMs ?? 0),
+    rows_hash: String(shot.rows_hash ?? shot.rowsHash ?? ""),
+  };
+}
+
+function normalizeSaveStoryboardShotResultResponse(
+  raw: unknown,
+): SaveStoryboardShotResultResponse {
+  const response = readObject(raw, "save_storyboard_shot_result response");
+  const shot = response.shot ?? null;
+  return {
+    status: String(response.status ?? "Blocked") as SaveStoryboardShotResultResponse["status"],
+    shot: shot ? normalizeFinalizedStoryboardShotResult(shot) : null,
+    blockers: normalizeWarningList(response.blockers),
+    warnings: normalizeWarningList(response.warnings),
+  };
+}
+
+function normalizeListStoryboardShotResultsResponse(
+  raw: unknown,
+): ListStoryboardShotResultsResponse {
+  const response = readObject(raw, "list_storyboard_shot_results response");
+  return {
+    project_id: String(response.project_id ?? response.projectId ?? ""),
+    script_id: (response.script_id ?? response.scriptId ?? null) as string | null,
+    shots: Array.isArray(response.shots)
+      ? response.shots.map((item) => normalizeFinalizedStoryboardShotResult(item))
+      : [],
+    warnings: normalizeWarningList(response.warnings),
+  };
+}
+
+function normalizeUpdateStoryboardShotResultResponse(
+  raw: unknown,
+): UpdateStoryboardShotResultResponse {
+  const response = readObject(raw, "update_storyboard_shot_result response");
+  const shot = response.shot ?? null;
+  return {
+    status: String(response.status ?? "Blocked") as UpdateStoryboardShotResultResponse["status"],
+    shot: shot ? normalizeFinalizedStoryboardShotResult(shot) : null,
+    blockers: normalizeWarningList(response.blockers),
+    warnings: normalizeWarningList(response.warnings),
+  };
+}
+
+function normalizeRemoveStoryboardShotResultResponse(
+  raw: unknown,
+): RemoveStoryboardShotResultResponse {
+  const response = readObject(raw, "remove_storyboard_shot_result response");
+  return {
+    status: String(response.status ?? "Blocked") as RemoveStoryboardShotResultResponse["status"],
+    project_id: String(response.project_id ?? response.projectId ?? ""),
+    result_id: String(response.result_id ?? response.resultId ?? ""),
+    removed: Boolean(response.removed),
+    warnings: normalizeWarningList(response.warnings),
+    blockers: normalizeWarningList(response.blockers),
+  };
+}
+
+function normalizeExportStoryboardBankResponse(raw: unknown): ExportStoryboardBankResponse {
+  const response = readObject(raw, "export_storyboard_bank response");
+  return {
+    export_manifest_id: String(response.export_manifest_id ?? response.exportManifestId ?? ""),
+    project_id: String(response.project_id ?? response.projectId ?? ""),
+    script_id: (response.script_id ?? response.scriptId ?? null) as string | null,
+    status: String(response.status ?? "Blocked") as ExportStoryboardBankResponse["status"],
+    no_export: Boolean(response.no_export ?? response.noExport),
+    confirmed_shot_count: Number(
+      response.confirmed_shot_count ?? response.confirmedShotCount ?? 0,
+    ),
+    exported_result_ids: Array.isArray(response.exported_result_ids)
+      ? response.exported_result_ids.map(String)
+      : Array.isArray(response.exportedResultIds)
+        ? response.exportedResultIds.map(String)
+        : [],
+    total_shot_duration_seconds: Number(
+      response.total_shot_duration_seconds ?? response.totalShotDurationSeconds ?? 0,
+    ),
+    artifacts: Array.isArray(response.artifacts)
+      ? response.artifacts.map((item) => normalizeExportArtifact(item))
+      : [],
+    warnings: normalizeWarningList(response.warnings),
+    blockers: normalizeWarningList(response.blockers),
+  };
+}
+
 function normalizeTextModelProviderStatus(raw: unknown): TextModelProviderStatus {
   const status = readObject(raw, "text model provider status");
   return {
@@ -737,6 +867,11 @@ function fallbackForCommand<T>(command: HopeCommandName, payload?: HopeCommandPa
     case HOPE_TAURI_COMMANDS.generateStoryboard:
     case HOPE_TAURI_COMMANDS.updateStoryboardRows:
     case HOPE_TAURI_COMMANDS.exportBundle:
+    case HOPE_TAURI_COMMANDS.saveStoryboardShotResult:
+    case HOPE_TAURI_COMMANDS.listStoryboardShotResults:
+    case HOPE_TAURI_COMMANDS.updateStoryboardShotResult:
+    case HOPE_TAURI_COMMANDS.removeStoryboardShotResult:
+    case HOPE_TAURI_COMMANDS.exportStoryboardBank:
       throw new Error(`${command} requires the desktop bridge.`);
     case HOPE_TAURI_COMMANDS.configureTextModelProvider: {
       const request = payload as ConfigureTextModelProviderRequest | undefined;
@@ -871,6 +1006,50 @@ export async function updateStoryboardRows(request: UpdateStoryboardRowsRequest)
 export async function exportBundle(request: ExportBundleRequest) {
   const raw = await invokeHopeCommand<unknown>(HOPE_TAURI_COMMANDS.exportBundle, request);
   return normalizeExportBundleResponse(raw);
+}
+
+export async function saveStoryboardShotResult(request: SaveStoryboardShotResultRequest) {
+  const raw = await invokeHopeCommand<unknown>(
+    HOPE_TAURI_COMMANDS.saveStoryboardShotResult,
+    request,
+  );
+  return normalizeSaveStoryboardShotResultResponse(raw);
+}
+
+export async function listStoryboardShotResults(request: ListStoryboardShotResultsRequest) {
+  const raw = await invokeHopeCommand<unknown>(
+    HOPE_TAURI_COMMANDS.listStoryboardShotResults,
+    request,
+  );
+  return normalizeListStoryboardShotResultsResponse(raw);
+}
+
+export async function updateStoryboardShotResult(
+  request: UpdateStoryboardShotResultRequest,
+) {
+  const raw = await invokeHopeCommand<unknown>(
+    HOPE_TAURI_COMMANDS.updateStoryboardShotResult,
+    request,
+  );
+  return normalizeUpdateStoryboardShotResultResponse(raw);
+}
+
+export async function removeStoryboardShotResult(
+  request: RemoveStoryboardShotResultRequest,
+) {
+  const raw = await invokeHopeCommand<unknown>(
+    HOPE_TAURI_COMMANDS.removeStoryboardShotResult,
+    request,
+  );
+  return normalizeRemoveStoryboardShotResultResponse(raw);
+}
+
+export async function exportStoryboardBank(request: ExportStoryboardBankRequest) {
+  const raw = await invokeHopeCommand<unknown>(
+    HOPE_TAURI_COMMANDS.exportStoryboardBank,
+    request,
+  );
+  return normalizeExportStoryboardBankResponse(raw);
 }
 
 export async function configureTextModelProvider(
