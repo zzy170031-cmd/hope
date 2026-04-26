@@ -56,7 +56,7 @@ interface ModelConfigDraft extends ModelConfigState {
   apiKeyInput: string;
 }
 
-type LongTextField = "visualDescription" | "characterAction" | "dialogue" | "prompt";
+type LongTextField = "person" | "shot" | "visualDescription" | "characterAction" | "dialogue" | "prompt";
 
 interface TextDialogState {
   kind: "synopsis" | "expandedScript" | "storyboardCell" | "summary";
@@ -713,12 +713,10 @@ export function App() {
   ) => {
     setTextDialog({
       kind: "storyboardCell",
-      title: `${row.order} · ${label}`,
+      title: `第 ${row.order} 条 · ${label}`,
       value: String(row[field] ?? ""),
-      helper: "表格中只显示短预览；这里可以放大查看并编辑完整文本。",
-      editable: true,
-      rowId: row.id,
-      field,
+      helper: "表格中只显示短预览；这里查看完整文本，修改请使用操作列“修改”。",
+      editable: false,
     });
   };
 
@@ -1040,6 +1038,19 @@ export function App() {
         ? `已恢复镜头任务“${task.name}”：${task.rowsSnapshot.length} 行分镜快照。`
         : `已导入镜头任务“${task.name}”，当前片段为“${task.segmentTitle}”。下一步点击开始生成。`,
     );
+  };
+
+  const handleSelectSceneTask = (taskId: string) => {
+    if (!taskId) {
+      return;
+    }
+    const task = sceneTasks.find((item) => item.id === taskId);
+    if (!task) {
+      setExportMessage("未找到该镜头任务，请先新建或导入已有镜头任务。");
+      return;
+    }
+
+    handleImportSceneTask(task);
   };
 
   const handleGenerate = async () => {
@@ -1920,6 +1931,25 @@ qwen_request: {
               <span className="section-status">拆解状态：{taskSourceLabel}</span>
             </div>
             <div className="task-row task-row--compact">
+              <label className="task-index-select">
+                <span>镜头序号</span>
+                <select
+                  value={currentTaskId ?? ""}
+                  onChange={(event) => handleSelectSceneTask(event.target.value)}
+                  disabled={!sceneTasks.length || bridgeBusy !== null}
+                  aria-label="选择镜头序号"
+                  title={currentSceneTask?.name ?? ""}
+                >
+                  <option value="" disabled>
+                    {sceneTasks.length ? "选择镜头" : "暂无镜头"}
+                  </option>
+                  {sceneTasks.map((task, index) => (
+                    <option key={task.id} value={task.id}>
+                      第 {index + 1} 个
+                    </option>
+                  ))}
+                </select>
+              </label>
               <input
                 className="task-name-input"
                 value={taskName}
@@ -2009,14 +2039,20 @@ qwen_request: {
                       <tr key={row.id}>
                         <td>{row.order}</td>
                         <td>
-                          <span className="table-compact-text" title={formatInternalPlaceholder(row.person)}>
-                            {formatInternalPlaceholder(row.person)}
-                          </span>
+                          <LongTextCell
+                            label="人物"
+                            value={formatInternalPlaceholder(row.person)}
+                            compact
+                            onOpen={() => openStoryboardCellDialog(row, "person", "人物")}
+                          />
                         </td>
                         <td>
-                          <span className="table-compact-text" title={formatInternalPlaceholder(row.shot)}>
-                            {formatInternalPlaceholder(row.shot)}
-                          </span>
+                          <LongTextCell
+                            label="镜头"
+                            value={formatInternalPlaceholder(row.shot)}
+                            compact
+                            onOpen={() => openStoryboardCellDialog(row, "shot", "镜头")}
+                          />
                         </td>
                         <td>
                           <span className="table-compact-text" title={row.sceneScale}>
@@ -2072,12 +2108,14 @@ qwen_request: {
                             </button>
                             <button
                               type="button"
-                              className="link-button link-button--primary"
+                              className="link-button link-button--primary link-button--confirm-shot"
                               onClick={() => void handleConfirmFinalizedShot()}
                               disabled={!storyboardResult || !rows.length || bridgeBusy !== null || (currentShotConfirmed && !rowsDirty)}
-                              title={rows.length ? "保存当前镜头整体结果到已定稿分镜区" : "请先生成当前镜头分镜"}
+                              title={rows.length ? "确定使用当前镜头结果，加入已定稿分镜区" : "请先生成当前镜头分镜"}
+                              aria-label="确定使用当前镜头结果，加入已定稿分镜区"
                             >
-                              确定使用
+                              <span>确定使用</span>
+                              <small>当前镜头</small>
                             </button>
                           </div>
                         </td>
@@ -2630,15 +2668,22 @@ function LongTextCell({
   label,
   value,
   onOpen,
+  compact = false,
 }: {
   label: string;
   value: string;
   onOpen: () => void;
+  compact?: boolean;
 }) {
   const text = value.trim() || "暂无内容";
 
   return (
-    <button type="button" className="table-text-preview" onClick={onOpen} title={`${label}：${text}`}>
+    <button
+      type="button"
+      className={compact ? "table-text-preview table-text-preview--compact" : "table-text-preview"}
+      onClick={onOpen}
+      title={`${label}：${text}`}
+    >
       <span>{text}</span>
       <em>展开</em>
     </button>
