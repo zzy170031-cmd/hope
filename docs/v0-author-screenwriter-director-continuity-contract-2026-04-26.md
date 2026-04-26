@@ -82,6 +82,7 @@ Required source-classification fields:
 ```text
 source_input_type
 authoring_mode
+target_duration_mode
 source_material_summary
 source_story_facts
 preserved_fact_summary
@@ -839,9 +840,40 @@ It must not express:
 V0 must define these story length profiles:
 
 ```text
+short_clip
+standard_clip
+long_story
+long_story_auto
 short_story_2000_2500
 two_minute_story_2500_3500
 ```
+
+`short_clip`
+
+- fixed-duration short material profile
+- intended for short synopsis, short copy, or one compact script segment
+- normally pairs with `target_duration_mode = fixed_seconds`
+
+`standard_clip`
+
+- fixed-duration standard clip profile
+- intended for short story or single-scene generation with an explicit target
+  duration
+- normally pairs with `target_duration_mode = fixed_seconds`
+
+`long_story`
+
+- long-form story profile for complete stories, novel chapters, long plots, or
+  imported documents
+- preserves source facts and story continuity before duration compression
+- normally pairs with `target_duration_mode = long_text_auto`
+
+`long_story_auto`
+
+- automatic long-text profile
+- lets the system estimate total story duration, split scene beats, create shot
+  tasks, and produce Seedance-friendly storyboard rows
+- must not force a complete long story into a 60-second target
 
 `short_story_2000_2500`
 
@@ -861,6 +893,126 @@ two_minute_story_2500_3500
 The length profile controls story volume and pacing only. It is not a video
 duration request, not a Seedance runtime request, and not a new KB schema
 field.
+
+## Target Duration Mode And Long Text Auto
+
+The target-duration dropdown may add a product option:
+
+```text
+长文本模式
+```
+
+Internally, this option must not be treated as a number of seconds.
+
+The internal field is:
+
+```text
+target_duration_mode
+```
+
+Allowed `target_duration_mode` values:
+
+```text
+fixed_seconds
+long_text_auto
+```
+
+`fixed_seconds`
+
+- applies to short synopsis, short copy, or single script segment
+- uses `target_duration_seconds`
+- allowed V0 second values:
+
+```text
+5
+10
+15
+30
+45
+60
+```
+
+`long_text_auto`
+
+- applies to complete stories, novel chapters, imported documents, and long
+  story material at or above roughly 2000-2500 Chinese characters
+- does not force the source into 60 seconds
+- preserves source facts before segmentation
+- lets the system estimate total story duration and split content into scene
+  beats, shot tasks, storyboard rows, and finalized storyboard bank entries
+
+Long-text mode fields:
+
+```text
+target_duration_mode
+story_length_profile
+source_material_length_chars
+auto_segment_strategy
+estimated_total_story_duration_seconds
+generated_shot_task_count
+duration_plan_summary
+```
+
+Long-text automatic segmentation must follow this chain:
+
+```text
+source facts
+continuity state
+scene beats
+shot tasks
+storyboard rows
+finalized storyboard bank
+```
+
+Long-text mode must preserve the full-chain scheduling principle:
+
+```text
+内容定事实
+写作保连续
+场景定表达
+导演做调度
+镜头落分镜
+```
+
+Long-text mode must not:
+
+```text
+force long text into one 60-second short clip
+drop source_story_facts
+shuffle event order
+let KB writing suggestions override source facts
+let director scheduling override story facts
+write raw prompt_body into product fields
+write source_register into product fields
+write overlay JSON into product fields
+write full raw KB rows into product fields
+connect Seedance runtime
+generate video
+```
+
+## Long Text Seedance-Friendly Segmentation
+
+Long-text mode still produces Seedance-friendly storyboard rows.
+
+Per-row duration rules:
+
+```text
+single storyboard row max duration = 15 seconds
+default preferred row duration = 10 seconds
+remainder may use 5 seconds
+```
+
+Forbidden per-row durations in long-text mode:
+
+```text
+30-second single row
+45-second single row
+60-second single row
+```
+
+`long_text_auto` may produce many rows. It may estimate the total story duration
+from source structure, scene beats, shot-task count, and continuity needs, but
+each row must stay within the Seedance-friendly row boundary.
 
 ## KB Boundary
 
@@ -1682,6 +1834,18 @@ rewrite_changed_event_order
 rewrite_dropped_key_event
 rewrite_added_unapproved_plot
 source_document_too_long_for_single_pass
+fixed_seconds
+long_text_auto
+short_clip
+standard_clip
+long_story
+long_story_auto
+target_duration_seconds
+source_material_length_chars
+auto_segment_strategy
+estimated_total_story_duration_seconds
+generated_shot_task_count
+duration_plan_summary
 short_story_2000_2500
 two_minute_story_2500_3500
 kb_context_summary
@@ -1740,6 +1904,21 @@ A later implementation validator must check:
 
 ```text
 stage order is preserved or explicitly retried
+target_duration_mode is fixed_seconds or long_text_auto
+fixed_seconds uses target_duration_seconds
+fixed_seconds target_duration_seconds is one of 5, 10, 15, 30, 45, 60
+long_text_auto does not force long text into 60 seconds
+long_text_auto includes source_material_length_chars
+long_text_auto includes auto_segment_strategy
+long_text_auto includes estimated_total_story_duration_seconds
+long_text_auto includes generated_shot_task_count
+long_text_auto includes duration_plan_summary
+long_text_auto preserves source_story_facts
+long_text_auto preserves event order
+long_text_auto follows source facts, continuity state, scene beats, shot tasks, storyboard rows, finalized storyboard bank
+long_text_auto keeps each storyboard row <= 15 seconds
+long_text_auto prefers 10-second rows and 5-second remainder rows
+long_text_auto does not produce 30-second or 45-second single rows
 story_length_profile is one of the V0 allowed profiles
 authoring_craft_summary is present for generate_novel_chapter
 generate_novel_chapter uses summary-only KB context when KB context is available
@@ -1883,6 +2062,35 @@ hint:
 ```text
 已识别为完整故事，将保留剧情事实并改写为剧本。
 ```
+
+If the target-duration dropdown adds long-form support, the product label may
+be:
+
+```text
+长文本模式
+```
+
+Desktop must treat that label as:
+
+```text
+target_duration_mode = long_text_auto
+```
+
+It must not map the label to:
+
+```text
+target_duration_seconds = 60
+```
+
+Desktop may show this light status hint:
+
+```text
+已识别为长文本，将按剧情自动分段；单个镜头仍按 5 / 10 / 15 秒生成。
+```
+
+Users should not be required to manually set complex chapter count, scene
+count, shot count, or internal routing groups. The system should infer long
+text mode or let the user select only the simple product label.
 
 This UI note is a contract note only. It does not modify desktop UI, IPC,
 state, or runtime behavior in this docs-only gate.
