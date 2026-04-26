@@ -280,3 +280,43 @@ Rules:
 - Do not repeat no-op standby instructions just to be exhaustive.
 - A short controller recap may mention omitted standby/end threads in one line
   if it helps explain the overall plan.
+
+## 中文沟通优先规则
+
+Hope / Codex 协调线程默认使用中文沟通。
+
+规则：
+
+- 总控复盘、分线程指令、总控回报、过程更新、归档说明默认使用中文。
+- 代码标识、字段名、命令、commit message、错误原文可以保留英文。
+- 如果引用英文报错或英文文档，必须用中文解释结论和下一步。
+- 除非用户明确要求英文，否则不要用英文写长段过程说明。
+- 如果某个分线程开始用英文汇报，总控应提醒该线程后续改回中文。
+
+## 主线跨线程联动检查规则
+
+每次总控新开、继续、审查或接收 `Hope主线` 线程回报时，必须先判断是否需要联动其他工作面，再下发下一步。
+
+必须检查：
+
+- `Hope契约层`：当主线改 request / response 字段、runtime surface、持久化结构、导出结构、warning、validator、prompt 边界，或任何跨线程契约时，需要联动。
+- `Hope接入点`：当主线改 shell 可见类型、命令面、export bundle 输入输出、preview / draft mirror、runtime metadata，或 intake app 需要镜像的字段时，需要联动。
+- `Hope知识库`：当主线改 taxonomy、routing category、shot_intent 标签、KB 选择规则、seed / snapshot 预期，或任何可能诱发 schema 变化的内容时，需要联动。
+- `Hope桌面端`：当主线改字段、命令、生成 row 语义、prompt_text 形态、warning、导出行为，或桌面端必须展示 / 调用 / 验证的内容时，需要联动。
+
+规则：
+
+- 在总控复盘或主线指令里写明联动判断。
+- 如果某个工作面不需要动作，要简短说明原因。
+- 如果某个工作面需要动作，必须写出对应工作线程内容：
+  - 线程动作：新开 / 沿用 / 待命 / 归档。
+  - 目标线程名。
+  - 负责问题。
+  - 启动条件或依赖。
+  - 允许修改范围。
+  - 禁止事项。
+  - 回报格式。
+- 只下发真正需要执行的线程；不要重复刷待命线程。
+- 如果主线需要新增字段或契约边界，先开契约层线程，再允许 runtime 实现继续。
+- 如果主线只是提升内部生成质量，且不改变既有契约，可以让契约层 / 接入点 / KB 继续待命；但如果影响桌面验收或展示，必须通知桌面端。
+- 不允许 `Hope主线` 静默扩展成 KB schema、桌面 UI、接入点 runtime 或契约变更，除非总控明确放行。
