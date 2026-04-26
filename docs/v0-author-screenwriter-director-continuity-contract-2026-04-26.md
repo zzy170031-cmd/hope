@@ -394,6 +394,9 @@ Required shot outputs:
 shot_intent
 shot_scene_type
 shot_title
+visual_description
+scene_scale
+camera_movement
 character_action
 prompt_text
 ```
@@ -401,6 +404,11 @@ prompt_text
 Every row must serve the current plot fragment. It must not generate a
 beautiful but unrelated image, switch the story subject, or contradict
 continuity.
+
+Row field semantics for `shot_title`, `visual_description`, `scene_scale`,
+and `camera_movement` are governed by
+`docs/shot-script-grounding-adaptive-scene-contract-2026-04-25.md`;
+`camera_movement` is the product-visible `运镜` field, not `shot_title`.
 
 ### prompt_text Layer
 
@@ -1182,6 +1190,9 @@ continuity_note
 shot_intent
 shot_scene_type
 shot_title
+visual_description
+scene_scale
+camera_movement
 character_action
 prompt_text
 content_facts_are_source_of_truth

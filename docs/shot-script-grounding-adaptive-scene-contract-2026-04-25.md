@@ -57,6 +57,10 @@ primary_scene_category
 shot_scene_type
 shot_scene_label
 shot_intent
+shot_title
+visual_description
+scene_scale
+camera_movement
 adaptation_reason
 split_script_to_shot_tasks
 shot_duration_seconds
@@ -119,6 +123,43 @@ target_duration_seconds
   transition, reveal, dialogue, repair, or prompt compilation
 - may help KB Router selection
 - must not replace `shot_script`
+
+`shot_title`
+
+- short product-facing shot title
+- should name the row or beat, not describe camera movement
+- must not carry `camera_movement`, raw KB data, rule IDs, trace data, or
+  internal repair labels
+- if a product table uses the visible label `镜头` to mean camera movement,
+  that visible label should be changed to `运镜`; `shot_title` remains a shot
+  title boundary
+
+`visual_description`
+
+- product-facing description of what is visible in the frame
+- answers what is in the image, where the characters are, and what visual
+  event is happening
+- must be grounded in `shot_script` or accepted story evidence
+- must not be replaced by `camera_movement`
+
+`scene_scale`
+
+- product-facing framing distance or shot scale
+- answers whether the row is a long shot, full shot, medium shot,
+  medium-close shot, close-up, or equivalent visible scale
+- examples include `远景`, `全景`, `中景`, `中近景`, and `特写`
+- must not invent story facts or replace visual action
+
+`camera_movement`
+
+- product-facing Chinese short phrase for camera movement and staging
+- answers how the camera moves, how it is scheduled, and how it combines with
+  `scene_scale` to capture the current action
+- must serve the current `shot_script`
+- must not replace `visual_description`
+- must not invent story facts
+- if no clear grounded movement can be generated, emit
+  `camera_movement_grounding_incomplete`
 
 `adaptation_reason`
 
@@ -401,6 +442,77 @@ Priority behavior:
 
 The Router summary cannot override explicit `shot_script`.
 
+## Shot Row Semantic Boundary
+
+The product table field that represents camera movement should be labeled
+`运镜`, not `镜头`, when it maps to `camera_movement`.
+
+`shot_title` is the shot title. It must not carry camera movement description
+or generic repair labels.
+
+`visual_description` answers:
+
+```text
+what is visible in the frame
+where the characters are
+what visual event is happening
+```
+
+`scene_scale` answers:
+
+```text
+远景
+全景
+中景
+中近景
+特写
+```
+
+`camera_movement` answers:
+
+```text
+how the camera moves
+how the camera is staged
+how the camera combines with scene_scale to capture the action
+```
+
+Allowed `camera_movement` examples:
+
+```text
+定机位
+缓慢推近
+跟随角色后撤
+横移掠过战场
+低机位上摇
+过肩跟拍
+手持轻晃压迫
+从全景推到中近景
+围绕角色半圈移动
+```
+
+Forbidden `camera_movement` examples:
+
+```text
+镜头1：目标人物完成关键动作
+当前镜头主体完成动作
+按当前脚本执行
+visual_scene_core
+fused_scene_performance_core_preserved
+与 visual_description 完全重复的句子
+```
+
+Contract requirements:
+
+- `camera_movement` must be grounded in the current `shot_script`.
+- `camera_movement` must combine with `scene_scale`.
+- `camera_movement` must not replace `visual_description`.
+- `camera_movement` must not add story facts that are absent from the current
+  shot evidence.
+- `camera_movement` must not be copied from internal labels, repair markers,
+  KB rule names, sample IDs, retrieval trace, hash values, or raw prompt data.
+- if no clear grounded movement can be generated, emit
+  `camera_movement_grounding_incomplete`.
+
 ## Seedance-Friendly Segment Strategy
 
 Hope currently does not connect Seedance runtime.
@@ -486,6 +598,10 @@ primary_scene_category
 shot_scene_type
 shot_scene_label
 shot_intent
+shot_title
+visual_description
+scene_scale
+camera_movement
 adaptation_reason
 selected_total_duration_seconds
 script_id
@@ -526,12 +642,19 @@ It may be informed by product-safe compiler inputs:
 ```text
 shot_script
 structured storyboard row
+visual_description
+scene_scale
+camera_movement
 continuity constraints
 ```
 
 The final `prompt_text` must remain clean Seedance2.0 Chinese
 video-storyboard prompt text. It must not mix in internal routing, trace,
 schema, KB, or grounding metadata.
+
+`prompt_text` may include product-safe `camera_movement` wording when it is
+grounded in the current shot, but it must not include internal KB, rule,
+sample, trace, hash, or raw prompt-body information.
 
 It must not include:
 
@@ -587,6 +710,29 @@ KB fields
 source rows
 ```
 
+## Camera Movement Grounding Warning
+
+The camera-movement grounding warning name is:
+
+```text
+camera_movement_grounding_incomplete
+```
+
+This warning is allowed when a generated row cannot produce a clear,
+story-grounded `camera_movement` phrase from `shot_script`, `scene_scale`, and
+accepted storyboard evidence.
+
+It may be emitted only as validator or quality metadata. It must not be copied
+into:
+
+```text
+prompt_text
+Seedance prompt payload
+raw product prose
+KB fields
+source rows
+```
+
 ## Validator Requirements
 
 A later implementation validator must check:
@@ -603,6 +749,15 @@ person subject grounding quality
 shot_duration_seconds source
 duration_source allowed value
 role_action_grounding_incomplete warning boundary
+shot_title is not camera movement
+visual_description describes visible content
+scene_scale describes framing distance
+camera_movement describes camera movement and staging
+camera_movement combines with scene_scale
+camera_movement does not replace visual_description
+camera_movement does not invent story facts
+camera_movement serves current shot_script
+camera_movement_grounding_incomplete warning boundary
 forbidden terms
 no raw prompt_body leakage
 no source_register leakage
