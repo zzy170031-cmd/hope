@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use core_domain::{Exporter, GeneratedStoryboardRow};
 use serde_json::{Map, Value};
@@ -17,6 +17,9 @@ pub const WEEK3_EXPORT_JSON_PATH: &str =
     r"E:\codex\hope\contracts\fixtures\exports\week3-export.json";
 pub const WEEK3_EXPORT_MARKDOWN_PATH: &str =
     r"E:\codex\hope\contracts\fixtures\exports\week3-export.md";
+const WEEK3_EXPORT_XLSX_FILE: &str = "week3-export.xlsx";
+const WEEK3_EXPORT_JSON_FILE: &str = "week3-export.json";
+const WEEK3_EXPORT_MARKDOWN_FILE: &str = "week3-export.md";
 pub const V120_STORYBOARD_EXPORT_DIR: &str = r"E:\codex\hope\exports\v120";
 pub const V120_STORYBOARD_SHEET_MACHINE_NAME: &str = "v120_storyboard_rows";
 pub const V120_STORYBOARD_COLUMNS: &[&str] = &[
@@ -98,11 +101,11 @@ pub struct V120StoryboardExportBundle {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExportError {
     Io {
-        path: &'static str,
+        path: String,
         message: String,
     },
     Parse {
-        path: &'static str,
+        path: String,
         key: &'static str,
         message: String,
     },
@@ -121,14 +124,28 @@ impl ExportEngine {
     }
 
     pub fn export_from_fixtures() -> Result<ExportBundle, ExportError> {
-        let workbook = load_workbook_from_fixtures()?;
-        write_export_files(&workbook)?;
+        Self::export_from_fixture_paths(
+            WEEK3_SHARED_FIXTURE_PATH,
+            WEEK3_VALIDATION_REPORT_PATH,
+            WEEK3_EXPORT_DIR,
+        )
+    }
+
+    pub fn export_from_fixture_paths(
+        shared_fixture_path: impl AsRef<Path>,
+        validation_report_path: impl AsRef<Path>,
+        export_dir: impl AsRef<Path>,
+    ) -> Result<ExportBundle, ExportError> {
+        let workbook =
+            load_workbook_from_paths(shared_fixture_path.as_ref(), validation_report_path.as_ref())?;
+        let (excel_path, json_path, markdown_path) =
+            write_export_files_to_dir(&workbook, export_dir.as_ref())?;
 
         Ok(ExportBundle {
             workbook,
-            excel_path: PathBuf::from(WEEK3_EXPORT_XLSX_PATH),
-            json_path: PathBuf::from(WEEK3_EXPORT_JSON_PATH),
-            markdown_path: PathBuf::from(WEEK3_EXPORT_MARKDOWN_PATH),
+            excel_path,
+            json_path,
+            markdown_path,
         })
     }
 
@@ -153,6 +170,14 @@ pub fn export_week3_from_fixtures() -> Result<ExportBundle, ExportError> {
     ExportEngine::export_from_fixtures()
 }
 
+pub fn export_week3_from_paths(
+    shared_fixture_path: impl AsRef<Path>,
+    validation_report_path: impl AsRef<Path>,
+    export_dir: impl AsRef<Path>,
+) -> Result<ExportBundle, ExportError> {
+    ExportEngine::export_from_fixture_paths(shared_fixture_path, validation_report_path, export_dir)
+}
+
 pub fn export_v120_storyboard_bundle(
     request: &V120StoryboardExportRequest,
 ) -> Result<V120StoryboardExportBundle, ExportError> {
@@ -169,9 +194,12 @@ impl Exporter for ExportEngine {
     }
 }
 
-fn load_workbook_from_fixtures() -> Result<WorkbookManifest, ExportError> {
-    let shared = read_json(WEEK3_SHARED_FIXTURE_PATH)?;
-    let validation = read_json(WEEK3_VALIDATION_REPORT_PATH)?;
+fn load_workbook_from_paths(
+    shared_fixture_path: &Path,
+    validation_report_path: &Path,
+) -> Result<WorkbookManifest, ExportError> {
+    let shared = read_json(shared_fixture_path)?;
+    let validation = read_json(validation_report_path)?;
 
     let mut sheets = Vec::new();
     for sheet in CANONICAL_WORKBOOK_CONTRACT.sheets {
@@ -185,9 +213,9 @@ fn load_workbook_from_fixtures() -> Result<WorkbookManifest, ExportError> {
             sheet.machine_name,
             sheet.columns,
             if sheet.machine_name == "validation_report" {
-                WEEK3_VALIDATION_REPORT_PATH
+                validation_report_path
             } else {
-                WEEK3_SHARED_FIXTURE_PATH
+                shared_fixture_path
             },
         )?;
 
@@ -206,28 +234,35 @@ fn load_workbook_from_fixtures() -> Result<WorkbookManifest, ExportError> {
     })
 }
 
-fn write_export_files(workbook: &WorkbookManifest) -> Result<(), ExportError> {
-    fs::create_dir_all(WEEK3_EXPORT_DIR).map_err(|error| ExportError::Io {
-        path: WEEK3_EXPORT_DIR,
+fn write_export_files_to_dir(
+    workbook: &WorkbookManifest,
+    export_dir: &Path,
+) -> Result<(PathBuf, PathBuf, PathBuf), ExportError> {
+    fs::create_dir_all(export_dir).map_err(|error| ExportError::Io {
+        path: export_dir.display().to_string(),
         message: error.to_string(),
     })?;
 
-    fs::write(WEEK3_EXPORT_JSON_PATH, render_json(workbook)).map_err(|error| ExportError::Io {
-        path: WEEK3_EXPORT_JSON_PATH,
+    let excel_path = export_dir.join(WEEK3_EXPORT_XLSX_FILE);
+    let json_path = export_dir.join(WEEK3_EXPORT_JSON_FILE);
+    let markdown_path = export_dir.join(WEEK3_EXPORT_MARKDOWN_FILE);
+
+    fs::write(&json_path, render_json(workbook)).map_err(|error| ExportError::Io {
+        path: json_path.display().to_string(),
         message: error.to_string(),
     })?;
-    fs::write(WEEK3_EXPORT_MARKDOWN_PATH, render_markdown(workbook)).map_err(|error| {
+    fs::write(&markdown_path, render_markdown(workbook)).map_err(|error| {
         ExportError::Io {
-            path: WEEK3_EXPORT_MARKDOWN_PATH,
+            path: markdown_path.display().to_string(),
             message: error.to_string(),
         }
     })?;
-    fs::write(WEEK3_EXPORT_XLSX_PATH, render_xlsx(workbook)).map_err(|error| ExportError::Io {
-        path: WEEK3_EXPORT_XLSX_PATH,
+    fs::write(&excel_path, render_xlsx(workbook)).map_err(|error| ExportError::Io {
+        path: excel_path.display().to_string(),
         message: error.to_string(),
     })?;
 
-    Ok(())
+    Ok((excel_path, json_path, markdown_path))
 }
 
 fn build_v120_storyboard_workbook(request: &V120StoryboardExportRequest) -> WorkbookManifest {
@@ -299,7 +334,7 @@ fn write_v120_storyboard_export_files(
     workbook: &WorkbookManifest,
 ) -> Result<Vec<V120StoryboardExportArtifact>, ExportError> {
     fs::create_dir_all(V120_STORYBOARD_EXPORT_DIR).map_err(|error| ExportError::Io {
-        path: V120_STORYBOARD_EXPORT_DIR,
+        path: V120_STORYBOARD_EXPORT_DIR.to_string(),
         message: error.to_string(),
     })?;
 
@@ -354,7 +389,7 @@ fn write_v120_export_artifact(
     row_count: u32,
 ) -> Result<V120StoryboardExportArtifact, ExportError> {
     fs::write(&path, &bytes).map_err(|error| ExportError::Io {
-        path: V120_STORYBOARD_EXPORT_DIR,
+        path: path.display().to_string(),
         message: format!("{}: {}", path.display(), error),
     })?;
 
@@ -381,13 +416,13 @@ fn sanitize_file_stem(value: &str) -> String {
     }
 }
 
-fn read_json(path: &'static str) -> Result<Value, ExportError> {
+fn read_json(path: &Path) -> Result<Value, ExportError> {
     let text = fs::read_to_string(path).map_err(|error| ExportError::Io {
-        path,
+        path: path.display().to_string(),
         message: error.to_string(),
     })?;
     serde_json::from_str(&text).map_err(|error| ExportError::Parse {
-        path,
+        path: path.display().to_string(),
         key: "root",
         message: error.to_string(),
     })
@@ -397,13 +432,14 @@ fn parse_sheet_rows(
     source: &Value,
     key: &'static str,
     columns: &[&'static str],
-    path: &'static str,
+    path: &Path,
 ) -> Result<Vec<Vec<String>>, ExportError> {
+    let path_display = path.display().to_string();
     let rows = source
         .get(key)
         .and_then(Value::as_array)
         .ok_or_else(|| ExportError::Parse {
-            path,
+            path: path_display.clone(),
             key,
             message: "missing sheet section".to_string(),
         })?;
@@ -411,7 +447,7 @@ fn parse_sheet_rows(
     rows.iter()
         .map(|row| {
             let object = row.as_object().ok_or_else(|| ExportError::Parse {
-                path,
+                path: path_display.clone(),
                 key,
                 message: "row must be an object".to_string(),
             })?;

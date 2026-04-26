@@ -1,16 +1,13 @@
 mod benchmark_support;
 
-use std::{fs, path::Path};
+use std::fs;
 
-use benchmark_support::{read_json, write_45s_clip_fixture};
-use export_engine::{
-    WEEK3_EXPORT_JSON_PATH, WEEK3_EXPORT_MARKDOWN_PATH, WEEK3_EXPORT_XLSX_PATH,
-    export_week3_from_fixtures,
+use benchmark_support::{
+    TrackedWeek3ExportSnapshot, read_json, write_45s_clip_fixture, write_validation_report,
 };
 use storyboard_pipeline::validate_render_segment_window;
 use validators::{
-    WEEK3_VALIDATION_REPORT_PATH, generate_week3_validation_report, load_week3_shared_fixture,
-    write_week3_validation_report,
+    generate_week3_validation_report, load_week3_shared_fixture,
 };
 use writer_pipeline::{
     DurationPolicy, JsonDocument, ScreenplayInput, ScreenplayOutput, StalePropagation,
@@ -24,7 +21,8 @@ const SCREENPLAY_PATH: &str = r"E:\codex\hope\tests\e2e\45s-clip\screenplay.json
 
 #[test]
 fn benchmark_45s_clip_runs_end_to_end() {
-    write_45s_clip_fixture();
+    let _tracked_exports = TrackedWeek3ExportSnapshot::capture();
+    let fixture_paths = write_45s_clip_fixture();
 
     let clip_brief = read_json(CLIP_BRIEF_PATH);
     let synopsis_json = fs::read_to_string(SYNOPSIS_PATH).expect("synopsis fixture should exist");
@@ -92,7 +90,7 @@ fn benchmark_45s_clip_runs_end_to_end() {
     assert!(synopsis.document.json.contains("45"));
     assert!(screenplay_json.contains("开场任务"));
 
-    let fixture = load_week3_shared_fixture(validators::WEEK3_SHARED_FIXTURE_PATH)
+    let fixture = load_week3_shared_fixture(fixture_paths.shared_fixture_path())
         .expect("shared fixture should load");
     assert_eq!(fixture.project_meta.len(), 1);
     assert!(fixture.narrative_scene.len() >= 1);
@@ -139,15 +137,18 @@ fn benchmark_45s_clip_runs_end_to_end() {
             .all(|row| row.problem_count == 0)
     );
 
-    write_week3_validation_report(WEEK3_VALIDATION_REPORT_PATH)
-        .expect("validation report file should be written");
-    let export_bundle = export_week3_from_fixtures().expect("export should succeed");
+    write_validation_report(
+        fixture_paths.validation_report_path(),
+        serde_json::to_string_pretty(&validation)
+            .expect("validation report should serialize for export"),
+    );
+    let export_bundle = fixture_paths.export_week3().expect("export should succeed");
     assert_eq!(export_bundle.workbook.sheets.len(), 17);
-    assert!(Path::new(WEEK3_EXPORT_XLSX_PATH).exists());
-    assert!(Path::new(WEEK3_EXPORT_JSON_PATH).exists());
-    assert!(Path::new(WEEK3_EXPORT_MARKDOWN_PATH).exists());
+    assert!(export_bundle.excel_path.exists());
+    assert!(export_bundle.json_path.exists());
+    assert!(export_bundle.markdown_path.exists());
 
-    let export_json = read_json(WEEK3_EXPORT_JSON_PATH);
+    let export_json = read_json(&export_bundle.json_path);
     assert_eq!(
         export_json["workbook_chinese_name"].as_str(),
         Some("Hope 导出工作簿")
@@ -166,7 +167,7 @@ fn benchmark_45s_clip_runs_end_to_end() {
     );
 
     let markdown =
-        fs::read_to_string(WEEK3_EXPORT_MARKDOWN_PATH).expect("markdown export should exist");
+        fs::read_to_string(&export_bundle.markdown_path).expect("markdown export should exist");
     assert!(markdown.contains("# Hope 导出工作簿"));
     assert!(markdown.contains("## 校验报告 / `validation_report`"));
     assert!(markdown.contains("render-segment-week3-001"));

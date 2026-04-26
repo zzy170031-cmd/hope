@@ -1,16 +1,13 @@
 mod benchmark_support;
 
-use std::{collections::HashMap, fs, path::Path};
+use std::{collections::HashMap, fs};
 
-use benchmark_support::{EpisodeSpec, read_json, write_fixture};
-use export_engine::{
-    WEEK3_EXPORT_JSON_PATH, WEEK3_EXPORT_MARKDOWN_PATH, WEEK3_EXPORT_XLSX_PATH,
-    export_week3_from_fixtures,
+use benchmark_support::{
+    EpisodeSpec, TrackedWeek3ExportSnapshot, read_json, write_fixture, write_validation_report,
 };
 use storyboard_pipeline::validate_render_segment_window;
 use validators::{
-    WEEK3_SHARED_FIXTURE_PATH, WEEK3_VALIDATION_REPORT_PATH, generate_week3_validation_report,
-    load_week3_shared_fixture, write_week3_validation_report,
+    generate_week3_validation_report, load_week3_shared_fixture,
 };
 use writer_pipeline::{
     DurationPolicy, JsonDocument, ScreenplayInput, ScreenplayOutput, StalePropagation,
@@ -24,7 +21,8 @@ const SCREENPLAY_PATH: &str = r"E:\codex\hope\tests\e2e\60min-project\screenplay
 
 #[test]
 fn benchmark_60min_project_runs_end_to_end() {
-    write_fixture(
+    let _tracked_exports = TrackedWeek3ExportSnapshot::capture();
+    let fixture_paths = write_fixture(
         "60min project",
         60,
         &[
@@ -115,8 +113,8 @@ fn benchmark_60min_project_runs_end_to_end() {
     assert_eq!(story_output.stale.trigger, StaleTrigger::SynopsisChanged);
     assert!(screenplay_json.contains("第 3 集"));
 
-    let fixture =
-        load_week3_shared_fixture(WEEK3_SHARED_FIXTURE_PATH).expect("shared fixture should load");
+    let fixture = load_week3_shared_fixture(fixture_paths.shared_fixture_path())
+        .expect("shared fixture should load");
     assert_eq!(fixture.project_meta[0].target_duration_minutes, 60);
     assert_eq!(fixture.episode_meta.len(), 3);
     assert_eq!(fixture.narrative_scene.len(), 19);
@@ -196,8 +194,6 @@ fn benchmark_60min_project_runs_end_to_end() {
         );
     }
 
-    write_week3_validation_report(WEEK3_VALIDATION_REPORT_PATH)
-        .expect("validation report file should be written");
     let validation = generate_week3_validation_report(&fixture)
         .expect("validation report should generate from shared fixture");
     assert_eq!(validation.validation_report.len(), 457);
@@ -209,13 +205,18 @@ fn benchmark_60min_project_runs_end_to_end() {
             .all(|row| row.problem_count == 0)
     );
 
-    let export_bundle = export_week3_from_fixtures().expect("export should succeed");
+    write_validation_report(
+        fixture_paths.validation_report_path(),
+        serde_json::to_string_pretty(&validation)
+            .expect("validation report should serialize for export"),
+    );
+    let export_bundle = fixture_paths.export_week3().expect("export should succeed");
     assert_eq!(export_bundle.workbook.sheets.len(), 17);
-    assert!(Path::new(WEEK3_EXPORT_XLSX_PATH).exists());
-    assert!(Path::new(WEEK3_EXPORT_JSON_PATH).exists());
-    assert!(Path::new(WEEK3_EXPORT_MARKDOWN_PATH).exists());
+    assert!(export_bundle.excel_path.exists());
+    assert!(export_bundle.json_path.exists());
+    assert!(export_bundle.markdown_path.exists());
 
-    let export_json = read_json(WEEK3_EXPORT_JSON_PATH);
+    let export_json = read_json(&export_bundle.json_path);
     assert_eq!(
         export_json["episode_meta"]
             .as_array()
@@ -247,7 +248,7 @@ fn benchmark_60min_project_runs_end_to_end() {
     );
 
     let markdown =
-        fs::read_to_string(WEEK3_EXPORT_MARKDOWN_PATH).expect("markdown export should exist");
+        fs::read_to_string(&export_bundle.markdown_path).expect("markdown export should exist");
     assert!(markdown.contains("## 集元数据 / `episode_meta`"));
     assert!(markdown.contains("episode-week3-003"));
 }

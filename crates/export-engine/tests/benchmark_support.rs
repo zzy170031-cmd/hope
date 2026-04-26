@@ -1,7 +1,19 @@
-use std::fs;
+#![allow(dead_code)]
 
-use export_engine::WEEK3_SHARED_FIXTURE_PATH;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use export_engine::{
+    ExportBundle, ExportError, WEEK3_EXPORT_JSON_PATH, WEEK3_EXPORT_MARKDOWN_PATH,
+    WEEK3_EXPORT_XLSX_PATH, export_week3_from_paths,
+};
 use serde_json::{Value, json};
+
+static NEXT_TEMP_ID: AtomicUsize = AtomicUsize::new(0);
 
 pub struct EpisodeSpec<'a> {
     pub episode_id: &'a str,
@@ -10,7 +22,139 @@ pub struct EpisodeSpec<'a> {
     pub scene_count: u32,
 }
 
-pub fn write_45s_clip_fixture() {
+pub struct BenchmarkFixturePaths {
+    root_dir: PathBuf,
+    shared_fixture_path: PathBuf,
+    validation_report_path: PathBuf,
+    export_dir: PathBuf,
+}
+
+impl BenchmarkFixturePaths {
+    fn new(label: &str) -> Self {
+        let safe_label = label
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() {
+                    character.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>();
+        let temp_id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        let root_dir = std::env::temp_dir().join(format!(
+            "hope-export-engine-{safe_label}-{}-{timestamp}-{temp_id}",
+            std::process::id()
+        ));
+        let export_dir = root_dir.join("exports");
+        fs::create_dir_all(&export_dir).expect("temporary export directory should be created");
+
+        Self {
+            shared_fixture_path: root_dir.join("week3-shared-fixture.json"),
+            validation_report_path: root_dir.join("week3-validation-report.json"),
+            root_dir,
+            export_dir,
+        }
+    }
+
+    pub fn shared_fixture_path(&self) -> &Path {
+        &self.shared_fixture_path
+    }
+
+    pub fn validation_report_path(&self) -> &Path {
+        &self.validation_report_path
+    }
+
+    pub fn export_week3(&self) -> Result<ExportBundle, ExportError> {
+        export_week3_from_paths(
+            &self.shared_fixture_path,
+            &self.validation_report_path,
+            &self.export_dir,
+        )
+    }
+}
+
+impl Drop for BenchmarkFixturePaths {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root_dir);
+    }
+}
+
+pub struct TrackedWeek3ExportSnapshot {
+    files: Vec<TrackedFileSnapshot>,
+}
+
+struct TrackedFileSnapshot {
+    path: &'static str,
+    bytes: Vec<u8>,
+    modified: SystemTime,
+}
+
+impl TrackedWeek3ExportSnapshot {
+    pub fn capture() -> Self {
+        let files = [
+            WEEK3_EXPORT_JSON_PATH,
+            WEEK3_EXPORT_MARKDOWN_PATH,
+            WEEK3_EXPORT_XLSX_PATH,
+        ]
+        .into_iter()
+        .map(|path| {
+            let bytes = fs::read(path).expect("tracked week3 export fixture should exist");
+            let modified = fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .expect("tracked week3 export fixture metadata should be readable");
+
+            TrackedFileSnapshot {
+                path,
+                bytes,
+                modified,
+            }
+        })
+        .collect();
+
+        Self { files }
+    }
+
+    fn assert_unchanged(&self) {
+        for file in &self.files {
+            let current_bytes =
+                fs::read(file.path).expect("tracked week3 export fixture should still exist");
+            assert!(
+                current_bytes == file.bytes,
+                "tracked week3 export fixture bytes changed: {}",
+                file.path
+            );
+
+            let current_modified = fs::metadata(file.path)
+                .and_then(|metadata| metadata.modified())
+                .expect("tracked week3 export fixture metadata should still be readable");
+            assert_eq!(
+                current_modified, file.modified,
+                "tracked week3 export fixture timestamp changed: {}",
+                file.path
+            );
+        }
+    }
+}
+
+impl Drop for TrackedWeek3ExportSnapshot {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            self.assert_unchanged();
+        }
+    }
+}
+
+pub fn write_validation_report(path: &Path, json: String) {
+    fs::write(path, json).expect("temporary validation report should be written");
+}
+
+pub fn write_45s_clip_fixture() -> BenchmarkFixturePaths {
+    let fixture_paths = BenchmarkFixturePaths::new("45s-clip");
     let fixture = json!({
         "project_meta": [
             {
@@ -184,17 +328,20 @@ pub fn write_45s_clip_fixture() {
     });
 
     fs::write(
-        WEEK3_SHARED_FIXTURE_PATH,
+        fixture_paths.shared_fixture_path(),
         serde_json::to_string_pretty(&fixture).expect("fixture should serialize"),
     )
-    .expect("shared fixture should be written");
+    .expect("temporary shared fixture should be written");
+
+    fixture_paths
 }
 
 pub fn write_fixture(
     benchmark_label: &str,
     project_duration_minutes: u32,
     episode_specs: &[EpisodeSpec<'_>],
-) {
+) -> BenchmarkFixturePaths {
+    let fixture_paths = BenchmarkFixturePaths::new(benchmark_label);
     let mut narrative_scenes = Vec::new();
     let mut render_segments = Vec::new();
     let mut cuts = Vec::new();
@@ -395,10 +542,12 @@ pub fn write_fixture(
     });
 
     fs::write(
-        WEEK3_SHARED_FIXTURE_PATH,
+        fixture_paths.shared_fixture_path(),
         serde_json::to_string_pretty(&fixture).expect("fixture should serialize"),
     )
-    .expect("shared fixture should be written");
+    .expect("temporary shared fixture should be written");
+
+    fixture_paths
 }
 
 pub fn split_cut_durations(total_seconds: u32) -> [u32; 3] {
@@ -411,7 +560,7 @@ pub fn split_cut_durations(total_seconds: u32) -> [u32; 3] {
     ]
 }
 
-pub fn read_json(path: &str) -> Value {
+pub fn read_json(path: impl AsRef<Path>) -> Value {
     let text = fs::read_to_string(path).expect("json fixture should exist");
     serde_json::from_str(&text).expect("json fixture should parse")
 }
