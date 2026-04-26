@@ -1934,30 +1934,30 @@ qwen_request: {
             <div className="task-row task-row--compact">
               <label className="task-index-select">
                 <span>镜头序号</span>
+                <strong className="task-index-value">
+                  {currentSceneTask
+                    ? `第 ${Math.max(1, sceneTasks.findIndex((task) => task.id === currentSceneTask.id) + 1)} 个`
+                    : "暂无镜头"}
+                </strong>
+              </label>
+              <label className="task-name-select">
                 <select
                   value={currentTaskId ?? ""}
                   onChange={(event) => handleSelectSceneTask(event.target.value)}
                   disabled={!sceneTasks.length || bridgeBusy !== null}
-                  aria-label="选择镜头序号"
-                  title={currentSceneTask?.name ?? ""}
+                  aria-label="选择镜头任务"
+                  title={currentSceneTask?.name ?? taskName}
                 >
                   <option value="" disabled>
-                    {sceneTasks.length ? "选择镜头" : "暂无镜头"}
+                    {sceneTasks.length ? "选择镜头任务" : taskName || "暂无镜头任务"}
                   </option>
                   {sceneTasks.map((task, index) => (
                     <option key={task.id} value={task.id}>
-                      第 {index + 1} 个
+                      {`第 ${index + 1} 个 · ${task.name}`}
                     </option>
                   ))}
                 </select>
               </label>
-              <input
-                className="task-name-input"
-                value={taskName}
-                onChange={(event) => setTaskName(event.target.value)}
-                aria-label="当前镜头任务名称"
-                placeholder="第 1 个镜头"
-              />
               <button
                 type="button"
                 className="action-button action-button--light"

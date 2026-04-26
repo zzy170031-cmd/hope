@@ -523,6 +523,7 @@ textarea {
 
 .scene-select select,
 .task-name-input,
+.task-name-select select,
 .duration-select select,
 .jump-form input,
 .edit-grid input,
@@ -534,6 +535,7 @@ textarea {
 .scene-select select,
 .duration-select select,
 .task-name-input,
+.task-name-select select,
 .edit-grid input,
 .jump-form input {
   height: var(--control-height);
@@ -734,19 +736,6 @@ textarea {
   text-align: center;
 }
 
-.task-index-select::after {
-  content: "";
-  position: absolute;
-  right: 13px;
-  bottom: 14px;
-  width: 6px;
-  height: 6px;
-  border-right: 2px solid var(--navy);
-  border-bottom: 2px solid var(--navy);
-  pointer-events: none;
-  transform: rotate(45deg);
-}
-
 .task-index-select span {
   color: var(--navy);
   font-size: 10.5px;
@@ -755,26 +744,57 @@ textarea {
   white-space: nowrap;
 }
 
-.task-index-select select {
-  appearance: none;
+.task-index-value {
+  display: block;
   width: 100%;
   min-width: 0;
-  height: 20px;
-  padding: 0 18px 0 8px;
-  border: 0;
-  background: transparent;
+  overflow: hidden;
   color: var(--navy);
   font-size: 12px;
   font-weight: 800;
   line-height: 20px;
-  overflow: hidden;
   text-align: center;
-  text-align-last: center;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.task-index-select select:disabled {
+.task-name-select {
+  position: relative;
+  display: block;
+  min-width: 0;
+  height: var(--control-height);
+}
+
+.task-name-select::after {
+  content: "";
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--navy);
+  border-bottom: 2px solid var(--navy);
+  pointer-events: none;
+  transform: translateY(-65%) rotate(45deg);
+}
+
+.task-name-select select {
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  padding: 0 38px 0 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--navy);
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-name-select select:disabled {
   color: var(--navy);
   opacity: 1;
 }
