@@ -719,6 +719,7 @@ textarea {
 
 .task-index-select {
   display: grid;
+  position: relative;
   grid-template-rows: 13px 20px;
   gap: 2px;
   align-content: center;
@@ -733,6 +734,19 @@ textarea {
   text-align: center;
 }
 
+.task-index-select::after {
+  content: "";
+  position: absolute;
+  right: 13px;
+  bottom: 14px;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid var(--navy);
+  border-bottom: 2px solid var(--navy);
+  pointer-events: none;
+  transform: rotate(45deg);
+}
+
 .task-index-select span {
   color: var(--navy);
   font-size: 10.5px;
@@ -742,10 +756,11 @@ textarea {
 }
 
 .task-index-select select {
+  appearance: none;
   width: 100%;
   min-width: 0;
   height: 20px;
-  padding: 0 22px;
+  padding: 0 18px 0 8px;
   border: 0;
   background: transparent;
   color: var(--navy);
