@@ -557,8 +557,11 @@ textarea {
 }
 
 .synopsis-preview {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 3px;
   height: 74px;
-  padding: 14px 92px 14px 14px;
+  padding: 10px 92px 8px 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: #fff;
@@ -572,11 +575,23 @@ textarea {
 
 .synopsis-preview__text {
   display: -webkit-box;
-  max-height: 44px;
+  max-height: 38px;
   overflow: hidden;
-  line-height: 22px;
+  line-height: 19px;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.source-input-status {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .text-control {
@@ -611,16 +626,22 @@ textarea {
 
 .script-actions {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
-  gap: 8px;
-  align-self: stretch;
+  grid-template-columns: 1fr;
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  height: 74px;
+  align-self: center;
   align-content: center;
   align-items: stretch;
 }
 
 .script-actions .action-button {
-  height: var(--control-height);
+  height: 100%;
+  min-height: 0;
   width: 100%;
+  padding: 0 10px;
+  font-size: 12px;
+  line-height: 1.15;
 }
 
 .bridge-status {

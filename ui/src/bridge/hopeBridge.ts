@@ -14,6 +14,7 @@ import type {
   GenerateStoryboardRequest,
   GenerateStoryboardResponse,
   GeneratedStoryboardRow,
+  ImportedStoryDocument,
   KbRouterRuntimeResponse,
   KbRouterSelectedRule,
   PreviewItem,
@@ -27,6 +28,7 @@ import type {
   SaveStoryboardShotResultRequest,
   SaveStoryboardShotResultResponse,
   StoryboardRenderSegmentCutPreviewSnapshotRequest,
+  SourceStoryFacts,
   TextModelProviderStatus,
   UpdateStoryboardShotResultRequest,
   UpdateStoryboardShotResultResponse,
@@ -60,6 +62,7 @@ export const HOPE_TAURI_COMMANDS = {
   removeStoryboardShotResult: "remove_storyboard_shot_result",
   exportStoryboardBank: "export_storyboard_bank",
   configureTextModelProvider: "configure_text_model_provider",
+  importStoryDocument: "import_story_document",
   selectExportSavePath: "select_export_save_path",
   copyExportArtifactToPath: "copy_export_artifact_to_path",
 } as const;
@@ -131,6 +134,7 @@ const PHASE1_REAL_COMMANDS = new Set<HopeCommandName>([
   HOPE_TAURI_COMMANDS.removeStoryboardShotResult,
   HOPE_TAURI_COMMANDS.exportStoryboardBank,
   HOPE_TAURI_COMMANDS.configureTextModelProvider,
+  HOPE_TAURI_COMMANDS.importStoryDocument,
   HOPE_TAURI_COMMANDS.selectExportSavePath,
   HOPE_TAURI_COMMANDS.copyExportArtifactToPath,
 ]);
@@ -510,6 +514,66 @@ function normalizeWarningList(raw: unknown): ProductWarning[] {
   return Array.isArray(raw) ? raw.map((item) => normalizeProductWarning(item)) : [];
 }
 
+function stringArrayFrom(raw: Record<string, unknown>, snakeKey: string, camelKey: string): string[] {
+  const value = raw[snakeKey] ?? raw[camelKey];
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+}
+
+function normalizeSourceStoryFacts(raw: unknown): SourceStoryFacts {
+  if (!raw || typeof raw !== "object") {
+    return {};
+  }
+
+  const facts = readObject(raw, "source story facts");
+  const endingState = String(facts.ending_state ?? facts.endingState ?? "");
+  return {
+    character_names: stringArrayFrom(facts, "character_names", "characterNames"),
+    characterNames: stringArrayFrom(facts, "character_names", "characterNames"),
+    character_relationships: stringArrayFrom(
+      facts,
+      "character_relationships",
+      "characterRelationships",
+    ),
+    characterRelationships: stringArrayFrom(
+      facts,
+      "character_relationships",
+      "characterRelationships",
+    ),
+    core_events: stringArrayFrom(facts, "core_events", "coreEvents"),
+    coreEvents: stringArrayFrom(facts, "core_events", "coreEvents"),
+    event_order: stringArrayFrom(facts, "event_order", "eventOrder"),
+    eventOrder: stringArrayFrom(facts, "event_order", "eventOrder"),
+    timeline_facts: stringArrayFrom(facts, "timeline_facts", "timelineFacts"),
+    timelineFacts: stringArrayFrom(facts, "timeline_facts", "timelineFacts"),
+    prop_state: stringArrayFrom(facts, "prop_state", "propState"),
+    propState: stringArrayFrom(facts, "prop_state", "propState"),
+    location_facts: stringArrayFrom(facts, "location_facts", "locationFacts"),
+    locationFacts: stringArrayFrom(facts, "location_facts", "locationFacts"),
+    emotional_progression: stringArrayFrom(
+      facts,
+      "emotional_progression",
+      "emotionalProgression",
+    ),
+    emotionalProgression: stringArrayFrom(
+      facts,
+      "emotional_progression",
+      "emotionalProgression",
+    ),
+    conflict_progression: stringArrayFrom(
+      facts,
+      "conflict_progression",
+      "conflictProgression",
+    ),
+    conflictProgression: stringArrayFrom(
+      facts,
+      "conflict_progression",
+      "conflictProgression",
+    ),
+    ending_state: endingState,
+    endingState,
+  };
+}
+
 function normalizeKbRouterSelectedRule(raw: unknown): KbRouterSelectedRule {
   const rule = readObject(raw, "kb router selected rule");
   return {
@@ -564,12 +628,34 @@ function normalizeKbRouterResult(raw: unknown): KbRouterRuntimeResponse | null {
 function normalizeExpandScriptResponse(raw: unknown): ExpandScriptResponse {
   const response = readObject(raw, "expand_script response");
   return {
+    status: String(response.status ?? "Ready") as ExpandScriptResponse["status"],
     script_id: String(response.script_id ?? response.scriptId ?? ""),
     expanded_script_text: String(
       response.expanded_script_text ?? response.expandedScriptText ?? "",
     ),
     script_hash: String(response.script_hash ?? response.scriptHash ?? ""),
+    blockers: normalizeWarningList(response.blockers),
     warnings: normalizeWarningList(response.warnings),
+    source_input_type: String(response.source_input_type ?? response.sourceInputType ?? ""),
+    authoring_mode: String(response.authoring_mode ?? response.authoringMode ?? ""),
+    source_material_summary: String(
+      response.source_material_summary ?? response.sourceMaterialSummary ?? "",
+    ),
+    source_story_facts: normalizeSourceStoryFacts(
+      response.source_story_facts ?? response.sourceStoryFacts,
+    ),
+    preserved_fact_summary: String(
+      response.preserved_fact_summary ?? response.preservedFactSummary ?? "",
+    ),
+    changed_for_screenplay_summary: String(
+      response.changed_for_screenplay_summary ?? response.changedForScreenplaySummary ?? "",
+    ),
+    omitted_detail_summary: String(
+      response.omitted_detail_summary ?? response.omittedDetailSummary ?? "",
+    ),
+    continuity_warnings: normalizeWarningList(
+      response.continuity_warnings ?? response.continuityWarnings,
+    ),
     kb_router_result: normalizeKbRouterResult(
       response.kb_router_result ?? response.kbRouterResult ?? response,
     ),
@@ -889,6 +975,7 @@ function fallbackForCommand<T>(command: HopeCommandName, payload?: HopeCommandPa
     case HOPE_TAURI_COMMANDS.updateStoryboardShotResult:
     case HOPE_TAURI_COMMANDS.removeStoryboardShotResult:
     case HOPE_TAURI_COMMANDS.exportStoryboardBank:
+    case HOPE_TAURI_COMMANDS.importStoryDocument:
       throw new Error(`${command} requires the desktop bridge.`);
     case HOPE_TAURI_COMMANDS.configureTextModelProvider: {
       const request = payload as ConfigureTextModelProviderRequest | undefined;
@@ -965,7 +1052,7 @@ async function invokeRequiredDesktopCommand<T>(
 ): Promise<T> {
   const desktopInvoke = resolveDesktopInvoke();
   if (!desktopInvoke) {
-    throw new Error("保存路径选择需要在 Hope 桌面应用中使用。");
+    throw new Error("此操作需要在 Hope 桌面应用中使用。");
   }
 
   return invokeDesktopCommand<T>(desktopInvoke, command, payload);
@@ -1014,6 +1101,26 @@ export async function loadExportValidationSnapshot(project_id = DEFAULT_PROJECT_
 export async function expandScript(request: ExpandScriptRequest) {
   const raw = await invokeHopeCommand<unknown>(HOPE_TAURI_COMMANDS.expandScript, request);
   return normalizeExpandScriptResponse(raw);
+}
+
+function normalizeImportedStoryDocument(raw: unknown): ImportedStoryDocument | null {
+  if (raw === null || typeof raw === "undefined") {
+    return null;
+  }
+
+  const document = readObject(raw, "imported story document");
+  return {
+    file_type: String(document.file_type ?? document.fileType ?? ""),
+    text: String(document.text ?? ""),
+  };
+}
+
+export async function importStoryDocument() {
+  const raw = await invokeRequiredDesktopCommand<unknown>(
+    HOPE_TAURI_COMMANDS.importStoryDocument,
+    undefined,
+  );
+  return normalizeImportedStoryDocument(raw);
 }
 
 export async function generateStoryboard(request: GenerateStoryboardRequest) {

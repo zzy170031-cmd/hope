@@ -153,6 +153,30 @@ pub struct ProductWarning {
     pub related_sample_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourceStoryFacts {
+    #[serde(default)]
+    pub character_names: Vec<String>,
+    #[serde(default)]
+    pub character_relationships: Vec<String>,
+    #[serde(default)]
+    pub core_events: Vec<String>,
+    #[serde(default)]
+    pub event_order: Vec<String>,
+    #[serde(default)]
+    pub timeline_facts: Vec<String>,
+    #[serde(default)]
+    pub prop_state: Vec<String>,
+    #[serde(default)]
+    pub location_facts: Vec<String>,
+    #[serde(default)]
+    pub emotional_progression: Vec<String>,
+    #[serde(default)]
+    pub conflict_progression: Vec<String>,
+    #[serde(default)]
+    pub ending_state: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SequenceGrouping {
     pub structure_mode: StructureMode,
@@ -237,6 +261,20 @@ pub struct ExpandScriptRequest {
     pub target_duration_seconds: Option<u16>,
     #[serde(default)]
     pub selected_total_duration_seconds: Option<u16>,
+    #[serde(default)]
+    pub source_input_type: String,
+    #[serde(default)]
+    pub authoring_mode: String,
+    #[serde(default)]
+    pub source_material_summary: String,
+    #[serde(default)]
+    pub source_story_facts: SourceStoryFacts,
+    #[serde(default)]
+    pub preserved_fact_summary: String,
+    #[serde(default)]
+    pub changed_for_screenplay_summary: String,
+    #[serde(default)]
+    pub omitted_detail_summary: String,
     pub synopsis_text: String,
 }
 
@@ -339,10 +377,30 @@ pub struct KbRouterRuntimeResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExpandScriptResponse {
+    #[serde(default = "default_bridge_call_status")]
+    pub status: BridgeCallStatus,
     pub script_id: String,
     pub expanded_script_text: String,
     pub script_hash: String,
+    #[serde(default)]
+    pub blockers: Vec<ProductWarning>,
     pub warnings: Vec<ProductWarning>,
+    #[serde(default)]
+    pub source_input_type: String,
+    #[serde(default)]
+    pub authoring_mode: String,
+    #[serde(default)]
+    pub source_material_summary: String,
+    #[serde(default)]
+    pub source_story_facts: SourceStoryFacts,
+    #[serde(default)]
+    pub preserved_fact_summary: String,
+    #[serde(default)]
+    pub changed_for_screenplay_summary: String,
+    #[serde(default)]
+    pub omitted_detail_summary: String,
+    #[serde(default)]
+    pub continuity_warnings: Vec<ProductWarning>,
     pub kb_router_result: KbRouterRuntimeResponse,
 }
 
@@ -648,4 +706,8 @@ pub struct ExportBundleResponse {
 
 fn default_prompt_text_compilation_status() -> PromptTextCompilationStatus {
     PromptTextCompilationStatus::Blocked
+}
+
+fn default_bridge_call_status() -> BridgeCallStatus {
+    BridgeCallStatus::Ready
 }

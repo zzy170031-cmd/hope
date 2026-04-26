@@ -29,7 +29,7 @@ use hope_app::{
         ValidationExportPanelSnapshot, WriterEntrySnapshot,
     },
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, process::Command};
 
 #[cfg(windows)]
@@ -47,6 +47,12 @@ struct SelectExportSavePathRequest {
 struct CopyExportArtifactToPathRequest {
     source_path: String,
     target_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ImportedStoryDocument {
+    file_type: String,
+    text: String,
 }
 
 fn main() {
@@ -84,6 +90,7 @@ fn run_native_host() {
             remove_storyboard_shot_result,
             export_storyboard_bank,
             configure_text_model_provider,
+            import_story_document,
             select_export_save_path,
             copy_export_artifact_to_path
         ])
@@ -311,6 +318,94 @@ fn configure_text_model_provider(
         DesktopInvokeResponse::ConfigureTextModelProvider(response) => Ok(response),
         _ => Err("desktop invoke returned an unexpected model provider response".to_string()),
     }
+}
+
+#[tauri::command]
+fn import_story_document() -> Result<Option<ImportedStoryDocument>, String> {
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+$OutputEncoding = New-Object System.Text.UTF8Encoding $false
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = '选择故事文档'
+$dialog.Filter = '故事文档 (*.docx;*.txt)|*.docx;*.txt'
+$dialog.Multiselect = $false
+$result = $dialog.ShowDialog()
+if ($result -ne [System.Windows.Forms.DialogResult]::OK) {
+  exit 2
+}
+$ext = [System.IO.Path]::GetExtension($dialog.FileName).ToLowerInvariant()
+if ($ext -eq '.txt') {
+  try {
+    $text = [System.IO.File]::ReadAllText($dialog.FileName, [System.Text.Encoding]::UTF8)
+  } catch {
+    $text = [System.IO.File]::ReadAllText($dialog.FileName, [System.Text.Encoding]::Default)
+  }
+} elseif ($ext -eq '.docx') {
+  $zip = [System.IO.Compression.ZipFile]::OpenRead($dialog.FileName)
+  try {
+    $entry = $zip.GetEntry('word/document.xml')
+    if ($null -eq $entry) { throw 'document xml missing' }
+    $reader = New-Object System.IO.StreamReader($entry.Open())
+    try { [xml]$xml = $reader.ReadToEnd() } finally { $reader.Close() }
+    $ns = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
+    $ns.AddNamespace('w', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main')
+    $paragraphs = New-Object System.Collections.Generic.List[string]
+    foreach ($paragraph in $xml.SelectNodes('//w:p', $ns)) {
+      $parts = New-Object System.Collections.Generic.List[string]
+      foreach ($node in $paragraph.SelectNodes('.//w:t', $ns)) {
+        if ($node.InnerText) { [void]$parts.Add($node.InnerText) }
+      }
+      $line = [string]::Join('', $parts).Trim()
+      if ($line.Length -gt 0) { [void]$paragraphs.Add($line) }
+    }
+    $text = [string]::Join("`n", $paragraphs)
+  } finally {
+    $zip.Dispose()
+  }
+} else {
+  throw 'unsupported extension'
+}
+$payload = [pscustomobject]@{
+  file_type = $ext.TrimStart('.')
+  text = $text
+}
+$payload | ConvertTo-Json -Compress
+"#;
+
+    let mut command = Command::new("powershell.exe");
+    command
+        .arg("-NoProfile")
+        .arg("-STA")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-Command")
+        .arg(script);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = command
+        .output()
+        .map_err(|_| "文档导入窗口未能打开，请稍后重试。".to_string())?;
+    if output.status.code() == Some(2) {
+        return Ok(None);
+    }
+    if !output.status.success() {
+        return Err("文档读取失败，请确认文件为 docx 或 txt 后重试。".to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        return Ok(None);
+    }
+    let document = serde_json::from_str::<ImportedStoryDocument>(&stdout)
+        .map_err(|_| "文档正文解析失败，请换用 txt 或标准 docx 后重试。".to_string())?;
+    if document.text.trim().is_empty() {
+        return Err("文档正文为空，请选择包含正文的 docx 或 txt。".to_string());
+    }
+    Ok(Some(document))
 }
 
 #[tauri::command]

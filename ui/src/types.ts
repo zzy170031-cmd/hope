@@ -71,6 +71,29 @@ export interface ProductWarning {
   relatedSampleId?: string | null;
 }
 
+export interface SourceStoryFacts {
+  character_names?: string[];
+  characterNames?: string[];
+  character_relationships?: string[];
+  characterRelationships?: string[];
+  core_events?: string[];
+  coreEvents?: string[];
+  event_order?: string[];
+  eventOrder?: string[];
+  timeline_facts?: string[];
+  timelineFacts?: string[];
+  prop_state?: string[];
+  propState?: string[];
+  location_facts?: string[];
+  locationFacts?: string[];
+  emotional_progression?: string[];
+  emotionalProgression?: string[];
+  conflict_progression?: string[];
+  conflictProgression?: string[];
+  ending_state?: string;
+  endingState?: string;
+}
+
 export interface ExpandScriptRequest {
   scene_type: string;
   scene_label?: string;
@@ -78,6 +101,13 @@ export interface ExpandScriptRequest {
   model_config_summary?: ModelConfigSummary;
   target_duration_seconds?: number;
   selected_total_duration_seconds?: number;
+  source_input_type?: string;
+  authoring_mode?: string;
+  source_material_summary?: string;
+  source_story_facts?: SourceStoryFacts;
+  preserved_fact_summary?: string;
+  changed_for_screenplay_summary?: string;
+  omitted_detail_summary?: string;
   synopsis_text: string;
 }
 
@@ -118,11 +148,26 @@ export interface TextModelProviderStatus {
 }
 
 export interface ExpandScriptResponse {
+  status?: "Ready" | "WarningOnly" | "Blocked" | "Gated";
   script_id: string;
   expanded_script_text: string;
   script_hash: string;
+  blockers?: ProductWarning[];
   warnings: ProductWarning[];
+  source_input_type?: string;
+  authoring_mode?: string;
+  source_material_summary?: string;
+  source_story_facts?: SourceStoryFacts;
+  preserved_fact_summary?: string;
+  changed_for_screenplay_summary?: string;
+  omitted_detail_summary?: string;
+  continuity_warnings?: ProductWarning[];
   kb_router_result?: KbRouterRuntimeResponse | null;
+}
+
+export interface ImportedStoryDocument {
+  file_type: "docx" | "txt" | string;
+  text: string;
 }
 
 export interface KbRouterSelectedRule {

@@ -26,11 +26,13 @@ use core_domain::{
     PromptTextCompilationStatus, RemoveStoryboardShotResultRequest,
     RemoveStoryboardShotResultResponse, SaveStoryboardShotResultRequest,
     SaveStoryboardShotResultResponse, ScenePerformanceProjection, SequenceFieldState,
-    SequenceGrouping, ShotGroundingSource, StoryboardDurationPlan, StoryboardExportStatus,
-    StructureMode, TextGenerationOutputSchema, TextGenerationRequest, TextGenerationResponse,
-    TextGenerationTask, TextModelProvider, TextModelProviderKind, UpdateStoryboardRowsRequest,
-    UpdateStoryboardShotResultRequest, UpdateStoryboardShotResultResponse,
+    SequenceGrouping, ShotGroundingSource, StoryboardDurationPlan,
+    StoryboardExportStatus, StructureMode, TextGenerationOutputSchema, TextGenerationRequest,
+    TextGenerationResponse, TextGenerationTask, TextModelProvider, TextModelProviderKind,
+    UpdateStoryboardRowsRequest, UpdateStoryboardShotResultRequest,
+    UpdateStoryboardShotResultResponse,
 };
+use core_domain::contracts::SourceStoryFacts;
 use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -250,6 +252,8 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
     let scene_category = request.scene_category.as_deref().unwrap_or_default().trim();
     let normalized_scene_type = normalize_scene_type(&request.scene_type);
     let target_duration_seconds = resolve_expand_script_target_duration_seconds(&request);
+    let source_analysis = analyze_desktop_source_input(&request.synopsis_text, &request);
+    let is_story_expansion = is_story_expansion_request(&request, &source_analysis);
     let router_request = KbRouterRuntimeRequest {
         scene_type: normalized_scene_type.clone(),
         synopsis_text: request.synopsis_text.clone(),
@@ -263,11 +267,13 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
         structure_type: None,
     };
     let script_hash = stable_hash_hex(&format!(
-        "{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         request.scene_type.trim(),
         scene_label,
         scene_category,
         target_duration_seconds,
+        source_analysis.source_input_type.as_str(),
+        source_analysis.authoring_mode.as_str(),
         model_config_hash_input(request.model_config_summary.as_ref()),
         request.synopsis_text.trim()
     ));
@@ -336,21 +342,42 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
             related_sample_id: None,
         });
     }
-    let fallback_script = build_deterministic_expanded_story_script(
-        &request.synopsis_text,
-        scene_label,
-        target_duration_seconds,
-    );
+    warnings.extend(source_analysis.continuity_warnings.clone());
+    let fallback_script = if is_story_expansion {
+        build_deterministic_expanded_story_material(&request.synopsis_text, scene_label)
+    } else {
+        build_deterministic_rewrite_script(
+            &request.synopsis_text,
+            scene_label,
+            target_duration_seconds,
+            &source_analysis,
+        )
+    };
     let expanded_script_text = live_text
+        .filter(|_| !is_story_expansion)
         .unwrap_or(fallback_script.as_str())
         .trim()
         .to_string();
 
     let response = ExpandScriptResponse {
+        status: if warnings.is_empty() {
+            BridgeCallStatus::Ready
+        } else {
+            BridgeCallStatus::WarningOnly
+        },
         script_id,
         expanded_script_text,
         script_hash,
+        blockers: vec![],
         warnings,
+        source_input_type: source_analysis.source_input_type.clone(),
+        authoring_mode: source_analysis.authoring_mode.clone(),
+        source_material_summary: source_analysis.source_material_summary.clone(),
+        source_story_facts: source_analysis.source_story_facts.clone(),
+        preserved_fact_summary: source_analysis.preserved_fact_summary.clone(),
+        changed_for_screenplay_summary: source_analysis.changed_for_screenplay_summary.clone(),
+        omitted_detail_summary: source_analysis.omitted_detail_summary.clone(),
+        continuity_warnings: source_analysis.continuity_warnings.clone(),
         kb_router_result,
     };
     state.remember_script(response.clone());
@@ -2132,6 +2159,360 @@ fn build_deterministic_expanded_story_script(
     }
     beats.push("结尾让主角完成一次明确的转折或确认，为后续镜头拆解留下连续的动作线、情绪线和空间线。".to_string());
     beats.join(" ")
+}
+
+#[derive(Debug, Clone)]
+struct DesktopSourceInputAnalysis {
+    source_input_type: String,
+    authoring_mode: String,
+    source_material_summary: String,
+    source_story_facts: SourceStoryFacts,
+    preserved_fact_summary: String,
+    changed_for_screenplay_summary: String,
+    omitted_detail_summary: String,
+    continuity_warnings: Vec<ProductWarning>,
+}
+
+fn analyze_desktop_source_input(
+    source_text: &str,
+    request: &ExpandScriptRequest,
+) -> DesktopSourceInputAnalysis {
+    let detected_input_type = classify_desktop_source_input(source_text);
+    let source_input_type = non_blank_string(&request.source_input_type)
+        .unwrap_or_else(|| detected_input_type.clone());
+    let authoring_mode = non_blank_string(&request.authoring_mode)
+        .unwrap_or_else(|| authoring_mode_for_source_input_type(&source_input_type).to_string());
+    let source_story_facts = if source_facts_are_empty(&request.source_story_facts) {
+        extract_desktop_source_story_facts(source_text)
+    } else {
+        request.source_story_facts.clone()
+    };
+    let source_material_summary = non_blank_string(&request.source_material_summary)
+        .unwrap_or_else(|| compact_source_summary(source_text, "未提供源材料", 260));
+    let preserved_fact_summary = non_blank_string(&request.preserved_fact_summary)
+        .unwrap_or_else(|| build_preserved_fact_summary(&source_story_facts));
+    let changed_for_screenplay_summary = non_blank_string(&request.changed_for_screenplay_summary)
+        .unwrap_or_else(|| changed_for_screenplay_summary(&source_input_type, &authoring_mode));
+    let omitted_detail_summary = non_blank_string(&request.omitted_detail_summary)
+        .unwrap_or_else(|| omitted_detail_summary(&source_input_type, &source_story_facts));
+    let mut continuity_warnings = Vec::new();
+    if source_input_type == "mixed_material" {
+        continuity_warnings.push(ProductWarning {
+            code: "source_input_type_uncertain".to_string(),
+            message: "材料类型不够明确，已按保守方式整理为可拍剧本。".to_string(),
+            related_sample_id: None,
+        });
+    }
+    if source_text.chars().count() > 6_000 {
+        continuity_warnings.push(ProductWarning {
+            code: "source_document_too_long_for_single_pass".to_string(),
+            message: "源文档较长，本轮会优先保留人物、事件顺序和结尾状态。".to_string(),
+            related_sample_id: None,
+        });
+    }
+
+    DesktopSourceInputAnalysis {
+        source_input_type,
+        authoring_mode,
+        source_material_summary,
+        source_story_facts,
+        preserved_fact_summary,
+        changed_for_screenplay_summary,
+        omitted_detail_summary,
+        continuity_warnings,
+    }
+}
+
+fn is_story_expansion_request(
+    request: &ExpandScriptRequest,
+    analysis: &DesktopSourceInputAnalysis,
+) -> bool {
+    analysis.source_input_type == "synopsis"
+        && analysis.authoring_mode == "expand_from_synopsis"
+        && request.target_duration_seconds.is_none()
+        && request.selected_total_duration_seconds.is_none()
+}
+
+fn classify_desktop_source_input(source_text: &str) -> String {
+    let trimmed = source_text.trim();
+    let segments = split_story_segments(trimmed);
+    let char_count = trimmed.chars().count();
+    let has_screenplay_marker = contains_any_story_term(
+        trimmed,
+        &[
+            "剧本", "场景", "镜头", "对白", "内景", "外景", "CUT", "INT.", "EXT.", "角色：",
+            "旁白：",
+        ],
+    );
+    let has_novel_marker = contains_any_story_term(
+        trimmed,
+        &[
+            "第1章",
+            "第一章",
+            "第 1 章",
+            "章节",
+            "本章",
+            "章末",
+            "小说章节",
+            "上一章",
+            "下一章",
+        ],
+    );
+    let has_synopsis_marker =
+        contains_any_story_term(trimmed, &["梗概", "故事大纲", "简介", "一句话", "概述"]);
+    let looks_like_long_story = char_count >= 260 || segments.len() >= 5;
+
+    if has_screenplay_marker && (has_novel_marker || has_synopsis_marker) {
+        "mixed_material".to_string()
+    } else if has_screenplay_marker {
+        "screenplay_text".to_string()
+    } else if has_novel_marker {
+        "novel_chapter".to_string()
+    } else if looks_like_long_story {
+        "full_story".to_string()
+    } else {
+        "synopsis".to_string()
+    }
+}
+
+fn authoring_mode_for_source_input_type(source_input_type: &str) -> &'static str {
+    match source_input_type {
+        "full_story" => "rewrite_from_full_story",
+        "novel_chapter" => "adapt_story_to_screenplay",
+        "screenplay_text" => "polish_existing_screenplay",
+        "mixed_material" => "conservative_rewrite_from_mixed_material",
+        _ => "expand_from_synopsis",
+    }
+}
+
+fn extract_desktop_source_story_facts(source_text: &str) -> SourceStoryFacts {
+    let registry = CharacterRegistry::from_story_text(source_text, source_text);
+    let mut facts = SourceStoryFacts::default();
+    for character in &registry.characters {
+        let name = trim_detected_character_name(&character.name);
+        push_unique_fact(&mut facts.character_names, name.clone());
+        push_unique_fact(
+            &mut facts.character_relationships,
+            format!("{}:{}", character.role, name),
+        );
+    }
+    let segments = split_story_segments(source_text);
+    for (index, segment) in segments.iter().enumerate() {
+        let compact = compact_source_summary(segment, "source event", 120);
+        if index < 8 {
+            push_unique_fact(&mut facts.core_events, compact.clone());
+        }
+        if index < 12 {
+            push_unique_fact(&mut facts.event_order, format!("{}: {}", index + 1, compact));
+        }
+        if contains_any_story_term(
+            segment,
+            &["先", "随后", "然后", "最后", "当夜", "清晨", "之前", "之后"],
+        ) {
+            push_unique_fact(&mut facts.timeline_facts, compact.clone());
+        }
+        if contains_any_story_term(segment, &["刀", "剑", "信", "钥匙", "玉佩", "卷轴"]) {
+            push_unique_fact(&mut facts.prop_state, compact.clone());
+        }
+        if contains_any_story_term(segment, &["桥", "城门", "房间", "山", "街", "战场"]) {
+            push_unique_fact(&mut facts.location_facts, compact.clone());
+        }
+        if contains_any_story_term(segment, &["害怕", "迟疑", "愤怒", "决意", "沉默", "泪"]) {
+            push_unique_fact(&mut facts.emotional_progression, compact.clone());
+        }
+        if contains_any_story_term(segment, &["追杀", "交锋", "对峙", "反击", "威胁", "冲突", "敌"]) {
+            push_unique_fact(&mut facts.conflict_progression, compact.clone());
+        }
+    }
+    facts.ending_state = segments
+        .last()
+        .map(|segment| compact_source_summary(segment, "source ending state", 140))
+        .unwrap_or_default();
+    facts
+}
+
+fn build_preserved_fact_summary(facts: &SourceStoryFacts) -> String {
+    let names = if facts.character_names.is_empty() {
+        "未识别到明确人物名".to_string()
+    } else {
+        facts.character_names.join("、")
+    };
+    let events = if facts.event_order.is_empty() {
+        "未识别到明确事件顺序".to_string()
+    } else {
+        facts
+            .event_order
+            .iter()
+            .take(6)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    format!("保留人物：{names}；保留事件顺序：{events}")
+}
+
+fn changed_for_screenplay_summary(source_input_type: &str, authoring_mode: &str) -> String {
+    match authoring_mode {
+        "expand_from_synopsis" => "把短梗概扩写成可继续改写为剧本的完整故事内容。".to_string(),
+        "polish_existing_screenplay" => "整理已有剧本文本，保持主线剧情不新增。".to_string(),
+        "adapt_story_to_screenplay" => {
+            "把小说章节改写为可拍剧本，优先保留人物、事件顺序和情绪推进。".to_string()
+        }
+        "rewrite_from_full_story" => {
+            "把完整故事改写为可拍剧本，优先保留剧情事实和结尾状态。".to_string()
+        }
+        _ => format!("按保守方式整理 {source_input_type}，不主动新增未经确认的主线剧情。"),
+    }
+}
+
+fn omitted_detail_summary(source_input_type: &str, facts: &SourceStoryFacts) -> String {
+    if source_input_type == "synopsis" {
+        "短梗概模式不删减原始事实，只补足承接段落。".to_string()
+    } else if facts.core_events.len() > 8 {
+        "次要描写被压缩，人物、事件顺序和结尾状态优先保留。".to_string()
+    } else {
+        "未主动省略已识别的核心事件。".to_string()
+    }
+}
+
+fn build_deterministic_rewrite_script(
+    source_text: &str,
+    scene_label: &str,
+    target_duration_seconds: u16,
+    analysis: &DesktopSourceInputAnalysis,
+) -> String {
+    if analysis.source_input_type == "synopsis" {
+        return build_deterministic_expanded_story_script(
+            source_text,
+            scene_label,
+            target_duration_seconds,
+        );
+    }
+
+    let segments = split_story_segments(source_text);
+    let mut lines = vec![
+        format!("剧本改写：{}", analysis.changed_for_screenplay_summary),
+        format!("源材料识别：{}", source_input_type_product_label(&analysis.source_input_type)),
+        format!("保留原则：{}", analysis.preserved_fact_summary),
+    ];
+    for (index, segment) in segments.iter().take(8).enumerate() {
+        lines.push(format!(
+            "场景{}：{}。本场只把输入事实改写为可表演动作、对白意图和可拆镜头调度，不新增未经输入支持的主线剧情。",
+            index + 1,
+            compact_source_summary(segment, "角色推进当前事件", 180)
+        ));
+    }
+    if lines.len() <= 3 {
+        lines.push(format!(
+            "场景1：{}。人物目标、空间关系和动作结果保持清楚，方便继续拆解镜头。",
+            compact_source_summary(source_text, "角色推进当前事件", 180)
+        ));
+    }
+    if !analysis.source_story_facts.ending_state.trim().is_empty() {
+        lines.push(format!("结尾状态保留：{}", analysis.source_story_facts.ending_state));
+    }
+    lines.push(format!("目标时长：{} 秒。", target_duration_seconds));
+    lines.join("\n")
+}
+
+fn build_deterministic_expanded_story_material(source_text: &str, scene_label: &str) -> String {
+    let seed = compact_source_summary(source_text, "主角在压力中推进目标", 180);
+    let scene_label = if scene_label.trim().is_empty() {
+        "当前场景"
+    } else {
+        scene_label.trim()
+    };
+    let mut paragraphs = vec![format!(
+        "故事从{}展开。{} 这不是直接分镜，而是一版完整故事内容，用来给后续剧本改写保留人物目标、事件顺序和情绪推进。",
+        scene_label, seed
+    )];
+    let beat_templates = [
+        "开端里，主角先面对一个具体处境，目标被迫显形，周围环境也给出可见压力。",
+        "随后，对立力量逼近，主角不能只解释原因，必须通过行动回应眼前阻碍。",
+        "关系层面出现迟疑或误解，人物的选择开始影响旁人，也让冲突不再只是外部威胁。",
+        "中段加入一次转折，主角得到线索或看见代价，原先的判断被迫重新排列。",
+        "压力继续升级，空间、道具或时间限制把人物推向更窄的选择口。",
+        "主角做出明确动作，这个动作改变局面，也暴露出下一段必须承接的问题。",
+        "情绪从犹豫进入清醒，人物不再等待别人解释，而是主动承担后果。",
+        "结尾保留开放压力，但让当前段落的选择、动作结果和人物状态都有清楚落点。",
+    ];
+    let mut index = 0usize;
+    while paragraphs.join("\n\n").chars().count() < 2_050 {
+        let template = beat_templates[index % beat_templates.len()];
+        paragraphs.push(format!(
+            "第{}段：{} 源梗概仍是本段的事实边界：{} 后续改写剧本时，应保留这一段的行动对象、情绪变化和结果状态。",
+            index + 1,
+            template,
+            seed
+        ));
+        index += 1;
+    }
+    truncate_chars(&paragraphs.join("\n\n"), 2_450)
+}
+
+fn source_input_type_product_label(source_input_type: &str) -> &'static str {
+    match source_input_type {
+        "full_story" => "完整故事",
+        "novel_chapter" => "小说章节",
+        "screenplay_text" => "已有剧本",
+        "mixed_material" => "混合材料",
+        _ => "故事梗概",
+    }
+}
+
+fn compact_source_summary(value: &str, fallback: &str, max_chars: usize) -> String {
+    let source = if value.trim().is_empty() {
+        fallback
+    } else {
+        value.trim()
+    };
+    let mut summary = source.chars().take(max_chars).collect::<String>();
+    if source.chars().count() > max_chars {
+        summary.push_str("...");
+    }
+    summary
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut text = value.chars().take(max_chars).collect::<String>();
+    text.push_str("...");
+    text
+}
+
+fn push_unique_fact(values: &mut Vec<String>, value: String) {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || values.iter().any(|item| item == trimmed) {
+        return;
+    }
+    values.push(trimmed.to_string());
+}
+
+fn trim_detected_character_name(name: &str) -> String {
+    let mut chars = name.trim().chars().collect::<Vec<_>>();
+    while chars.len() > 2 {
+        let Some(last) = chars.last().copied() else {
+            break;
+        };
+        if matches!(
+            last,
+            '先' | '已' | '也' | '把' | '从' | '仍' | '在' | '向' | '对'
+        ) {
+            chars.pop();
+        } else {
+            break;
+        }
+    }
+    chars.into_iter().collect()
+}
+
+fn source_facts_are_empty(facts: &SourceStoryFacts) -> bool {
+    facts.character_names.is_empty()
+        && facts.core_events.is_empty()
+        && facts.event_order.is_empty()
+        && facts.ending_state.trim().is_empty()
 }
 
 fn extract_live_storyboard_row_patches(
@@ -4583,6 +4964,13 @@ mod tests {
             model_config_summary: None,
             selected_total_duration_seconds: Some(15),
             target_duration_seconds: Some(60),
+            source_input_type: String::new(),
+            authoring_mode: String::new(),
+            source_material_summary: String::new(),
+            source_story_facts: Default::default(),
+            preserved_fact_summary: String::new(),
+            changed_for_screenplay_summary: String::new(),
+            omitted_detail_summary: String::new(),
             synopsis_text: "男主林峰在断桥边护住叶倾颜，迎战敌将萧寒。".to_string(),
         };
 

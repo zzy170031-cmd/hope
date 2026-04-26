@@ -8,6 +8,7 @@ import {
   exportBundle as invokeExportBundle,
   exportStoryboardBank as invokeExportStoryboardBank,
   generateStoryboard as invokeGenerateStoryboard,
+  importStoryDocument as invokeImportStoryDocument,
   listStoryboardShotResults as invokeListStoryboardShotResults,
   removeStoryboardShotResult as invokeRemoveStoryboardShotResult,
   saveStoryboardShotResult as invokeSaveStoryboardShotResult,
@@ -26,6 +27,7 @@ import type {
   ModelConfigSummary,
   ProductWarning,
   SceneFusionOption,
+  SourceStoryFacts,
   StoryboardExportStatus,
   StoryboardWorkbenchRow,
   TextModelProviderStatus,
@@ -127,6 +129,25 @@ interface SceneTaskRecord {
   hadRowEdits?: boolean;
   exportArtifactPath?: string;
   exportStatus?: string;
+}
+
+type SourceInputType =
+  | "synopsis"
+  | "full_story"
+  | "novel_chapter"
+  | "screenplay_text"
+  | "mixed_material";
+
+interface SourceInputAnalysis {
+  sourceInputType: SourceInputType;
+  authoringMode: string;
+  sourceMaterialSummary: string;
+  sourceStoryFacts: SourceStoryFacts;
+  preservedFactSummary: string;
+  changedForScreenplaySummary: string;
+  omittedDetailSummary: string;
+  statusMessage: string;
+  actionLabel: string;
 }
 
 const PAGE_SIZE = 5;
@@ -326,6 +347,7 @@ export function App() {
   const [sceneTasks, setSceneTasks] = useState<SceneTaskRecord[]>([]);
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [bridgeBusy, setBridgeBusy] = useState<
+    | "import_document"
     | "expand"
     | "generate"
     | "save_rows"
@@ -379,6 +401,7 @@ export function App() {
     [currentSceneTask, sceneTasks],
   );
   const selectedSceneOption = useMemo(() => resolveSceneOption(selectedScene), [selectedScene]);
+  const sourceInputAnalysis = useMemo(() => analyzeSourceInputForUi(synopsis), [synopsis]);
   const canImportScript = acceptedScript.trim().length > 0;
   const hasTaskScript = taskSourceScript.trim().length > 0;
   const canGenerate = taskName.trim().length > 0 && hasTaskScript;
@@ -719,11 +742,11 @@ export function App() {
   const openSynopsisDialog = () => {
     setTextDialog({
       kind: "synopsis",
-      title: expandedScriptAccepted ? "编辑扩写剧本" : "编辑故事梗概",
+      title: expandedScriptAccepted ? "编辑扩写剧本" : "编辑故事材料",
       value: synopsis,
       helper: expandedScriptAccepted
         ? "这里编辑当前已确认的扩写剧本；保存后会同步给镜头拆解，不会撑开主界面。"
-        : "适合输入更长的故事梗概；保存后同步回剧本区，页面布局不会被撑开。",
+        : `${sourceInputAnalysis.statusMessage} 保存后同步回剧本区，页面布局不会被撑开。`,
       editable: true,
     });
   };
@@ -799,17 +822,120 @@ export function App() {
     setTextDialog(null);
   };
 
-  const handleExpandScript = async () => {
+  const resetScriptAndStoryboardState = () => {
+    setExpandedScript("");
+    setExpandedScriptResult(null);
+    setShowExpandedScriptStatus(false);
+    setExpandedScriptDurationSeconds(null);
+    setExpandedScriptScene(null);
+    setAcceptedScript("");
+    setAcceptedScriptId(null);
+    setAcceptedScriptDurationSeconds(null);
+    setAcceptedScriptScene(null);
+    setTaskSourceScript("");
+    setTaskScriptId(null);
+    setTaskSegmentTitle("");
+    setStoryboardResult(null);
+    setLastExportResult(null);
+    setGeneratedSceneTasks([]);
+    setSceneTasks([]);
+    setCurrentTaskId(null);
+    setIsTaskPickerOpen(false);
+    setTaskSerial(0);
+    setRows([]);
+    setRowsDirty(false);
+    setCurrentPage(1);
+    closeStoryboardEditDialog();
+  };
+
+  const handleImportStoryDocument = async () => {
     if (bridgeBusy) {
       return;
     }
-    if (!confirmDiscardDirty("重新扩写剧本")) {
+    if (!confirmDiscardDirty("导入故事文档")) {
+      return;
+    }
+
+    setBridgeBusy("import_document");
+    try {
+      const document = await invokeImportStoryDocument();
+      if (!document) {
+        setExportMessage("已取消导入");
+        return;
+      }
+      const text = normalizeScriptText(document.text);
+      if (!text) {
+        setExportMessage("导入失败：文档正文为空。");
+        return;
+      }
+      const analysis = analyzeSourceInputForUi(text);
+      setSynopsis(text);
+      resetScriptAndStoryboardState();
+      setExportMessage(`已导入 ${formatImportedDocumentType(document.file_type)} 文档。${analysis.statusMessage}`);
+    } catch (error) {
+      setExportMessage(`导入失败：${formatProductError(error)}`);
+    } finally {
+      setBridgeBusy(null);
+    }
+  };
+
+  const handleExpandStory = async () => {
+    if (bridgeBusy) {
+      return;
+    }
+    if (!confirmDiscardDirty("扩写故事")) {
       return;
     }
 
     const storyInput = synopsis.trim();
     if (!storyInput) {
-      setExportMessage("请先输入故事梗概，再扩写剧本。");
+      setExportMessage("请先输入故事梗概，再扩写故事。");
+      return;
+    }
+    if (sourceInputAnalysis.sourceInputType !== "synopsis") {
+      setExportMessage("扩写故事适用于短梗概；当前材料请使用右侧的改写/整理按钮。");
+      return;
+    }
+
+    setBridgeBusy("expand");
+    try {
+      const response = await invokeExpandScript({
+        scene_type: selectedSceneOption.value,
+        scene_label: selectedSceneOption.label,
+        scene_category: selectedSceneOption.group,
+        model_config_summary: modelConfigSummary,
+        source_input_type: "synopsis",
+        authoring_mode: "expand_from_synopsis",
+        source_material_summary: sourceInputAnalysis.sourceMaterialSummary,
+        source_story_facts: sourceInputAnalysis.sourceStoryFacts,
+        preserved_fact_summary: sourceInputAnalysis.preservedFactSummary,
+        changed_for_screenplay_summary: sourceInputAnalysis.changedForScreenplaySummary,
+        omitted_detail_summary: sourceInputAnalysis.omittedDetailSummary,
+        synopsis_text: storyInput,
+      });
+      const storyBody = response.expanded_script_text.trim();
+      setSynopsis(storyBody || storyInput);
+      resetScriptAndStoryboardState();
+      syncModelProviderStatusFromWarnings(response.warnings);
+      setExportMessage("扩写故事完成。故事正文已回到剧本区，可继续放大编辑或改写为剧本。");
+    } catch (error) {
+      setExportMessage(`扩写故事失败：${formatProductError(error)}`);
+    } finally {
+      setBridgeBusy(null);
+    }
+  };
+
+  const handleExpandScript = async () => {
+    if (bridgeBusy) {
+      return;
+    }
+    if (!confirmDiscardDirty(sourceInputAnalysis.actionLabel)) {
+      return;
+    }
+
+    const storyInput = synopsis.trim();
+    if (!storyInput) {
+      setExportMessage("请先输入或导入故事材料，再继续处理剧本。");
       return;
     }
 
@@ -822,8 +948,19 @@ export function App() {
         model_config_summary: modelConfigSummary,
         target_duration_seconds: durationSeconds,
         selected_total_duration_seconds: durationSeconds,
+        source_input_type: sourceInputAnalysis.sourceInputType,
+        authoring_mode: sourceInputAnalysis.authoringMode,
+        source_material_summary: sourceInputAnalysis.sourceMaterialSummary,
+        source_story_facts: sourceInputAnalysis.sourceStoryFacts,
+        preserved_fact_summary: sourceInputAnalysis.preservedFactSummary,
+        changed_for_screenplay_summary: sourceInputAnalysis.changedForScreenplaySummary,
+        omitted_detail_summary: sourceInputAnalysis.omittedDetailSummary,
         synopsis_text: storyInput,
       });
+      const responseSourceType = normalizeSourceInputType(
+        response.source_input_type || sourceInputAnalysis.sourceInputType,
+      );
+      const responseMessage = statusMessageForSourceInputType(responseSourceType);
       const scriptBody = extractScriptBody(response.expanded_script_text) || response.expanded_script_text.trim();
       setExpandedScriptResult(response);
       setExpandedScript(scriptBody);
@@ -831,10 +968,10 @@ export function App() {
       setExpandedScriptDurationSeconds(durationSeconds);
       setExpandedScriptScene(selectedSceneOption);
       setShowExpandedScriptStatus(false);
-      setAcceptedScript("");
-      setAcceptedScriptId(null);
-      setAcceptedScriptDurationSeconds(null);
-      setAcceptedScriptScene(null);
+      setAcceptedScript(scriptBody);
+      setAcceptedScriptId(response.script_id);
+      setAcceptedScriptDurationSeconds(durationSeconds);
+      setAcceptedScriptScene(selectedSceneOption);
       setTaskSourceScript("");
       setTaskScriptId(null);
       setTaskSegmentTitle("");
@@ -850,10 +987,10 @@ export function App() {
       setCurrentPage(1);
       syncModelProviderStatusFromWarnings(response.warnings);
       setExportMessage(
-        `扩写剧本完成：${response.script_id}；目标时长 ${durationSeconds} 秒。剧本正文已进入剧本区，请确认使用后进入镜头拆解。${formatTextModelRunMessage(response.warnings)}`,
+        `${responseMessage} 已生成可拆分镜的剧本：${response.script_id}；目标时长 ${durationSeconds} 秒。${formatTextModelRunMessage(response.warnings)}`,
       );
     } catch (error) {
-      setExportMessage(`扩写剧本失败：${formatError(error)}`);
+      setExportMessage(`${sourceInputAnalysis.actionLabel}失败：${formatProductError(error)}`);
     } finally {
       setBridgeBusy(null);
     }
@@ -1961,8 +2098,9 @@ qwen_request: {
               <div className="text-control">
                 <div className={synopsis.trim() ? "synopsis-preview" : "synopsis-preview synopsis-preview--empty"}>
                   <span className="synopsis-preview__text">
-                    {synopsis.trim() ? truncatePreview(synopsis, 120) : "请输入故事梗概"}
+                    {synopsis.trim() ? truncatePreview(synopsis, 120) : "请输入或导入故事材料"}
                   </span>
+                  <small className="source-input-status">{sourceInputAnalysis.statusMessage}</small>
                 </div>
                 <button type="button" className="text-control__expand" onClick={openSynopsisDialog}>
                   放大编辑
@@ -1971,22 +2109,32 @@ qwen_request: {
               <div className="script-actions">
                 <button
                   type="button"
-                  className="action-button action-button--dark"
-                  onClick={handleExpandScript}
+                  className="action-button action-button--light"
+                  onClick={handleImportStoryDocument}
                   disabled={bridgeBusy !== null}
                 >
-                  {bridgeBusy === "expand" ? "扩写中" : "扩写剧本"}
+                  {bridgeBusy === "import_document" ? "导入中" : "导入文档"}
                 </button>
-                {expandedScriptResult && !expandedScriptAccepted ? (
-                  <button
-                    type="button"
-                    className="action-button action-button--light"
-                    onClick={handleAcceptExpandedScript}
-                    disabled={!(synopsis.trim() || expandedScript.trim()) || bridgeBusy !== null}
-                  >
-                    确定使用
-                  </button>
-                ) : null}
+                <button
+                  type="button"
+                  className="action-button action-button--light"
+                  onClick={handleExpandStory}
+                  disabled={
+                    bridgeBusy !== null ||
+                    !synopsis.trim() ||
+                    sourceInputAnalysis.sourceInputType !== "synopsis"
+                  }
+                >
+                  {bridgeBusy === "expand" ? "扩写中" : "扩写故事"}
+                </button>
+                <button
+                  type="button"
+                  className="action-button action-button--dark"
+                  onClick={handleExpandScript}
+                  disabled={bridgeBusy !== null || !synopsis.trim()}
+                >
+                  {bridgeBusy === "expand" ? "处理中" : sourceInputAnalysis.actionLabel}
+                </button>
               </div>
             </div>
           </section>
@@ -2791,6 +2939,207 @@ function buildModelConfigSummary(
   };
 }
 
+function analyzeSourceInputForUi(text: string): SourceInputAnalysis {
+  const cleanText = text.trim();
+  const sourceInputType = detectSourceInputTypeForUi(cleanText);
+  const sourceStoryFacts = buildSourceStoryFactsForUi(cleanText);
+  const authoringMode = authoringModeForSourceInputType(sourceInputType);
+  const sourceMaterialSummary = cleanText
+    ? truncatePreview(cleanText, 260)
+    : "等待输入或导入故事材料。";
+
+  return {
+    sourceInputType,
+    authoringMode,
+    sourceMaterialSummary,
+    sourceStoryFacts,
+    preservedFactSummary: preservedFactSummaryForUi(sourceStoryFacts),
+    changedForScreenplaySummary: changedForScreenplaySummaryForUi(sourceInputType),
+    omittedDetailSummary: omittedDetailSummaryForUi(sourceInputType, sourceStoryFacts),
+    statusMessage: statusMessageForSourceInputType(cleanText ? sourceInputType : "synopsis", cleanText.length === 0),
+    actionLabel: actionLabelForSourceInputType(sourceInputType),
+  };
+}
+
+function detectSourceInputTypeForUi(text: string): SourceInputType {
+  const cleanText = text.trim();
+  if (!cleanText) {
+    return "synopsis";
+  }
+
+  const paragraphs = cleanText.split(/\n+/).map((item) => item.trim()).filter(Boolean);
+  const sentences = splitScriptBody(cleanText);
+  const charCount = Array.from(cleanText).length;
+  const hasScreenplayMarks =
+    /(^|\n)\s*(场景|镜头|对白|旁白|内景|外景|人物|动作)[：:]/.test(cleanText) ||
+    /\b(INT\.|EXT\.|CUT TO|SCENE)\b/i.test(cleanText);
+  const hasNovelMarks = /第[一二三四五六七八九十百千万0-9]+[章节回]/.test(cleanText) || /小说章节|本章|章节/.test(cleanText);
+  const hasOutlineMarks = /(梗概|故事大纲|概要|一句话|主线)/.test(cleanText);
+  const hasMixedMarks =
+    hasScreenplayMarks &&
+    (hasNovelMarks || /素材|参考|设定|世界观|人物小传|补充/.test(cleanText));
+
+  if (hasMixedMarks) {
+    return "mixed_material";
+  }
+  if (hasScreenplayMarks) {
+    return "screenplay_text";
+  }
+  if (hasNovelMarks) {
+    return "novel_chapter";
+  }
+  if (charCount > 900 || paragraphs.length >= 6 || sentences.length >= 10) {
+    return "full_story";
+  }
+  if (charCount > 420 && /(随后|然后|最终|然而|直到|与此同时|结尾)/.test(cleanText)) {
+    return "full_story";
+  }
+  if (charCount > 280 && !hasOutlineMarks && paragraphs.length >= 3) {
+    return "full_story";
+  }
+
+  return "synopsis";
+}
+
+function normalizeSourceInputType(value: string | null | undefined): SourceInputType {
+  if (
+    value === "full_story" ||
+    value === "novel_chapter" ||
+    value === "screenplay_text" ||
+    value === "mixed_material" ||
+    value === "synopsis"
+  ) {
+    return value;
+  }
+  return "mixed_material";
+}
+
+function authoringModeForSourceInputType(sourceInputType: SourceInputType) {
+  switch (sourceInputType) {
+    case "full_story":
+      return "rewrite_from_full_story";
+    case "novel_chapter":
+      return "adapt_story_to_screenplay";
+    case "screenplay_text":
+      return "polish_existing_screenplay";
+    case "mixed_material":
+      return "conservative_rewrite_from_mixed_material";
+    case "synopsis":
+    default:
+      return "expand_from_synopsis";
+  }
+}
+
+function actionLabelForSourceInputType(sourceInputType: SourceInputType) {
+  switch (sourceInputType) {
+    case "full_story":
+    case "novel_chapter":
+      return "改写剧本";
+    case "screenplay_text":
+      return "整理剧本";
+    case "mixed_material":
+      return "整理材料";
+    case "synopsis":
+    default:
+      return "扩写剧本";
+  }
+}
+
+function statusMessageForSourceInputType(sourceInputType: SourceInputType, empty = false) {
+  if (empty) {
+    return "等待输入或导入故事材料。";
+  }
+
+  switch (sourceInputType) {
+    case "full_story":
+      return "已识别为完整故事，将保留剧情事实并改写为剧本。";
+    case "novel_chapter":
+      return "已识别为小说章节，将保留人物、事件顺序和情绪推进并改写为剧本。";
+    case "screenplay_text":
+      return "已识别为已有剧本，将整理为可拍分镜剧本。";
+    case "mixed_material":
+      return "材料类型不够明确，将按保守方式整理为可拍剧本。";
+    case "synopsis":
+    default:
+      return "已识别为故事梗概，将扩写后生成剧本。";
+  }
+}
+
+function buildSourceStoryFactsForUi(text: string): SourceStoryFacts {
+  const cleanText = text.trim();
+  const segments = splitScriptBody(cleanText);
+  const compactSegments = segments.map((item) => truncatePreview(item, 120)).filter(Boolean);
+  const coreEvents = compactSegments.slice(0, 8);
+  const eventOrder = coreEvents.map((item, index) => `${index + 1}. ${item}`);
+  const locationFacts = Array.from(
+    new Set(
+      (cleanText.match(/[在于到][^，。！？；;\n]{2,16}(?:城|镇|村|宫|殿|山|海|街|房|屋|厅|场|城墙|废墟|战场)/g) ?? [])
+        .map((item) => item.replace(/^[在于到]/, "").trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, 6);
+
+  return {
+    character_names: [],
+    characterNames: [],
+    character_relationships: [],
+    characterRelationships: [],
+    core_events: coreEvents,
+    coreEvents,
+    event_order: eventOrder,
+    eventOrder,
+    timeline_facts: coreEvents.slice(0, 4),
+    timelineFacts: coreEvents.slice(0, 4),
+    prop_state: [],
+    propState: [],
+    location_facts: locationFacts,
+    locationFacts,
+    emotional_progression: compactSegments.filter((item) => /(害怕|愤怒|犹豫|坚定|崩溃|觉醒|释然|紧张|绝望|希望)/.test(item)).slice(0, 4),
+    emotionalProgression: compactSegments.filter((item) => /(害怕|愤怒|犹豫|坚定|崩溃|觉醒|释然|紧张|绝望|希望)/.test(item)).slice(0, 4),
+    conflict_progression: compactSegments.filter((item) => /(冲突|战斗|追击|对抗|阻止|威胁|敌人|危机|争执)/.test(item)).slice(0, 4),
+    conflictProgression: compactSegments.filter((item) => /(冲突|战斗|追击|对抗|阻止|威胁|敌人|危机|争执)/.test(item)).slice(0, 4),
+    ending_state: compactSegments[compactSegments.length - 1] ?? "",
+    endingState: compactSegments[compactSegments.length - 1] ?? "",
+  };
+}
+
+function preservedFactSummaryForUi(facts: SourceStoryFacts) {
+  const eventCount = facts.core_events?.length ?? facts.coreEvents?.length ?? 0;
+  const locationCount = facts.location_facts?.length ?? facts.locationFacts?.length ?? 0;
+  return `保留已识别的核心事件 ${eventCount} 条、空间信息 ${locationCount} 条和结尾状态。`;
+}
+
+function changedForScreenplaySummaryForUi(sourceInputType: SourceInputType) {
+  switch (sourceInputType) {
+    case "full_story":
+      return "将完整故事压缩为可拍剧本场次，保留人物动机、事件顺序和结尾状态。";
+    case "novel_chapter":
+      return "将小说章节改写为可表演动作、对白意图和镜头调度。";
+    case "screenplay_text":
+      return "整理已有剧本结构，补齐可拆分镜的动作与调度表达。";
+    case "mixed_material":
+      return "按保守方式整理混合材料，不主动新增未经确认的主线剧情。";
+    case "synopsis":
+    default:
+      return "将短梗概扩写为连续故事，再生成可拆分镜的剧本。";
+  }
+}
+
+function omittedDetailSummaryForUi(sourceInputType: SourceInputType, facts: SourceStoryFacts) {
+  if (sourceInputType === "synopsis") {
+    return "短梗概阶段不主动省略已输入事实。";
+  }
+  const eventCount = facts.core_events?.length ?? facts.coreEvents?.length ?? 0;
+  return eventCount > 6
+    ? "次要描写会压缩，人物、事件顺序和情绪推进优先保留。"
+    : "未主动省略已识别的核心事件。";
+}
+
+function formatImportedDocumentType(fileType: string) {
+  const cleanType = fileType.trim().toLowerCase();
+  return cleanType === "docx" ? "docx" : cleanType === "txt" ? "txt" : "故事";
+}
+
 function formatModelProviderStatus(
   config: ModelConfigState,
   status: TextModelProviderStatus,
@@ -3232,6 +3581,27 @@ function formatWarningCode(code: string) {
   }
   if (code === "role_action_grounding_incomplete") {
     return "角色动作信息不完整，请重新生成或检查当前镜头脚本";
+  }
+  if (code === "source_input_type_uncertain") {
+    return "材料类型不够明确，已按保守方式整理";
+  }
+  if (code === "full_story_rewrite_fact_loss_detected") {
+    return "完整故事改写可能丢失部分事实，请复核剧情";
+  }
+  if (code === "rewrite_changed_character_motivation") {
+    return "人物动机可能被改写，请复核角色动机";
+  }
+  if (code === "rewrite_changed_event_order") {
+    return "事件顺序可能被改写，请复核剧情顺序";
+  }
+  if (code === "rewrite_dropped_key_event") {
+    return "关键事件可能被省略，请复核源故事";
+  }
+  if (code === "rewrite_added_unapproved_plot") {
+    return "可能新增了未确认剧情，请复核剧本";
+  }
+  if (code === "source_document_too_long_for_single_pass") {
+    return "源文档较长，本轮优先保留人物、事件顺序和结尾状态";
   }
   return code;
 }
