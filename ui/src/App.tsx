@@ -3,6 +3,7 @@ import { Shell } from "./components/Shell";
 import logoUrl from "./assets/hope-desktop-logo.png";
 import {
   configureTextModelProvider,
+  copyExportArtifactToPath,
   expandScript as invokeExpandScript,
   exportBundle as invokeExportBundle,
   exportStoryboardBank as invokeExportStoryboardBank,
@@ -10,13 +11,13 @@ import {
   listStoryboardShotResults as invokeListStoryboardShotResults,
   removeStoryboardShotResult as invokeRemoveStoryboardShotResult,
   saveStoryboardShotResult as invokeSaveStoryboardShotResult,
+  selectExportSavePath,
   updateStoryboardShotResult as invokeUpdateStoryboardShotResult,
   updateStoryboardRows as invokeUpdateStoryboardRows,
 } from "./bridge/hopeBridge";
 import { ROUTES, resolveRoute } from "./routes";
 import type {
   ExpandScriptResponse,
-  ExportArtifactRecord,
   ExportBundleResponse,
   ExportStoryboardBankResponse,
   FinalizedStoryboardShotResult,
@@ -56,7 +57,14 @@ interface ModelConfigDraft extends ModelConfigState {
   apiKeyInput: string;
 }
 
-type LongTextField = "person" | "shot" | "visualDescription" | "characterAction" | "dialogue" | "prompt";
+type LongTextField =
+  | "person"
+  | "shot"
+  | "cameraMovement"
+  | "visualDescription"
+  | "characterAction"
+  | "dialogue"
+  | "prompt";
 
 interface TextDialogState {
   kind: "synopsis" | "expandedScript" | "storyboardCell" | "summary";
@@ -119,7 +127,6 @@ interface SceneTaskRecord {
   hadRowEdits?: boolean;
   exportArtifactPath?: string;
   exportStatus?: string;
-  exportContentHash?: string | null;
 }
 
 const PAGE_SIZE = 5;
@@ -130,6 +137,7 @@ const DEFAULT_TASK_NAME = "第一集分镜生成";
 const DEFAULT_PROJECT_ID = "project-week3-001";
 const STORYBOARD_DURATION_SOURCE = "storyboard_duration_plan.allocated_row_duration_seconds";
 const EMPTY_PROMPT_TEXT_PLACEHOLDER = "prompt_text 未生成，等待主线镜头 grounding";
+const EMPTY_CAMERA_MOVEMENT_PLACEHOLDER = "运镜未完整生成，等待主线运镜 grounding";
 const STORYBOARD_ROWS_HASH_MISMATCH_MESSAGE =
   "当前分镜内容已变化，请先保存修改或重新生成后再确定使用。";
 const SCENE_SCALE_LABELS: Record<string, string> = {
@@ -224,7 +232,7 @@ const API_DOC_SECTIONS = [
     items: [
       "expand_script：读取场景类型、目标时长、故事梗概和 model_config_summary，只返回连续剧情剧本正文。",
       "generate_storyboard：读取镜头剧本、script_id、结构化场景字段、目标时长和模型摘要，返回主线 rows 与 export_status。",
-      "export_bundle：导出分镜词或完整剧本，只有主线返回 artifact_path / content_hash / row_count 时才显示导出成功。",
+      "export_bundle：导出分镜词或完整剧本时先选择 Excel 保存路径，完成后只显示用户选择的位置。",
     ],
   },
   {
@@ -326,7 +334,7 @@ export function App() {
   const [taskDraft, setTaskDraft] = useState<TaskDraftState | null>(null);
   const [isTaskPickerOpen, setIsTaskPickerOpen] = useState(false);
   const [taskSerial, setTaskSerial] = useState(0);
-  const [exportMessage, setExportMessage] = useState("等待主线 bridge 返回结果。");
+  const [exportMessage, setExportMessage] = useState("等待导出");
 
   const editingRow = editingDraft;
 
@@ -347,6 +355,13 @@ export function App() {
   const currentSceneTask = useMemo(
     () => sceneTasks.find((task) => task.id === currentTaskId) ?? null,
     [currentTaskId, sceneTasks],
+  );
+  const currentSceneTaskIndex = useMemo(
+    () =>
+      currentSceneTask
+        ? Math.max(1, sceneTasks.findIndex((task) => task.id === currentSceneTask.id) + 1)
+        : 0,
+    [currentSceneTask, sceneTasks],
   );
   const selectedSceneOption = useMemo(() => resolveSceneOption(selectedScene), [selectedScene]);
   const canImportScript = acceptedScript.trim().length > 0;
@@ -965,7 +980,6 @@ export function App() {
               baseRevision: undefined,
               exportArtifactPath: undefined,
               exportStatus: undefined,
-              exportContentHash: undefined,
             }
           : task,
       );
@@ -1156,7 +1170,6 @@ export function App() {
                   hadRowEdits: false,
                   exportArtifactPath: undefined,
                   exportStatus: undefined,
-                  exportContentHash: undefined,
                 }
               : task,
           ),
@@ -1464,6 +1477,7 @@ export function App() {
         `${row.order}. ${formatInternalPlaceholder(row.shot_title)}`,
         `人物：${formatInternalPlaceholder(row.person)}`,
         `关键动作：${formatInternalPlaceholder(row.character_action)}`,
+        `运镜：${formatCameraMovement(resolveCameraMovement(row))}`,
         `prompt_text：${row.prompt_text?.trim() || EMPTY_PROMPT_TEXT_PLACEHOLDER}`,
       ].join("\n"),
     );
@@ -1519,9 +1533,20 @@ export function App() {
     if (bridgeBusy) {
       return;
     }
+    if (!confirmedShotCount) {
+      setExportMessage("暂无已确认分镜，无法导出完整剧本。");
+      return;
+    }
 
     setBridgeBusy("export_bank");
+    setExportMessage("正在导出");
     try {
+      const targetPath = await selectExportSavePath(buildDefaultExcelFileName("full_script"));
+      if (!targetPath) {
+        setLastStoryboardBankExport(null);
+        setExportMessage("已取消导出");
+        return;
+      }
       const response = await invokeExportStoryboardBank({
         project_id: DEFAULT_PROJECT_ID,
         script_id: acceptedScriptId ?? taskScriptId ?? null,
@@ -1530,19 +1555,22 @@ export function App() {
       });
       setLastStoryboardBankExport(response);
       if (response.no_export) {
-        setExportMessage("暂无已确认分镜，无法导出完整分镜包。");
+        setExportMessage("暂无已确认分镜，无法导出完整剧本。");
         return;
       }
       if (response.status === "Blocked" || response.blockers.length) {
-        setExportMessage(`完整分镜包导出未完成：${formatWarnings(response.blockers)}`);
+        setExportMessage(`导出失败：${formatWarnings(response.blockers)}`);
         return;
       }
-      const readyArtifacts = response.artifacts.filter((artifact) => artifact.ready);
-      setExportMessage(
-        `已导出完整分镜包：${response.export_manifest_id} / 已确认 ${response.confirmed_shot_count} 个镜头 / 总时长 ${response.total_shot_duration_seconds} 秒 / ready ${readyArtifacts.length}/${response.artifacts.length}`,
-      );
+      const excelArtifact = findPrimaryExcelArtifact(response);
+      if (!excelArtifact?.artifact_path) {
+        setExportMessage("导出失败：未生成可保存的 Excel 文件。");
+        return;
+      }
+      const savedPath = await copyExportArtifactToPath(excelArtifact.artifact_path, targetPath);
+      setExportMessage(`已导出：${savedPath}`);
     } catch (error) {
-      setExportMessage(`导出完整分镜包失败：${formatProductError(error)}`);
+      setExportMessage(`导出失败：${formatProductError(error)}`);
     } finally {
       setBridgeBusy(null);
     }
@@ -1558,7 +1586,14 @@ export function App() {
     }
 
     setBridgeBusy("export_words");
+    setExportMessage("正在导出");
     try {
+      const targetPath = await selectExportSavePath(buildDefaultExcelFileName("storyboard_words"));
+      if (!targetPath) {
+        setLastExportResult(null);
+        setExportMessage("已取消导出");
+        return;
+      }
       const exportSource = await ensureRowsSavedForExport("desktop_export_words_autosave");
       if (!exportSource) {
         return;
@@ -1573,15 +1608,19 @@ export function App() {
         return;
       }
       setLastExportResult(response);
-      const readyArtifact = findPrimaryReadyArtifact(response);
+      const excelArtifact = findPrimaryExcelArtifact(response);
+      if (!excelArtifact?.artifact_path) {
+        setExportMessage("导出失败：未生成可保存的 Excel 文件。");
+        return;
+      }
+      const savedPath = await copyExportArtifactToPath(excelArtifact.artifact_path, targetPath);
       updateCurrentTaskRecord({
-        exportArtifactPath: readyArtifact?.artifact_path ?? undefined,
+        exportArtifactPath: savedPath,
         exportStatus: response.export_status.status,
-        exportContentHash: readyArtifact?.content_hash ?? null,
       });
-      setExportMessage(`当前场景分镜词：${formatExportBundleMessage(response)}`);
+      setExportMessage(`已导出：${savedPath}`);
     } catch (error) {
-      setExportMessage(`导出分镜词失败：${formatProductError(error)}`);
+      setExportMessage(`导出失败：${formatProductError(error)}`);
     } finally {
       setBridgeBusy(null);
     }
@@ -1611,7 +1650,14 @@ export function App() {
     }
 
     setBridgeBusy("export_script");
+    setExportMessage("正在导出");
     try {
+      const targetPath = await selectExportSavePath(buildDefaultExcelFileName("full_script"));
+      if (!targetPath) {
+        setLastExportResult(null);
+        setExportMessage("已取消导出");
+        return;
+      }
       const exportSource = await ensureRowsSavedForExport("desktop_export_script_autosave");
       if (!exportSource) {
         return;
@@ -1626,17 +1672,19 @@ export function App() {
         return;
       }
       setLastExportResult(response);
-      const readyArtifact = findPrimaryReadyArtifact(response);
+      const excelArtifact = findPrimaryExcelArtifact(response);
+      if (!excelArtifact?.artifact_path) {
+        setExportMessage("导出失败：未生成可保存的 Excel 文件。");
+        return;
+      }
+      const savedPath = await copyExportArtifactToPath(excelArtifact.artifact_path, targetPath);
       updateCurrentTaskRecord({
-        exportArtifactPath: readyArtifact?.artifact_path ?? undefined,
+        exportArtifactPath: savedPath,
         exportStatus: response.export_status.status,
-        exportContentHash: readyArtifact?.content_hash ?? null,
       });
-      setExportMessage(
-        `完整剧本提示词：${formatExportBundleMessage(response)}；当前仅有 1 个已生成场景，按当前场景导出。`,
-      );
+      setExportMessage(`已导出：${savedPath}`);
     } catch (error) {
-      setExportMessage(`导出完整剧本失败：${formatProductError(error)}`);
+      setExportMessage(`导出失败：${formatProductError(error)}`);
     } finally {
       setBridgeBusy(null);
     }
@@ -1937,9 +1985,7 @@ qwen_request: {
               <label className="task-index-select">
                 <span>镜头序号</span>
                 <strong className="task-index-value">
-                  {currentSceneTask
-                    ? `第 ${Math.max(1, sceneTasks.findIndex((task) => task.id === currentSceneTask.id) + 1)} 个`
-                    : "暂无镜头"}
+                  {currentSceneTask ? currentSceneTaskIndex : "暂无"}
                 </strong>
               </label>
               <label className="task-name-select">
@@ -1948,14 +1994,18 @@ qwen_request: {
                   onChange={(event) => handleSelectSceneTask(event.target.value)}
                   disabled={!sceneTasks.length || bridgeBusy !== null}
                   aria-label="选择镜头任务"
-                  title={currentSceneTask?.name ?? taskName}
+                  title={
+                    currentSceneTask
+                      ? `第 ${currentSceneTaskIndex} 个 · ${currentSceneTask.name}`
+                      : taskName
+                  }
                 >
                   <option value="" disabled>
                     {sceneTasks.length ? "选择镜头任务" : taskName || "暂无镜头任务"}
                   </option>
                   {sceneTasks.map((task, index) => (
                     <option key={task.id} value={task.id}>
-                      {`第 ${index + 1} 个 · ${task.name}`}
+                      {task.name.trim() || `第 ${index + 1} 个镜头任务`}
                     </option>
                   ))}
                 </select>
@@ -2030,7 +2080,7 @@ qwen_request: {
                   <tr>
                     <th>序号</th>
                     <th>人物</th>
-                    <th>镜头</th>
+                    <th>运镜</th>
                     <th>景别</th>
                     <th>画面描述</th>
                     <th>角色动作</th>
@@ -2055,10 +2105,10 @@ qwen_request: {
                         </td>
                         <td>
                           <LongTextCell
-                            label="镜头"
-                            value={formatInternalPlaceholder(row.shot)}
+                            label="运镜"
+                            value={row.cameraMovement}
                             compact
-                            onOpen={() => openStoryboardCellDialog(row, "shot", "镜头")}
+                            onOpen={() => openStoryboardCellDialog(row, "cameraMovement", "运镜")}
                           />
                         </td>
                         <td>
@@ -2220,20 +2270,6 @@ qwen_request: {
               </button>
             </div>
             <div className="export-message">{exportMessage.trim()}</div>
-            {lastExportResult ? (
-              <div className="export-artifacts">
-                {lastExportResult.artifacts.map((artifact) => (
-                  <span key={artifact.artifact_id}>{formatArtifact(artifact)}</span>
-                ))}
-              </div>
-            ) : null}
-            {lastStoryboardBankExport ? (
-              <div className="export-artifacts">
-                {lastStoryboardBankExport.artifacts.map((artifact) => (
-                  <span key={artifact.artifact_id}>{formatArtifact(artifact)}</span>
-                ))}
-              </div>
-            ) : null}
             <div className="export-actions">
               <button
                 type="button"
@@ -2614,12 +2650,16 @@ qwen_request: {
                   <input value={editingRow.person} onChange={(event) => handleEditField("person", event.target.value)} />
                 </label>
                 <label>
-                  <span>镜头</span>
+                  <span>镜头标题</span>
                   <input value={editingRow.shot} onChange={(event) => handleEditField("shot", event.target.value)} />
                 </label>
                 <label>
                   <span>景别</span>
                   <input value={editingRow.sceneScale} onChange={(event) => handleEditField("sceneScale", event.target.value)} />
+                </label>
+                <label className="edit-grid__wide">
+                  <span>运镜</span>
+                  <textarea value={editingRow.cameraMovement} onChange={(event) => handleEditField("cameraMovement", event.target.value)} />
                 </label>
                 <label className="edit-grid__wide">
                   <span>画面描述</span>
@@ -2969,6 +3009,7 @@ function mapGeneratedStoryboardRow(row: GeneratedStoryboardRow): StoryboardWorkb
     groundingSource: row.grounding_source,
     person: formatInternalPlaceholder(row.person || "not_specified"),
     shot: formatInternalPlaceholder(row.shot_title || row.shot_id),
+    cameraMovement: formatCameraMovement(resolveCameraMovement(row)),
     sceneScale: row.scene_scale || "source",
     visualDescription: row.visual_description,
     characterAction: formatInternalPlaceholder(row.character_action),
@@ -3010,6 +3051,8 @@ function toGeneratedStoryboardRows(rows: StoryboardWorkbenchRow[]): GeneratedSto
     };
     const backendPersonDisplay = formatInternalPlaceholder(backend?.person || "not_specified");
     const backendShotDisplay = formatInternalPlaceholder(backend?.shot_title || backend?.shot_id || "");
+    const backendCameraMovement = backend ? resolveCameraMovement(backend) : "";
+    const backendCameraMovementDisplay = formatCameraMovement(backendCameraMovement);
     const backendActionDisplay = formatInternalPlaceholder(backend?.character_action ?? "");
     const backendDialogueDisplay = backend?.dialogue || "（无）";
     const backendPromptDisplay = backend?.prompt_text?.trim() || EMPTY_PROMPT_TEXT_PLACEHOLDER;
@@ -3036,13 +3079,20 @@ function toGeneratedStoryboardRows(rows: StoryboardWorkbenchRow[]): GeneratedSto
       character_action: backend
         ? preserveBackendValueWhenDisplayUnchanged(row.characterAction, backend.character_action, backendActionDisplay)
         : row.characterAction,
+      camera_movement: backend
+        ? preserveBackendValueWhenDisplayUnchanged(
+            row.cameraMovement,
+            backendCameraMovement,
+            backendCameraMovementDisplay,
+          )
+        : row.cameraMovement === EMPTY_CAMERA_MOVEMENT_PLACEHOLDER ? "" : row.cameraMovement,
       dialogue: backend
         ? preserveBackendValueWhenDisplayUnchanged(row.dialogue, backend.dialogue, backendDialogueDisplay)
         : row.dialogue,
       prompt_text: backend
         ? preserveBackendValueWhenDisplayUnchanged(row.prompt, backend.prompt_text, backendPromptDisplay)
         : row.prompt === EMPTY_PROMPT_TEXT_PLACEHOLDER ? "" : row.prompt,
-      prompt_text_compilation_status: backend?.prompt_text_compilation_status || "ReadyStub",
+      prompt_text_compilation_status: backend?.prompt_text_compilation_status || "Blocked",
       prompt_text_compilation_warnings: backend?.prompt_text_compilation_warnings ?? [],
       prompt_text_source_row_id: backend?.prompt_text_source_row_id || shotId,
       duration_seconds: row.durationSeconds,
@@ -3064,6 +3114,30 @@ function preserveBackendValueWhenDisplayUnchanged(
   return nextValue === backendDisplayValue ? backendValue ?? "" : nextValue;
 }
 
+function resolveCameraMovement(row: GeneratedStoryboardRow) {
+  return String(row.camera_movement ?? row.cameraMovement ?? "").trim();
+}
+
+function formatCameraMovement(value: string | null | undefined) {
+  const cleanValue = String(value ?? "").trim();
+  return cleanValue ? formatInternalPlaceholder(cleanValue) : EMPTY_CAMERA_MOVEMENT_PLACEHOLDER;
+}
+
+function buildDefaultExcelFileName(kind: "storyboard_words" | "full_script") {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const stamp = [
+    now.getFullYear(),
+    pad(now.getMonth() + 1),
+    pad(now.getDate()),
+    "_",
+    pad(now.getHours()),
+    pad(now.getMinutes()),
+  ].join("");
+  const label = kind === "storyboard_words" ? "分镜词" : "完整剧本";
+  return `Hope_${label}_${stamp}.xlsx`;
+}
+
 function collectPromptStatuses(rows: GeneratedStoryboardRow[]) {
   return Array.from(
     new Set(rows.map((row) => row.prompt_text_compilation_status).filter(Boolean) as string[]),
@@ -3081,16 +3155,6 @@ function collectPromptWarningCodes(rows: GeneratedStoryboardRow[]) {
   );
 }
 
-function hasRetrievalTraceSummary(response: ExportBundleResponse) {
-  return response.artifacts.some(
-    (artifact) =>
-      Boolean(artifact.retrieval_trace) ||
-      Boolean(artifact.kb_context_summary) ||
-      Boolean(artifact.selected_sample_ids?.length) ||
-      Boolean(artifact.selected_kb_rule_ids?.length),
-  );
-}
-
 function isBlockedStoryboardResponse(response: GenerateStoryboardResponse) {
   return response.export_status.status === "Blocked" || !response.result_id || response.rows.length === 0;
 }
@@ -3105,10 +3169,16 @@ function hasEditedRowsNotApplied(response: ExportBundleResponse) {
   return response.artifacts.some((artifact) => artifact.ready && artifact.edited_rows_applied === false);
 }
 
-function findPrimaryReadyArtifact(response: ExportBundleResponse) {
+function findPrimaryExcelArtifact(response: ExportBundleResponse | ExportStoryboardBankResponse) {
   return (
-    response.artifacts.find((artifact) => artifact.ready && Boolean(artifact.artifact_path)) ??
-    response.artifacts.find((artifact) => artifact.ready) ??
+    response.artifacts.find(
+      (artifact) =>
+        artifact.ready &&
+        Boolean(artifact.artifact_path) &&
+        (artifact.export_format === "xlsx" ||
+          artifact.artifact_kind === "excel_workbook" ||
+          artifact.artifact_path?.toLowerCase().endsWith(".xlsx")),
+    ) ??
     null
   );
 }
@@ -3183,41 +3253,6 @@ function formatGenerateStoryboardMessage(response: GenerateStoryboardResponse, r
     : "";
 
   return `分镜已生成：${rowCount} 条${limitationText}。可继续新建或导入下一个镜头任务。`;
-}
-
-function formatExportBundleMessage(response: ExportBundleResponse) {
-  const readyArtifacts = response.artifacts.filter((artifact) => artifact.ready);
-  const readyWithPath = readyArtifacts.filter((artifact) => artifact.artifact_path);
-  const prefix = readyWithPath.length ? "导出已生成" : "export_bundle 返回";
-  const primary = findPrimaryReadyArtifact(response);
-  const rows = primary?.row_count != null ? ` / row_count=${primary.row_count}` : "";
-  const hash = primary?.content_hash ? ` / content_hash=${primary.content_hash}` : "";
-  const edited = primary?.edited_rows_applied != null ? ` / edited_rows_applied=${primary.edited_rows_applied}` : "";
-  const statuses = primary?.prompt_text_compilation_statuses?.length
-    ? ` / prompt_text=${primary.prompt_text_compilation_statuses.join(",")}`
-    : "";
-  const warnings = primary?.prompt_text_compilation_warning_codes?.length
-    ? ` / warnings=${primary.prompt_text_compilation_warning_codes.map(formatWarningCode).join(",")}`
-    : "";
-  const kbTrace = hasRetrievalTraceSummary(response)
-    ? " / 导出已包含知识库匹配摘要和样本 ID 追溯"
-    : "";
-  return `${prefix}：${response.export_manifest_id} / ${readyArtifacts.length}/${response.artifacts.length} ready / ${response.export_status.status}${rows}${hash}${edited}${statuses}${warnings}${kbTrace}`;
-}
-
-function formatArtifact(artifact: ExportArtifactRecord) {
-  const ready = artifact.ready ? "ready" : `blocked:${artifact.blocked_reason ?? "unknown"}`;
-  const path = artifact.artifact_path ? ` path=${artifact.artifact_path}` : "";
-  const hash = artifact.content_hash ? ` hash=${artifact.content_hash}` : "";
-  const rows = artifact.row_count != null ? ` rows=${artifact.row_count}` : "";
-  const edited = artifact.edited_rows_applied != null ? ` edited_rows_applied=${artifact.edited_rows_applied}` : "";
-  const promptStatus = artifact.prompt_text_compilation_statuses?.length
-    ? ` prompt_text=${artifact.prompt_text_compilation_statuses.join(",")}`
-    : "";
-  const warningCodes = artifact.prompt_text_compilation_warning_codes?.length
-    ? ` warnings=${artifact.prompt_text_compilation_warning_codes.map(formatWarningCode).join(",")}`
-    : "";
-  return `${artifact.artifact_kind} ${ready}${path}${hash}${rows}${edited}${promptStatus}${warningCodes}`;
 }
 
 function buildPageTokens(pageCount: number, currentPage: number) {

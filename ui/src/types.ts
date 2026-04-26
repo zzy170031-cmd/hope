@@ -52,6 +52,7 @@ export interface StoryboardWorkbenchRow {
   groundingSource?: ShotGroundingSource;
   person: string;
   shot: string;
+  cameraMovement: string;
   sceneScale: string;
   visualDescription: string;
   characterAction: string;
@@ -183,6 +184,8 @@ export interface GeneratedStoryboardRow {
   scene_scale: string;
   visual_description: string;
   character_action: string;
+  camera_movement?: string;
+  cameraMovement?: string;
   dialogue: string;
   prompt_text: string;
   prompt_text_compilation_status?: string;

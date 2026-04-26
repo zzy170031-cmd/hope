@@ -1487,6 +1487,7 @@ textarea {
   color: var(--text-soft);
   font-size: 12px;
   line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .export-artifacts {

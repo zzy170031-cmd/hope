@@ -29,6 +29,25 @@ use hope_app::{
         ValidationExportPanelSnapshot, WriterEntrySnapshot,
     },
 };
+use serde::Deserialize;
+use std::{fs, path::PathBuf, process::Command};
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[derive(Debug, Deserialize)]
+struct SelectExportSavePathRequest {
+    default_file_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CopyExportArtifactToPathRequest {
+    source_path: String,
+    target_path: String,
+}
 
 fn main() {
     if std::env::args().any(|arg| arg == "--contracts") {
@@ -64,7 +83,9 @@ fn run_native_host() {
             update_storyboard_shot_result,
             remove_storyboard_shot_result,
             export_storyboard_bank,
-            configure_text_model_provider
+            configure_text_model_provider,
+            select_export_save_path,
+            copy_export_artifact_to_path
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Hope desktop native host");
@@ -290,4 +311,103 @@ fn configure_text_model_provider(
         DesktopInvokeResponse::ConfigureTextModelProvider(response) => Ok(response),
         _ => Err("desktop invoke returned an unexpected model provider response".to_string()),
     }
+}
+
+#[tauri::command]
+fn select_export_save_path(request: SelectExportSavePathRequest) -> Result<Option<String>, String> {
+    let default_file_name = sanitize_default_excel_file_name(&request.default_file_name);
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.SaveFileDialog
+$dialog.Title = '选择导出保存位置'
+$dialog.Filter = 'Excel 工作簿 (*.xlsx)|*.xlsx'
+$dialog.DefaultExt = 'xlsx'
+$dialog.AddExtension = $true
+$dialog.OverwritePrompt = $true
+$dialog.FileName = $env:HOPE_EXPORT_DEFAULT_FILE_NAME
+$result = $dialog.ShowDialog()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+  Write-Output $dialog.FileName
+}
+"#;
+
+    let mut command = Command::new("powershell.exe");
+    command
+        .arg("-NoProfile")
+        .arg("-STA")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-Command")
+        .arg(script)
+        .env("HOPE_EXPORT_DEFAULT_FILE_NAME", default_file_name);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = command
+        .output()
+        .map_err(|_| "保存路径选择框未能打开，请稍后重试。".to_string())?;
+    if !output.status.success() {
+        return Err("保存路径选择框未能打开，请稍后重试。".to_string());
+    }
+
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(path))
+    }
+}
+
+#[tauri::command]
+fn copy_export_artifact_to_path(request: CopyExportArtifactToPathRequest) -> Result<String, String> {
+    let source = PathBuf::from(request.source_path);
+    let target = ensure_xlsx_extension(PathBuf::from(request.target_path));
+
+    if !source.is_file() {
+        return Err("未找到可复制的 Excel 文件，请重新导出。".to_string());
+    }
+    let Some(parent) = target.parent() else {
+        return Err("保存路径不可用，请重新选择保存位置。".to_string());
+    };
+    if !parent.exists() {
+        return Err("保存目录不存在，请重新选择保存位置。".to_string());
+    }
+    if source == target {
+        return Ok(target.display().to_string());
+    }
+
+    fs::copy(&source, &target)
+        .map_err(|error| format!("复制 Excel 到选择路径失败：{error}"))?;
+    Ok(target.display().to_string())
+}
+
+fn sanitize_default_excel_file_name(value: &str) -> String {
+    let mut name = value
+        .trim()
+        .chars()
+        .map(|character| match character {
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            other => other,
+        })
+        .collect::<String>();
+    if name.is_empty() {
+        name = "Hope_导出.xlsx".to_string();
+    }
+    if !name.to_lowercase().ends_with(".xlsx") {
+        name.push_str(".xlsx");
+    }
+    name
+}
+
+fn ensure_xlsx_extension(mut path: PathBuf) -> PathBuf {
+    let has_xlsx_extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("xlsx"));
+    if !has_xlsx_extension {
+        path.set_extension("xlsx");
+    }
+    path
 }

@@ -60,9 +60,20 @@ export const HOPE_TAURI_COMMANDS = {
   removeStoryboardShotResult: "remove_storyboard_shot_result",
   exportStoryboardBank: "export_storyboard_bank",
   configureTextModelProvider: "configure_text_model_provider",
+  selectExportSavePath: "select_export_save_path",
+  copyExportArtifactToPath: "copy_export_artifact_to_path",
 } as const;
 
 type HopeCommandName = (typeof HOPE_TAURI_COMMANDS)[keyof typeof HOPE_TAURI_COMMANDS];
+
+interface SelectExportSavePathRequest {
+  default_file_name: string;
+}
+
+interface CopyExportArtifactToPathRequest {
+  source_path: string;
+  target_path: string;
+}
 
 type HopeCommandPayload =
   | ProjectCreateOrSwitchRequest
@@ -79,6 +90,8 @@ type HopeCommandPayload =
   | RemoveStoryboardShotResultRequest
   | ExportStoryboardBankRequest
   | ConfigureTextModelProviderRequest
+  | SelectExportSavePathRequest
+  | CopyExportArtifactToPathRequest
   | undefined;
 
 type DesktopInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -118,6 +131,8 @@ const PHASE1_REAL_COMMANDS = new Set<HopeCommandName>([
   HOPE_TAURI_COMMANDS.removeStoryboardShotResult,
   HOPE_TAURI_COMMANDS.exportStoryboardBank,
   HOPE_TAURI_COMMANDS.configureTextModelProvider,
+  HOPE_TAURI_COMMANDS.selectExportSavePath,
+  HOPE_TAURI_COMMANDS.copyExportArtifactToPath,
 ]);
 
 function delay(ms: number) {
@@ -583,6 +598,8 @@ function normalizeGeneratedStoryboardRow(raw: unknown): GeneratedStoryboardRow {
     scene_scale: String(row.scene_scale ?? row.sceneScale ?? ""),
     visual_description: String(row.visual_description ?? row.visualDescription ?? ""),
     character_action: String(row.character_action ?? row.characterAction ?? ""),
+    camera_movement: String(row.camera_movement ?? row.cameraMovement ?? ""),
+    cameraMovement: String(row.cameraMovement ?? row.camera_movement ?? ""),
     dialogue: String(row.dialogue ?? ""),
     prompt_text: String(row.prompt_text ?? row.promptText ?? ""),
     prompt_text_compilation_status: String(
@@ -942,6 +959,18 @@ export async function invokeHopeCommand<T>(
   return fallbackForCommand<T>(command, payload);
 }
 
+async function invokeRequiredDesktopCommand<T>(
+  command: HopeCommandName,
+  payload: HopeCommandPayload,
+): Promise<T> {
+  const desktopInvoke = resolveDesktopInvoke();
+  if (!desktopInvoke) {
+    throw new Error("保存路径选择需要在 Hope 桌面应用中使用。");
+  }
+
+  return invokeDesktopCommand<T>(desktopInvoke, command, payload);
+}
+
 export async function loadProjectList() {
   const raw = await invokeHopeCommand<unknown>(
     HOPE_TAURI_COMMANDS.projectCreateOrSwitch,
@@ -1050,6 +1079,26 @@ export async function exportStoryboardBank(request: ExportStoryboardBankRequest)
     request,
   );
   return normalizeExportStoryboardBankResponse(raw);
+}
+
+export async function selectExportSavePath(defaultFileName: string) {
+  const raw = await invokeRequiredDesktopCommand<unknown>(
+    HOPE_TAURI_COMMANDS.selectExportSavePath,
+    { default_file_name: defaultFileName },
+  );
+  if (raw == null) {
+    return null;
+  }
+  const path = String(raw).trim();
+  return path ? path : null;
+}
+
+export async function copyExportArtifactToPath(sourcePath: string, targetPath: string) {
+  const raw = await invokeRequiredDesktopCommand<unknown>(
+    HOPE_TAURI_COMMANDS.copyExportArtifactToPath,
+    { source_path: sourcePath, target_path: targetPath },
+  );
+  return String(raw || targetPath);
 }
 
 export async function configureTextModelProvider(

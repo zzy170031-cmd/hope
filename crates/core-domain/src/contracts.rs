@@ -396,6 +396,8 @@ pub struct GeneratedStoryboardRow {
     pub scene_scale: String,
     pub visual_description: String,
     pub character_action: String,
+    #[serde(default)]
+    pub camera_movement: String,
     pub dialogue: String,
     pub prompt_text: String,
     #[serde(default = "default_prompt_text_compilation_status")]

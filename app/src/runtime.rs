@@ -152,6 +152,8 @@ struct LiveStoryboardRowPatch {
     #[serde(default)]
     character_action: String,
     #[serde(default)]
+    camera_movement: String,
+    #[serde(default)]
     dialogue: String,
 }
 
@@ -212,6 +214,7 @@ struct ShotGroundedRowDraft {
     scene_scale: String,
     visual_description: String,
     character_action: String,
+    camera_movement: String,
     dialogue: String,
     duration_seconds: u16,
     sequence_grouping: SequenceGrouping,
@@ -581,6 +584,7 @@ pub fn generate_storyboard(
             scene_scale: draft.scene_scale.clone(),
             visual_description: draft.visual_description.clone(),
             character_action: draft.character_action.clone(),
+            camera_movement: draft.camera_movement.clone(),
             dialogue: draft.dialogue.clone(),
             prompt_text: prompt_compilation.0,
             prompt_text_compilation_status: prompt_compilation.1,
@@ -1324,13 +1328,14 @@ fn finalized_storyboard_payload_contains_forbidden_terms(
         .iter()
         .map(|row| {
             format!(
-                "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
                 row.shot_script,
                 row.person,
                 row.shot_title,
                 row.scene_scale,
                 row.visual_description,
                 row.character_action,
+                row.camera_movement,
                 row.dialogue,
                 row.prompt_text
             )
@@ -1878,7 +1883,7 @@ fn build_qwen_request_payload(
             TextGenerationTask::GenerateStoryboard,
             TextGenerationOutputSchema::StoryboardRowsJson,
         ) => format!(
-            "任务=生成分镜提示词\nscene_type={}\nduration_seconds={}\nshot_script={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=storyboard_rows_json\nconstraints=输出 JSON object，包含 rows 数组；每行必须包含人物、镜头、景别、画面描述、角色动作、对话/旁白、分镜提示词 prompt_text、duration_seconds；总时长必须守恒；不要输出 full KB rows；不要把内部候选提示证据当最终 prompt_text；不要输出 source_register 或 overlay JSON。",
+            "任务=生成分镜提示词\nscene_type={}\nduration_seconds={}\nshot_script={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=storyboard_rows_json\nconstraints=输出 JSON object，包含 rows 数组；每行必须包含人物、镜头、景别、运镜 camera_movement、画面描述、角色动作、对话/旁白、分镜提示词 prompt_text、duration_seconds；总时长必须守恒；不要输出 full KB rows；不要把内部候选提示证据当最终 prompt_text；不要输出 source_register 或 overlay JSON。",
             scene_type,
             duration_seconds,
             request.story_input,
@@ -2176,6 +2181,9 @@ fn apply_live_storyboard_patch(row: &mut GeneratedStoryboardRow, patch: &LiveSto
     if let Some(value) = non_blank_string(&patch.character_action) {
         row.character_action = value;
     }
+    if let Some(value) = non_blank_string(&patch.camera_movement) {
+        row.camera_movement = value;
+    }
     if let Some(value) = non_blank_string(&patch.dialogue) {
         row.dialogue = value;
     }
@@ -2200,6 +2208,7 @@ fn validate_live_storyboard_rows(
             ("景别", row.scene_scale.as_str()),
             ("画面描述", row.visual_description.as_str()),
             ("角色动作", row.character_action.as_str()),
+            ("运镜", row.camera_movement.as_str()),
         ] {
             if field_value.trim().is_empty() {
                 findings.push(ProductWarning {
@@ -2242,6 +2251,19 @@ fn validate_live_storyboard_rows(
                 findings.push(ProductWarning {
                     code: "role_action_grounding_incomplete".to_string(),
                     message: "角色动作信息不完整，请重新生成或检查当前镜头脚本。".to_string(),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
+            if field_name == "运镜"
+                && is_camera_movement_grounding_incomplete(
+                    field_value,
+                    &row.shot_title,
+                    &row.visual_description,
+                )
+            {
+                findings.push(ProductWarning {
+                    code: "camera_movement_grounding_incomplete".to_string(),
+                    message: "运镜未完整生成，等待主线运镜 grounding。".to_string(),
                     related_sample_id: Some(row.prompt_text_source_row_id.clone()),
                 });
             }
@@ -2755,6 +2777,12 @@ fn build_shot_grounded_row_draft(
     } else {
         format!("{person}：{}", segment.trim())
     };
+    let camera_movement = derive_camera_movement_from_story(
+        &segment,
+        &scene_scale,
+        &visual_description,
+        &character_action,
+    );
     let sequence_grouping = SequenceGrouping {
         structure_mode: StructureMode::SingleShot,
         sequence_id: None,
@@ -2780,6 +2808,7 @@ fn build_shot_grounded_row_draft(
         scene_scale,
         visual_description,
         character_action,
+        camera_movement,
         dialogue,
         duration_seconds,
         sequence_grouping,
@@ -3316,6 +3345,56 @@ fn derive_shot_title(index: usize, segment: &str, person: &str, character_action
     format!("镜头{}：{}{}", index + 1, person, action_core)
 }
 
+fn derive_camera_movement_from_story(
+    shot_script: &str,
+    scene_scale: &str,
+    visual_description: &str,
+    character_action: &str,
+) -> String {
+    let evidence = format!("{shot_script}\n{visual_description}\n{character_action}");
+    let subject = character_action_subject(character_action);
+    if contains_any_story_term(&evidence, &["站起", "起身"]) {
+        format!("{scene_scale}低机位上摇，捕捉{subject}站起的动作转折")
+    } else if contains_any_story_term(&evidence, &["抬起", "举起"]) {
+        format!("{scene_scale}缓慢上摇，跟住{subject}抬起动作的发力线")
+    } else if contains_any_story_term(&evidence, &["后撤", "震退", "退开"]) {
+        format!("{scene_scale}跟随{subject}后撤半步，稳住动作对象和空间距离")
+    } else if contains_any_story_term(&evidence, &["掌心", "手臂", "刀柄", "手部"]) {
+        format!("{scene_scale}缓慢推近{subject}手部动作，停在动作发力瞬间")
+    } else if contains_any_story_term(&evidence, &["焦土", "战场", "残骸", "断桥", "城门"])
+    {
+        format!("{scene_scale}横移掠过环境边缘，再锁定{subject}当前动作")
+    } else if contains_any_story_term(&evidence, &["望向", "看向", "对手", "敌", "对立人物"])
+    {
+        format!("{scene_scale}过肩跟拍{subject}视线方向，保持动作对象在画面内")
+    } else if scene_scale.contains("特写") {
+        format!("{scene_scale}缓慢推近{subject}的关键动作，保持画面焦点稳定")
+    } else if scene_scale.contains("全景") {
+        format!("{scene_scale}定机位观察{subject}动作起止，保留环境和主体关系")
+    } else {
+        format!("{scene_scale}定机位观察{subject}动作起止，镜头在关键瞬间轻微推近")
+    }
+}
+
+fn character_action_subject(character_action: &str) -> String {
+    character_action
+        .split('从')
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "当前主体".to_string())
+}
+
+fn is_camera_movement_grounding_incomplete(
+    camera_movement: &str,
+    shot_title: &str,
+    visual_description: &str,
+) -> bool {
+    let trimmed = camera_movement.trim();
+    trimmed.is_empty() || trimmed == shot_title.trim() || trimmed == visual_description.trim()
+}
+
 fn derive_shot_title_action_core(segment: &str, character_action: &str) -> &'static str {
     if contains_any_story_term(segment, &["重逢"]) {
         "断桥重逢"
@@ -3580,6 +3659,15 @@ fn compile_seedance_prompt_text(
         format!("景别：{}", scene_projection.scene_scale),
         format!("画面描述：{}", scene_projection.visual_description),
         format!("角色动作：{}", scene_projection.character_action),
+        format!(
+            "运镜：{}",
+            derive_camera_movement_from_story(
+                shot_script,
+                &scene_projection.scene_scale,
+                &scene_projection.visual_description,
+                &scene_projection.character_action,
+            )
+        ),
         format!("时长：{}秒", duration_seconds),
     ];
     let mut warnings = vec![
@@ -3630,6 +3718,15 @@ fn compile_seedance_prompt_text_legacy(
         format!("景别：{}", scene_projection.scene_scale),
         format!("画面描述：{}", scene_projection.visual_description),
         format!("角色动作：{}", scene_projection.character_action),
+        format!(
+            "运镜：{}",
+            derive_camera_movement_from_story(
+                &record.source_fields.sample_title,
+                &scene_projection.scene_scale,
+                &scene_projection.visual_description,
+                &scene_projection.character_action,
+            )
+        ),
         format!("时长：{}秒", duration_seconds),
     ];
 
@@ -3664,7 +3761,7 @@ fn serialize_storyboard_rows(rows: &[GeneratedStoryboardRow]) -> String {
     rows.iter()
         .map(|row| {
             format!(
-                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}|{}|{}",
                 row.shot_id,
                 row.order,
                 row.shot_script,
@@ -3680,6 +3777,7 @@ fn serialize_storyboard_rows(rows: &[GeneratedStoryboardRow]) -> String {
                 row.shot_title,
                 row.visual_description,
                 row.character_action,
+                row.camera_movement,
                 row.dialogue,
                 row.prompt_text,
                 row.prompt_text_compilation_status,
