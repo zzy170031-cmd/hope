@@ -182,6 +182,37 @@ Rules:
 - Use `Hope桌面端-【等待主线镜头适配契约】` instead of
   `Hope桌面端-ShotIntentAdaptiveUI【等待主线镜头适配契约】`.
 
+### Workstream-Aware Thread Naming
+
+When one project has multiple parallel work surfaces, the visible thread name
+must include the workstream / thread role, not only the repo or product name.
+
+Use this shape:
+
+`（status）Project-WorkstreamThread-【Chinese target action】`
+
+Rules:
+
+- The project / repo part identifies ownership, such as `Hope桌面端`,
+  `Hope主线`, `Hope契约层`, `Hope接入点`, or `Hope知识库`.
+- The workstream part identifies the active lane or role, such as `图标线程`,
+  `UI线程`, `功能线程`, `打包线程`, `发布线程`, `契约线程`, or `QA线程`.
+- The target action describes the current concrete goal in Chinese.
+- Do not collapse distinct workstreams into a generic name such as
+  `（运行）Hope桌面端-【多尺寸帧修复】` when desktop UI, icon, packaging,
+  and feature work may be running separately.
+- If a thread's workstream changes, rename it explicitly in the next controller
+  directive.
+
+Examples:
+
+- Use: `（运行）Hope桌面端-图标线程-【多尺寸帧修复】`
+- Use: `（运行）Hope桌面端-UI线程-【主界面收口】`
+- Use: `（运行）Hope桌面端-功能线程-【已定稿分镜集合接入】`
+- Use: `（运行）Hope桌面端-打包线程-【内置WebView2离线安装器】`
+- Use: `（待命）Hope桌面端-发布线程-【v1自动更新与版本发布体系规划】`
+- Avoid: `（运行）Hope桌面端-【图标多尺寸帧修复】`
+
 ## Controller / Worker Directive Label Rule
 
 All cross-thread copy-ready `text` blocks must declare their role and target.
