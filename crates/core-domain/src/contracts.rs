@@ -280,6 +280,30 @@ pub struct ProductWarning {
     pub related_sample_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourceStoryFacts {
+    #[serde(default)]
+    pub character_names: Vec<String>,
+    #[serde(default)]
+    pub character_relationships: Vec<String>,
+    #[serde(default)]
+    pub core_events: Vec<String>,
+    #[serde(default)]
+    pub event_order: Vec<String>,
+    #[serde(default)]
+    pub timeline_facts: Vec<String>,
+    #[serde(default)]
+    pub prop_state: Vec<String>,
+    #[serde(default)]
+    pub location_facts: Vec<String>,
+    #[serde(default)]
+    pub emotional_progression: Vec<String>,
+    #[serde(default)]
+    pub conflict_progression: Vec<String>,
+    #[serde(default)]
+    pub ending_state: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GenerateNovelChapterRequest {
     pub story_id: String,
@@ -304,6 +328,20 @@ pub struct GenerateNovelChapterResponse {
     pub story_id: String,
     pub chapter_id: String,
     pub chapter_order: u32,
+    #[serde(default)]
+    pub source_input_type: String,
+    #[serde(default)]
+    pub authoring_mode: String,
+    #[serde(default)]
+    pub source_material_summary: String,
+    #[serde(default)]
+    pub source_story_facts: SourceStoryFacts,
+    #[serde(default)]
+    pub preserved_fact_summary: String,
+    #[serde(default)]
+    pub changed_for_screenplay_summary: String,
+    #[serde(default)]
+    pub omitted_detail_summary: String,
     pub chapter_title: String,
     pub chapter_text: String,
     pub chapter_summary: String,
@@ -337,6 +375,22 @@ pub struct ChapterAcceptedState {
     pub chapter_title: String,
     pub chapter_text: String,
     pub chapter_summary: String,
+    #[serde(default)]
+    pub source_input_type: String,
+    #[serde(default)]
+    pub authoring_mode: String,
+    #[serde(default)]
+    pub source_material_summary: String,
+    #[serde(default)]
+    pub source_story_facts: SourceStoryFacts,
+    #[serde(default)]
+    pub preserved_fact_summary: String,
+    #[serde(default)]
+    pub changed_for_screenplay_summary: String,
+    #[serde(default)]
+    pub omitted_detail_summary: String,
+    #[serde(default)]
+    pub continuity_warnings: Vec<ProductWarning>,
     pub continuity_delta: String,
     pub accepted_at_ms: u64,
 }
@@ -348,6 +402,16 @@ pub struct AdaptChapterToScriptRequest {
     pub chapter_order: u32,
     pub chapter_text: String,
     pub chapter_summary: String,
+    #[serde(default)]
+    pub source_input_type: String,
+    #[serde(default)]
+    pub authoring_mode: String,
+    #[serde(default)]
+    pub source_story_facts: SourceStoryFacts,
+    #[serde(default)]
+    pub preserved_fact_summary: String,
+    #[serde(default)]
+    pub source_material_summary: String,
     pub screenwriting_adaptation_summary: String,
     pub continuity_context_summary: String,
     pub kb_context_summary: String,
@@ -366,6 +430,20 @@ pub struct AdaptChapterToScriptResponse {
     pub story_id: String,
     pub chapter_id: String,
     pub chapter_order: u32,
+    #[serde(default)]
+    pub source_input_type: String,
+    #[serde(default)]
+    pub authoring_mode: String,
+    #[serde(default)]
+    pub source_material_summary: String,
+    #[serde(default)]
+    pub source_story_facts: SourceStoryFacts,
+    #[serde(default)]
+    pub preserved_fact_summary: String,
+    #[serde(default)]
+    pub changed_for_screenplay_summary: String,
+    #[serde(default)]
+    pub omitted_detail_summary: String,
     pub script_text: String,
     pub script_summary: String,
     pub screenwriting_adaptation_summary: String,
@@ -374,6 +452,8 @@ pub struct AdaptChapterToScriptResponse {
     pub action_blocks: Vec<String>,
     pub turning_points: Vec<String>,
     pub scene_purpose: String,
+    #[serde(default)]
+    pub continuity_warnings: Vec<ProductWarning>,
     pub continuity_delta: String,
 }
 
@@ -385,6 +465,22 @@ pub struct ScriptAcceptedState {
     pub chapter_order: u32,
     pub script_text: String,
     pub script_summary: String,
+    #[serde(default)]
+    pub source_input_type: String,
+    #[serde(default)]
+    pub authoring_mode: String,
+    #[serde(default)]
+    pub source_material_summary: String,
+    #[serde(default)]
+    pub source_story_facts: SourceStoryFacts,
+    #[serde(default)]
+    pub preserved_fact_summary: String,
+    #[serde(default)]
+    pub changed_for_screenplay_summary: String,
+    #[serde(default)]
+    pub omitted_detail_summary: String,
+    #[serde(default)]
+    pub continuity_warnings: Vec<ProductWarning>,
     pub continuity_delta: String,
     pub accepted_at_ms: u64,
 }
@@ -790,6 +886,20 @@ pub struct UpdateContinuityStateRequest {
     pub chapter_id: String,
     pub chapter_order: u32,
     pub chapter_summary: String,
+    #[serde(default)]
+    pub source_input_type: String,
+    #[serde(default)]
+    pub authoring_mode: String,
+    #[serde(default)]
+    pub source_material_summary: String,
+    #[serde(default)]
+    pub source_story_facts: SourceStoryFacts,
+    #[serde(default)]
+    pub preserved_fact_summary: String,
+    #[serde(default)]
+    pub changed_for_screenplay_summary: String,
+    #[serde(default)]
+    pub omitted_detail_summary: String,
     pub character_state_summary: String,
     pub location_state_summary: String,
     pub prop_state_summary: String,
@@ -807,6 +917,20 @@ pub struct StoryContinuityState {
     pub chapter_order: u32,
     pub continuity_context_summary: String,
     pub chapter_summary: String,
+    #[serde(default)]
+    pub source_input_type: String,
+    #[serde(default)]
+    pub authoring_mode: String,
+    #[serde(default)]
+    pub source_material_summary: String,
+    #[serde(default)]
+    pub source_story_facts: SourceStoryFacts,
+    #[serde(default)]
+    pub preserved_fact_summary: String,
+    #[serde(default)]
+    pub changed_for_screenplay_summary: String,
+    #[serde(default)]
+    pub omitted_detail_summary: String,
     pub character_state_summary: String,
     pub location_state_summary: String,
     pub prop_state_summary: String,
@@ -865,6 +989,22 @@ pub struct RunV0StoryToStoryboardChainResponse {
     pub status: BridgeCallStatus,
     pub blockers: Vec<ProductWarning>,
     pub warnings: Vec<ProductWarning>,
+    #[serde(default)]
+    pub source_input_type: String,
+    #[serde(default)]
+    pub authoring_mode: String,
+    #[serde(default)]
+    pub source_material_summary: String,
+    #[serde(default)]
+    pub source_story_facts: SourceStoryFacts,
+    #[serde(default)]
+    pub preserved_fact_summary: String,
+    #[serde(default)]
+    pub changed_for_screenplay_summary: String,
+    #[serde(default)]
+    pub omitted_detail_summary: String,
+    #[serde(default)]
+    pub continuity_warnings: Vec<ProductWarning>,
     pub chapter: Option<GenerateNovelChapterResponse>,
     pub script: Option<AdaptChapterToScriptResponse>,
     pub shot_task_plan: Option<ShotTaskPlan>,

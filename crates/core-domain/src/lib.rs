@@ -21,7 +21,7 @@ pub use contracts::{
     RunV0StoryToStoryboardChainRequest, RunV0StoryToStoryboardChainResponse,
     SaveStoryboardShotResultRequest, SaveStoryboardShotResultResponse, ScenePerformanceProjection,
     ScriptAcceptedState, SequenceFieldState, SequenceGrouping, ShotGroundingSource, ShotTask,
-    ShotTaskPlan, SplitScriptToShotTasksRequest, SplitScriptToShotTasksResponse,
+    ShotTaskPlan, SourceStoryFacts, SplitScriptToShotTasksRequest, SplitScriptToShotTasksResponse,
     StoryContinuityState, StoryboardDurationPlan, StoryboardExportStatus, StoryboardResult,
     StructureMode, TextGenerationOutputSchema, TextGenerationRequest, TextGenerationResponse,
     TextGenerationTask, TextModelProvider, TextModelProviderKind, UpdateContinuityStateRequest,
