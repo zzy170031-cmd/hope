@@ -312,6 +312,203 @@ generate images unrelated to current plot facts.
 the current shot image. It must not carry internal KB, rules, samples, trace, or
 debug information.
 
+## Full-Chain Content Production Scheduling
+
+Hope V0 synchronizes the KB full-chain content production routing principle:
+
+```text
+content sets facts
+writing preserves continuity
+scene expression adapts expression
+director scheduling plans performance and rhythm
+shot language lands storyboard rows
+```
+
+Chinese operating principle:
+
+```text
+内容定事实，写作保连续，场景定表达，导演做调度，镜头落分镜。
+```
+
+The hard priority order is:
+
+```text
+user content facts
+continuity state
+finalized storyboard bank
+writing continuity
+scene expression adaptation
+director scheduling
+shot language
+prompt_text
+```
+
+Implications:
+
+- user content facts are the source of truth
+- continuity state must not be ignored for a stronger scene
+- finalized storyboard bank references must not be rewritten by later
+  authoring, scene, director, or shot hints
+- writing continuity keeps the story continuable before prose style
+- scene expression adaptation turns content into filmable expression
+- director scheduling serves writing continuity and scene expression
+- shot language serves director scheduling and final storyboard rows
+- `prompt_text` is final packaging, not an upstream source of truth
+
+## Full-Chain Capability Layers
+
+Hope V0 may route through four compressed capability layers:
+
+```text
+writing_continuity
+scene_expression_adaptation
+director_scheduling
+shot_language
+```
+
+These layers are internal contract and runtime-routing concepts. They must not
+increase desktop operation complexity.
+
+### Writing Continuity
+
+Purpose:
+
+- keep long-form story content continuable
+- preserve character motivation, conflict causality, emotional state,
+  timeline, prop state, setup/payoff obligations, and next-scene bridge
+
+Capability signals:
+
+```text
+story_continuity
+character_motivation_continuity
+conflict_causality
+emotional_progression
+timeline_integrity
+prop_state_integrity
+next_scene_bridge
+setup_payoff_recovery
+```
+
+Writing continuity must not:
+
+```text
+rewrite user facts for style
+change motivation without cause
+break event order
+drop setup/payoff obligations
+reset prop state
+remove the next-scene bridge
+```
+
+### Scene Expression Adaptation
+
+Purpose:
+
+- turn content into filmable, scene-ready, storyboard-ready expression
+- preserve facts while compressing prose into scene objective, obstacle,
+  action, reaction, and turn
+- serve later director scheduling and shot breakdown
+
+Scene expression adaptation must not:
+
+```text
+overwrite user facts
+overwrite story facts
+invent unrelated scene purpose
+drop turning points
+replace character motivation
+```
+
+### Director Scheduling
+
+Purpose:
+
+- serve writing continuity and scene expression
+- improve performance, blocking, rhythm, attention, emotional landing, and
+  continuity notes
+
+Director scheduling may enhance:
+
+```text
+performance_focus
+blocking_hint
+rhythm_hint
+visual_focus
+continuity_note
+```
+
+Director scheduling must not:
+
+```text
+overwrite content facts
+overwrite scene facts
+replace character motivation
+ignore continuity state
+rewrite finalized storyboard references
+```
+
+### Shot Language
+
+Purpose:
+
+- serve director scheduling and final storyboard rows
+- land shot task, scene scale, camera movement, visual description, character
+  action, and clean `prompt_text`
+
+Shot language outputs may include:
+
+```text
+shot_task
+shot_intent
+shot_scene_type
+scene_scale
+camera_movement
+visual_description
+character_action
+prompt_text
+```
+
+Shot language must not:
+
+```text
+overwrite director scheduling
+overwrite content facts
+turn prompt_text into source of truth
+copy internal KB metadata into product fields
+```
+
+## User Input Paths And Light Operation
+
+Hope V0 must support three lightweight user input paths:
+
+```text
+select scene + story synopsis
+import external document + select scene
+directly input copy/text + select scene
+```
+
+The system must infer:
+
+```text
+source_input_type
+authoring_mode
+```
+
+Users should not need to understand or manually select complex KB writing,
+director, or shot-language routing groups.
+
+Complex routing belongs inside:
+
+```text
+internal contract
+runtime routing
+validator metadata
+product-safe status summaries
+```
+
+It must not become heavy desktop operation.
+
 ## V0 Contract Invariants
 
 These invariants are part of the V0 contract:
@@ -678,6 +875,15 @@ retrieval_trace_user_summary
 full_kb_rows_included = 0
 ```
 
+This boundary applies to the full-chain production scheduler:
+
+```text
+writing_continuity
+scene_expression_adaptation
+director_scheduling
+shot_language
+```
+
 For full-story rewrite, KB authoring and director capabilities are
 summary-only advisory inputs. They may improve screenplay compression,
 filmability, emotional clarity, scene focus, and shot-readiness, but they must
@@ -733,6 +939,21 @@ priority is:
 4. screenwriting_adaptation_summary
 5. kb_context_summary as advisory only
 6. directing_kb_context_summary as advisory only
+```
+
+The full-chain scheduler must not write the following into product fields,
+visible summaries, exports, logs, provider payloads, or `prompt_text`:
+
+```text
+raw prompt_body
+source_register
+overlay JSON
+API key
+token
+secret
+full raw KB rows
+internal hash
+complete debug trace
 ```
 
 `generate_novel_chapter` is included in this boundary. It must not be treated
@@ -1387,6 +1608,17 @@ source_story_facts
 preserved_fact_summary
 changed_for_screenplay_summary
 omitted_detail_summary
+full_chain_content_production_routing
+writing_continuity
+scene_expression_adaptation
+director_scheduling
+shot_language
+story_continuity
+character_motivation_continuity
+conflict_causality
+timeline_integrity
+prop_state_integrity
+setup_payoff_recovery
 authoring_craft_summary
 screenwriting_adaptation_summary
 directing_kb_context_summary
@@ -1491,6 +1723,8 @@ plaintext secret
 provider authorization header
 user local path
 debug stack trace
+internal hash
+complete debug trace
 provider transcript
 Seedance runtime payload
 real author imitation label
@@ -1531,6 +1765,22 @@ authoring_layer_must_not_break_prop_state == true
 authoring_layer_must_keep_next_scene_bridge == true
 kb_director_hints_are_advisory == true
 authoring craft suggestions downgrade or drop when they conflict with continuity
+full-chain scheduler priority keeps user content facts first
+writing_continuity preserves story_continuity
+writing_continuity preserves character_motivation_continuity
+writing_continuity preserves conflict_causality
+writing_continuity preserves emotional_progression
+writing_continuity preserves timeline_integrity
+writing_continuity preserves prop_state_integrity
+writing_continuity preserves next_scene_bridge
+writing_continuity preserves setup_payoff_recovery
+scene_expression_adaptation serves content facts and storyboard readiness
+scene_expression_adaptation does not overwrite user facts
+director_scheduling serves writing continuity and scene expression
+director_scheduling does not overwrite content facts
+shot_language serves director scheduling and final storyboard rows
+shot_language lands shot task, scene_scale, camera_movement, visual_description, character_action, and prompt_text
+prompt_text remains final packaging, not source of truth
 chapter output includes character_motivation_summary
 chapter output includes conflict_progression_summary
 chapter output includes emotional_progression_summary
