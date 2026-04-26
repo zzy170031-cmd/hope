@@ -151,6 +151,21 @@ const SCENE_SCALE_LABELS: Record<string, string> = {
   source: "原场景",
 };
 
+const STORYBOARD_DIALOG_FIELD_LABELS = [
+  "视频分镜提示词",
+  "分镜提示词",
+  "镜头脚本",
+  "镜头标题",
+  "景别",
+  "运镜",
+  "画面描述",
+  "角色动作",
+  "对白/旁白",
+  "对白",
+  "旁白",
+  "时长",
+];
+
 const MODEL_OPTIONS: Array<Option<WorkbenchModelId>> = [
   { value: "qwen", label: "千问 Qwen" },
   { value: "doubao", label: "豆包 Doubao（预留）" },
@@ -731,7 +746,7 @@ export function App() {
     setTextDialog({
       kind: "storyboardCell",
       title: `第 ${row.order} 条 · ${label}`,
-      value: String(row[field] ?? ""),
+      value: formatStoryboardDialogText(String(row[field] ?? "")),
       helper: "表格中只显示短预览；这里查看完整文本，修改请使用操作列“修改”。",
       editable: false,
     });
@@ -2971,6 +2986,25 @@ function formatSceneScaleLabel(value: string) {
   }
 
   return SCENE_SCALE_LABELS[cleanValue.toUpperCase()] ?? SCENE_SCALE_LABELS[cleanValue] ?? cleanValue;
+}
+
+function formatStoryboardDialogText(value: string) {
+  const cleanValue = value.trim();
+  if (!cleanValue) {
+    return "（无）";
+  }
+
+  const labelPattern = STORYBOARD_DIALOG_FIELD_LABELS.map(escapeRegExp).join("|");
+  const formatted = cleanValue.replace(
+    new RegExp(`(?:^|[\\s；;，,。]+)(${labelPattern})[：:]\\s*`, "g"),
+    (_match, label: string, offset: number) => `${offset === 0 ? "" : "\n\n"}${label}：\n`,
+  );
+
+  return formatted.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function formatInternalPlaceholder(value: string) {

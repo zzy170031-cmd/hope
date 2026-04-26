@@ -30,8 +30,6 @@ pub const V120_STORYBOARD_COLUMNS: &[&str] = &[
     "对白/旁白",
     "分镜提示词",
     "时长(秒)",
-    "shot_duration_seconds",
-    "duration_source",
 ];
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -222,58 +220,50 @@ fn write_export_files(workbook: &WorkbookManifest) -> Result<(), ExportError> {
 }
 
 fn build_v120_storyboard_workbook(request: &V120StoryboardExportRequest) -> WorkbookManifest {
-    let rows = request
-        .rows
-        .iter()
-        .map(|row| v120_storyboard_row_cells(request, row))
-        .collect();
-    let mut columns = V120_STORYBOARD_COLUMNS.to_vec();
-    columns.push("prompt_text_compilation_status");
-    columns.push("prompt_text_compilation_warnings");
-    columns.push("prompt_text_source_row_id");
-    columns.push("selected_total_duration_seconds");
-    columns.push("source_result_id");
-    columns.push("edited_rows_applied");
+    let rows = request.rows.iter().map(v120_storyboard_row_cells).collect();
     WorkbookManifest {
         workbook_machine_name: "v120_storyboard_export_bundle",
         workbook_chinese_name: "V120 Storyboard Export Bundle",
         sheets: vec![WorkbookSheetManifest {
             machine_name: V120_STORYBOARD_SHEET_MACHINE_NAME,
             chinese_name: "V120 Storyboard Rows",
-            columns,
+            columns: V120_STORYBOARD_COLUMNS.to_vec(),
             rows,
         }],
     }
 }
 
-fn v120_storyboard_row_cells(
-    request: &V120StoryboardExportRequest,
-    row: &GeneratedStoryboardRow,
-) -> Vec<String> {
+fn v120_storyboard_row_cells(row: &GeneratedStoryboardRow) -> Vec<String> {
     vec![
         row.order.to_string(),
         row.person.clone(),
         row.shot_title.clone(),
-        row.scene_scale.clone(),
+        product_scene_scale_label(&row.scene_scale),
         row.camera_movement.clone(),
         row.visual_description.clone(),
         row.character_action.clone(),
         row.dialogue.clone(),
         row.prompt_text.clone(),
         row.duration_seconds.to_string(),
-        row.shot_duration_seconds.to_string(),
-        row.duration_source.clone(),
-        format!("{:?}", row.prompt_text_compilation_status),
-        row.prompt_text_compilation_warnings
-            .iter()
-            .map(|warning| warning.code.as_str())
-            .collect::<Vec<_>>()
-            .join("|"),
-        row.prompt_text_source_row_id.clone(),
-        request.selected_total_duration_seconds.to_string(),
-        request.source_result_id.clone(),
-        request.edited_rows_applied.to_string(),
     ]
+}
+
+fn product_scene_scale_label(scene_scale: &str) -> String {
+    let clean = scene_scale.trim();
+    if clean.is_empty() {
+        return String::new();
+    }
+
+    match clean.to_ascii_uppercase().as_str() {
+        "LS" => "远景".to_string(),
+        "WS" => "全景".to_string(),
+        "MS" => "中景".to_string(),
+        "MCU" => "中近景".to_string(),
+        "CU" => "特写".to_string(),
+        "ECU" => "大特写".to_string(),
+        "OTS" => "过肩镜头".to_string(),
+        _ => clean.to_string(),
+    }
 }
 
 fn write_v120_storyboard_export_files(
@@ -702,8 +692,8 @@ mod tests {
     use std::fs;
 
     use core_domain::{
-        ProductWarning, PromptTextCompilationStatus, ScenePerformanceProjection, SequenceFieldState,
-        SequenceGrouping, ShotGroundingSource, StructureMode,
+        ProductWarning, PromptTextCompilationStatus, ScenePerformanceProjection,
+        SequenceFieldState, SequenceGrouping, ShotGroundingSource, StructureMode,
     };
     use serde_json::json;
 
@@ -871,6 +861,42 @@ mod tests {
 
         assert_eq!(bundle.workbook.sheets.len(), 1);
         assert_eq!(bundle.workbook.sheets[0].rows.len(), 1);
+        assert_eq!(
+            bundle.workbook.sheets[0].columns,
+            vec![
+                "序号",
+                "人物",
+                "镜头",
+                "景别",
+                "运镜",
+                "画面描述",
+                "角色动作",
+                "对白/旁白",
+                "分镜提示词",
+                "时长(秒)",
+            ]
+        );
+        assert_eq!(
+            bundle.workbook.sheets[0].rows[0].len(),
+            bundle.workbook.sheets[0].columns.len()
+        );
+        assert_eq!(bundle.workbook.sheets[0].rows[0][3], "中近景");
+        let forbidden_columns = [
+            "shot_duration_seconds",
+            "duration_source",
+            "prompt_text_compilation_status",
+            "prompt_text_compilation_warnings",
+            "prompt_text_source_row_id",
+            "selected_total_duration_seconds",
+            "source_result_id",
+            "edited_rows_applied",
+        ];
+        for column in forbidden_columns {
+            assert!(
+                !bundle.workbook.sheets[0].columns.contains(&column),
+                "{column} should not be exported as a user-visible workbook column"
+            );
+        }
         assert_eq!(bundle.artifacts.len(), 3);
         assert!(
             bundle
@@ -888,11 +914,17 @@ mod tests {
             fs::read_to_string(&json_artifact.path).expect("json artifact should be readable");
 
         assert!(json_text.contains("Bridge dialogue sample"));
-        assert!(json_text.contains("ReadyStub"));
-        assert!(json_text.contains("seedance_prompt_text_stub"));
-        assert!(json_text.contains("storyboard-152"));
-        assert!(json_text.contains("true"));
-        assert!(json_text.contains("10"));
+        assert!(json_text.contains("中近景"));
+        assert!(!json_text.contains("shot_duration_seconds"));
+        assert!(!json_text.contains("duration_source"));
+        assert!(!json_text.contains("prompt_text_compilation_status"));
+        assert!(!json_text.contains("prompt_text_compilation_warnings"));
+        assert!(!json_text.contains("prompt_text_source_row_id"));
+        assert!(!json_text.contains("selected_total_duration_seconds"));
+        assert!(!json_text.contains("source_result_id"));
+        assert!(!json_text.contains("edited_rows_applied"));
+        assert!(!json_text.contains("ReadyStub"));
+        assert!(!json_text.contains("seedance_prompt_text_stub"));
         assert!(!json_text.contains("raw prompt body should stay out of prompt_text"));
     }
 }
