@@ -1996,6 +1996,30 @@ textarea {
   padding: 0 14px;
 }
 
+.task-queue-select__control {
+  color: var(--navy);
+}
+
+.task-queue-select__control--confirmed {
+  color: var(--danger);
+}
+
+.task-queue-select__control--pending {
+  color: var(--navy);
+}
+
+.task-queue-select__placeholder {
+  color: var(--text-soft);
+}
+
+.task-queue-select__option--confirmed {
+  color: var(--danger);
+}
+
+.task-queue-select__option--pending {
+  color: var(--navy);
+}
+
 .task-queue__item {
   display: grid;
   gap: 3px;

@@ -229,6 +229,62 @@ const FINALIZED_BANK_FORBIDDEN_TERMS: &[&str] = &[
     "full_kb_rows_included",
 ];
 
+const PRODUCT_CONTROL_LINE_PREFIXES: &[&str] = &[
+    "scene_type:",
+    "source_package:",
+    "target_duration_seconds:",
+    "source_input_type:",
+    "authoring_mode:",
+    "source_material_summary:",
+    "preserved_fact_summary:",
+    "character_names:",
+    "character_relationships:",
+    "preserved_event_order:",
+    "ending_state:",
+    "screenplay_title:",
+    "continuity_context_summary:",
+    "content_priority:",
+    "kb_guidance_mode:",
+    "source_story_facts_take_priority",
+    "source_story_facts_take_priority_over_kb_advice:",
+    "changed_for_screenplay_summary:",
+    "omitted_detail_summary:",
+    "dialogue_intent:",
+    "prompt_text_compilation",
+    "duration_source:",
+    "剧本改写：",
+    "源材料识别：",
+    "保留原则：",
+    "结尾状态保留：",
+    "目标时长：",
+    "状态保留：",
+    "内部字段：",
+    "结构说明：",
+];
+
+const PRODUCT_CONTROL_ANYWHERE_TERMS: &[&str] = &[
+    "scene_type:",
+    "source_package:",
+    "source_input_type:",
+    "authoring_mode:",
+    "screenplay_title:",
+    "source_material_summary:",
+    "preserved_fact_summary:",
+    "continuity_context_summary:",
+    "content_priority:",
+    "kb_guidance_mode:",
+    "changed_for_screenplay_summary:",
+    "omitted_detail_summary:",
+    "source_material_body_begin",
+    "source_material_body_end",
+    "target_duration_seconds",
+    "扩写剧本：",
+    "扩写剧本:",
+    "readystub",
+    "prompt_text_compilation",
+    "duration_source",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ShotGroundedRowDraft {
     shot_id: String,
@@ -379,11 +435,10 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
             &source_analysis,
         )
     };
+    let sanitized_fallback_script = sanitize_product_body_text(&fallback_script);
     let expanded_script_text = live_text
         .filter(|_| !is_story_expansion)
-        .unwrap_or(fallback_script.as_str())
-        .trim()
-        .to_string();
+        .unwrap_or(sanitized_fallback_script);
 
     let response = ExpandScriptResponse {
         status: if warnings.is_empty() {
@@ -1926,23 +1981,10 @@ fn build_qwen_request_payload(
         TextGenerationOutputSchema::RepairPlanJson => "repair_plan_json",
         TextGenerationOutputSchema::SeedancePromptText => "seedance_prompt_text",
     };
-    let system_prompt = match (request.task_type, request.output_schema) {
-        (TextGenerationTask::ExpandScript, TextGenerationOutputSchema::PlainText) => {
-            "你是 Hope 的受控剧本扩写层。只把用户的故事梗概扩写为连续、可读的剧情剧本正文；只能参考压缩知识库摘要和样本/规则 ID，不得输出全量知识库，不得输出真实导演/IP/品牌名。"
-        }
-        (
-            TextGenerationTask::GenerateStoryboard,
-            TextGenerationOutputSchema::StoryboardRowsJson,
-        ) => {
-            "你是 Hope 的受控分镜生成层。根据剧本片段生成结构化分镜 rows 和当前文本提示词；只能使用压缩知识库摘要和样本/规则 ID，不得输出全量知识库，不得输出真实导演/IP/品牌名。"
-        }
-        _ => {
-            "你是 Hope 的受控文本生成层。只能使用收到的压缩知识库摘要和样本/规则 ID，不得扩展为全量知识库，不得输出真实导演/IP/品牌名。"
-        }
-    };
+    let system_prompt = "You are Hope's controlled text-generation layer. Ground storyboard output in shot_script first, then expanded_script_text, then primary scene fields, and only then compressed KB context. Preserve accepted character relationships, motivation, event order, timeline, prop state, emotional progression, conflict causality, and next-scene continuity. Scene changes expression only; directing schedules shots only. Never emit full KB rows, source_register, overlay JSON, or internal control text. Never invent real director names, IP names, brand names, or external asset bindings.";
     let user_prompt = match (request.task_type, request.output_schema) {
         (TextGenerationTask::ExpandScript, TextGenerationOutputSchema::PlainText) => format!(
-            "任务=扩写剧本\nscene_type={}\ntarget_duration_seconds={}\nstory_synopsis={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=story_script_plain_text\nconstraints=只输出连续剧情剧本正文；不要输出镜头编号、分镜表、景别、画面描述、角色动作、prompt_text、Seedance 提示词、时间码或 JSON；不要输出 full KB rows、source_register、overlay JSON 或内部候选提示证据；剧本需要服务后续镜头拆解，但本步不要提前拆分镜头。",
+            "task_type=expand_script\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=story_script_plain_text\nconstraints=Write only user-visible story body. Do not output scene_type, target_duration_seconds, source_package, source_input_type, authoring_mode, prompt_text, storyboard rows, timecodes, JSON, source_register, overlay JSON, or internal control lines. Keep the story ready for later shot decomposition without pre-formatting shots.",
             scene_type,
             duration_seconds,
             request.story_input,
@@ -1954,7 +1996,7 @@ fn build_qwen_request_payload(
             TextGenerationTask::GenerateStoryboard,
             TextGenerationOutputSchema::StoryboardRowsJson,
         ) => format!(
-            "任务=生成分镜提示词\nscene_type={}\nduration_seconds={}\nshot_script={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=storyboard_rows_json\nconstraints=输出 JSON object，包含 rows 数组；每行必须包含人物、镜头、景别、运镜 camera_movement、画面描述、角色动作、对话/旁白、分镜提示词 prompt_text、duration_seconds；总时长必须守恒；不要输出 full KB rows；不要把内部候选提示证据当最终 prompt_text；不要输出 source_register 或 overlay JSON。",
+            "task_type=generate_storyboard\nscene_type={}\nduration_seconds={}\nshot_script={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=storyboard_rows_json\nconstraints=Output a JSON object with a rows array. Each row must include person, shot_title, scene_scale, camera_movement, visual_description, character_action, dialogue, and duration_seconds. Preserve accepted continuity. Visual descriptions must include environment or space, composition, visible light or atmosphere, and the current visual event. Never emit full KB rows, source_register, overlay JSON, or internal control text. Never turn internal sample evidence into final prompt_text.",
             scene_type,
             duration_seconds,
             request.story_input,
@@ -1963,7 +2005,7 @@ fn build_qwen_request_payload(
             request.selected_kb_rules.join(" | "),
         ),
         _ => format!(
-            "task_type={:?}\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema={}\nconstraints=保持总时长守恒；不要输出 full KB rows；不要把内部候选提示证据当最终 prompt_text；不要输出 source_register 或 overlay JSON。",
+            "task_type={:?}\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema={}\nconstraints=Keep total duration conserved. Preserve accepted continuity. Never emit full KB rows, source_register, overlay JSON, or internal control text. Never turn internal sample evidence into final prompt_text.",
             request.task_type,
             scene_type,
             duration_seconds,
@@ -1992,7 +2034,6 @@ fn build_qwen_request_payload(
     }
     payload
 }
-
 fn qwen_http_transport(
     endpoint: &str,
     api_key: &str,
@@ -2148,8 +2189,14 @@ fn plan_desktop_duration(
                 "long_text_auto used the deterministic story-fact segment strategy.",
             ));
         }
-        let shot_task_durations =
-            allocate_long_text_auto_shot_task_durations(estimated_total_story_duration_seconds);
+        let narrative_beat_count = estimate_long_text_auto_narrative_beat_count(
+            source_material_length_chars,
+            &source_analysis.source_story_facts,
+        );
+        let shot_task_durations = allocate_long_text_auto_shot_task_durations(
+            estimated_total_story_duration_seconds,
+            narrative_beat_count,
+        );
         if shot_task_durations.is_empty() {
             warnings.push(duration_plan_warning(
                 "long_text_auto_duration_plan_missing",
@@ -2170,17 +2217,9 @@ fn plan_desktop_duration(
             auto_segment_strategy,
             estimated_total_story_duration_seconds,
             generated_shot_task_count: shot_task_durations.len() as u32,
-            duration_plan_summary: format!(
-                "mode={}; story_length_profile={}; source_chars={}; estimated_total={}s; generated_shot_tasks={}; shot_task_durations={}",
-                TARGET_DURATION_MODE_LONG_TEXT_AUTO,
-                derive_auto_story_length_profile(
-                    source_material_length_chars,
-                    estimated_total_story_duration_seconds,
-                ),
-                source_material_length_chars,
-                estimated_total_story_duration_seconds,
+            duration_plan_summary: build_long_text_duration_plan_summary(
                 shot_task_durations.len(),
-                join_durations(&shot_task_durations)
+                &shot_task_durations,
             ),
             warnings,
         };
@@ -2287,26 +2326,87 @@ fn derive_auto_story_length_profile(
     .to_string()
 }
 
+fn estimate_long_text_auto_narrative_beat_count(
+    source_material_length_chars: u32,
+    facts: &SourceStoryFacts,
+) -> usize {
+    let event_based = facts.event_order.len().max(facts.core_events.len()).max(1);
+    let length_based = match source_material_length_chars {
+        0..=220 => 3,
+        221..=800 => 5,
+        801..=2_000 => 7,
+        2_001..=2_500 => 8,
+        2_501..=3_500 => 10,
+        3_501..=6_000 => 12,
+        _ => 14,
+    };
+    event_based.max(length_based).min(18)
+}
+
+fn build_long_text_duration_plan_summary(shot_task_count: usize, durations: &[u16]) -> String {
+    let duration_profile = if durations.iter().any(|duration| *duration == 15) {
+        if durations
+            .iter()
+            .any(|duration| *duration == SEEDANCE_REMAINDER_SEGMENT_SECONDS)
+        {
+            "10-15 second durations, with a 5-second remainder only when needed"
+        } else {
+            "10-15 second durations, with 15-second tasks reserved for denser beats"
+        }
+    } else if durations
+        .iter()
+        .any(|duration| *duration == SEEDANCE_REMAINDER_SEGMENT_SECONDS)
+    {
+        "10-second durations, with a 5-second remainder only when needed"
+    } else {
+        "10-second durations"
+    };
+    format!(
+        "Long text auto segmented the story around narrative beats into {shot_task_count} shot tasks; each storyboard row keeps Seedance-friendly {duration_profile}."
+    )
+}
+
 fn round_duration_to_five(duration_seconds: u16) -> u16 {
     ((duration_seconds + SEEDANCE_REMAINDER_SEGMENT_SECONDS - 1)
         / SEEDANCE_REMAINDER_SEGMENT_SECONDS)
         * SEEDANCE_REMAINDER_SEGMENT_SECONDS
 }
 
-fn allocate_long_text_auto_shot_task_durations(total_duration_seconds: u16) -> Vec<u16> {
+fn allocate_long_text_auto_shot_task_durations(
+    total_duration_seconds: u16,
+    narrative_beat_count: usize,
+) -> Vec<u16> {
     if total_duration_seconds < SEEDANCE_STANDARD_SEGMENT_SECONDS
         || total_duration_seconds % SEEDANCE_REMAINDER_SEGMENT_SECONDS != 0
     {
         return vec![];
     }
-    let mut remaining = total_duration_seconds;
-    let mut durations = Vec::new();
-    while remaining >= SEEDANCE_STANDARD_SEGMENT_SECONDS {
-        durations.push(SEEDANCE_STANDARD_SEGMENT_SECONDS);
-        remaining -= SEEDANCE_STANDARD_SEGMENT_SECONDS;
-    }
-    if remaining == SEEDANCE_REMAINDER_SEGMENT_SECONDS {
-        durations.push(SEEDANCE_REMAINDER_SEGMENT_SECONDS);
+    let min_count = usize::from(total_duration_seconds.div_ceil(15));
+    let max_count = usize::from(total_duration_seconds / SEEDANCE_REMAINDER_SEGMENT_SECONDS);
+    let preferred_count = usize::from(total_duration_seconds.div_ceil(10)).min(max_count);
+    let target_count = narrative_beat_count
+        .max(1)
+        .min(max_count)
+        .clamp(min_count, preferred_count.max(min_count));
+    let mut durations = vec![SEEDANCE_STANDARD_SEGMENT_SECONDS; target_count];
+    let baseline_total = u16::try_from(target_count)
+        .ok()
+        .and_then(|count| count.checked_mul(SEEDANCE_STANDARD_SEGMENT_SECONDS))
+        .unwrap_or(total_duration_seconds);
+    if total_duration_seconds > baseline_total {
+        let upgrades = usize::from(
+            (total_duration_seconds - baseline_total) / SEEDANCE_REMAINDER_SEGMENT_SECONDS,
+        );
+        for duration in durations.iter_mut().take(upgrades) {
+            *duration += SEEDANCE_REMAINDER_SEGMENT_SECONDS;
+        }
+    } else if baseline_total > total_duration_seconds {
+        let reductions = usize::from(
+            (baseline_total - total_duration_seconds) / SEEDANCE_REMAINDER_SEGMENT_SECONDS,
+        );
+        for duration in durations.iter_mut().rev().take(reductions) {
+            *duration -= SEEDANCE_REMAINDER_SEGMENT_SECONDS;
+        }
     }
     durations
 }
@@ -2353,16 +2453,148 @@ fn infer_duration_seconds_from_text(text: &str) -> Option<u16> {
     None
 }
 
-fn validate_generated_script_text(text: &str) -> Option<&str> {
+fn validate_generated_script_text(text: &str) -> Option<String> {
     let trimmed = text.trim();
+    let cleaned = sanitize_product_body_text(trimmed);
     if trimmed.is_empty()
-        || contains_forbidden_generation_terms(trimmed)
-        || looks_like_storyboard_or_prompt_text(trimmed)
+        || cleaned.is_empty()
+        || contains_forbidden_generation_terms(&cleaned)
+        || looks_like_storyboard_or_prompt_text(&cleaned)
     {
         None
     } else {
-        Some(trimmed)
+        Some(cleaned)
     }
+}
+
+fn is_v0_screenplay_metadata_segment(segment: &str) -> bool {
+    let trimmed = segment.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    lower.starts_with("screenplay_title:")
+        || lower.starts_with("source_input_type:")
+        || lower.starts_with("authoring_mode:")
+        || lower.starts_with("source_material_summary:")
+        || lower.starts_with("preserved_fact_summary:")
+        || lower.starts_with("continuity_context_summary:")
+        || lower.starts_with("content_priority:")
+        || lower.starts_with("kb_guidance_mode:")
+        || lower.starts_with("timeline_guard:")
+        || lower.starts_with("prop_state_guard:")
+        || lower.starts_with("location_guard:")
+        || lower.starts_with("ending_state_guard:")
+        || lower.starts_with("emotional_progression_guard:")
+        || lower.starts_with("conflict_progression_guard:")
+        || lower.starts_with("dialogue_intent:")
+        || lower.starts_with("source_story_facts_take_priority")
+        || lower.starts_with("changed_for_screenplay_summary:")
+        || lower.starts_with("omitted_detail_summary:")
+        || trimmed.starts_with("角色保留")
+        || trimmed.starts_with("关系保留")
+        || trimmed.starts_with("时间线保留")
+        || trimmed.starts_with("道具状态保留")
+        || trimmed.starts_with("地点事实保留")
+        || trimmed.starts_with("结尾状态保留")
+}
+
+fn contains_product_control_text(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    PRODUCT_CONTROL_ANYWHERE_TERMS
+        .iter()
+        .any(|term| lower.contains(term))
+}
+
+fn is_product_control_metadata_segment(segment: &str) -> bool {
+    let trimmed = segment.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    is_v0_screenplay_metadata_segment(trimmed)
+        || PRODUCT_CONTROL_LINE_PREFIXES
+            .iter()
+            .any(|prefix| lower.starts_with(&prefix.to_ascii_lowercase()))
+        || matches!(
+            lower.as_str(),
+            "source_material_body_begin" | "source_material_body_end"
+        )
+        || trimmed.starts_with("扩写剧本：")
+        || trimmed.starts_with("扩写剧本:")
+        || lower.contains("readystub")
+}
+
+fn strip_numbered_story_prefix(line: &str) -> Option<String> {
+    for delimiter in [':', '：'] {
+        let Some((prefix, remainder)) = line.split_once(delimiter) else {
+            continue;
+        };
+        let label = prefix.trim();
+        let body = remainder.trim();
+        if label.is_empty() || body.is_empty() {
+            continue;
+        }
+        let lower = label.to_ascii_lowercase();
+        let looks_like_story_label = label.chars().any(|character| character.is_ascii_digit())
+            || lower == "scene"
+            || lower.starts_with("scene ")
+            || lower.starts_with("scene_")
+            || lower == "shot"
+            || lower.starts_with("shot ")
+            || lower.starts_with("shot_")
+            || lower == "event"
+            || lower.starts_with("event ")
+            || lower.starts_with("event_")
+            || lower == "beat"
+            || lower.starts_with("beat ")
+            || lower.starts_with("beat_")
+            || label.starts_with("段落")
+            || label.starts_with("场景")
+            || label.starts_with("镜头")
+            || label.starts_with("事件")
+            || label.starts_with("节拍");
+        if looks_like_story_label {
+            return Some(body.to_string());
+        }
+    }
+    None
+}
+
+fn sanitize_product_body_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("synopsis:") {
+        let value = trimmed["synopsis:".len()..].trim();
+        return (!value.is_empty()).then(|| value.to_string());
+    }
+    if is_product_control_metadata_segment(trimmed) {
+        return None;
+    }
+    if let Some(stripped) = strip_numbered_story_prefix(trimmed) {
+        let value = stripped.trim();
+        return (!value.is_empty() && !contains_product_control_text(value))
+            .then(|| value.to_string());
+    }
+    if contains_product_control_text(trimmed) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn sanitize_product_body_text(text: &str) -> String {
+    let normalized = text.replace("\r\n", "\n");
+    let mut lines = normalized
+        .lines()
+        .filter_map(sanitize_product_body_line)
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        lines = split_story_segments(&normalized)
+            .into_iter()
+            .filter_map(|segment| sanitize_product_body_line(&segment))
+            .collect();
+    }
+    lines.join("\n")
 }
 
 fn looks_like_storyboard_or_prompt_text(text: &str) -> bool {
@@ -2857,24 +3089,25 @@ fn validate_live_storyboard_rows(
     if rows.iter().map(|row| row.duration_seconds).sum::<u16>() != expected_duration_seconds {
         findings.push(ProductWarning {
             code: "duration_conservation_failed".to_string(),
-            message: "千问返回后分镜总时长不守恒，已使用本地候选结果。".to_string(),
+            message: "Live storyboard rows no longer conserve the requested duration, so Hope fell back to the deterministic result.".to_string(),
             related_sample_id: None,
         });
     }
     for row in rows {
         for (field_name, field_value) in [
-            ("人物", row.person.as_str()),
-            ("镜头", row.shot_title.as_str()),
-            ("景别", row.scene_scale.as_str()),
-            ("画面描述", row.visual_description.as_str()),
-            ("角色动作", row.character_action.as_str()),
-            ("运镜", row.camera_movement.as_str()),
+            ("person", row.person.as_str()),
+            ("shot_title", row.shot_title.as_str()),
+            ("scene_scale", row.scene_scale.as_str()),
+            ("visual_description", row.visual_description.as_str()),
+            ("character_action", row.character_action.as_str()),
+            ("camera_movement", row.camera_movement.as_str()),
+            ("prompt_text", row.prompt_text.as_str()),
         ] {
             if field_value.trim().is_empty() {
                 findings.push(ProductWarning {
                     code: "text_model_validator_failed".to_string(),
                     message: format!(
-                        "千问返回的第 {} 行缺少{}，已使用本地候选结果。",
+                        "Live storyboard row {} is missing required field {}.",
                         row.order, field_name
                     ),
                     related_sample_id: Some(row.prompt_text_source_row_id.clone()),
@@ -2884,8 +3117,18 @@ fn validate_live_storyboard_rows(
                 findings.push(ProductWarning {
                     code: "text_model_validator_failed".to_string(),
                     message: format!(
-                        "千问返回的第 {} 行包含受限真实名称，已使用本地候选结果。",
-                        row.order
+                        "Live storyboard row {} includes forbidden branded content in {}.",
+                        row.order, field_name
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
+            if contains_product_control_text(field_value) {
+                findings.push(ProductWarning {
+                    code: "internal_control_text_leaked".to_string(),
+                    message: format!(
+                        "Live storyboard row {} leaked internal control text in {}.",
+                        row.order, field_name
                     ),
                     related_sample_id: Some(row.prompt_text_source_row_id.clone()),
                 });
@@ -2901,29 +3144,56 @@ fn validate_live_storyboard_rows(
                 findings.push(ProductWarning {
                     code: "internal_field_code_leaked".to_string(),
                     message: format!(
-                        "第 {} 行包含内部占位字段，已回退到本地候选结果。",
+                        "Live storyboard row {} includes an internal code in {}.",
+                        row.order, field_name
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
+            if field_name == "character_action" && is_role_action_grounding_incomplete(field_value) {
+                findings.push(ProductWarning {
+                    code: "role_action_grounding_incomplete".to_string(),
+                    message: format!(
+                        "Live storyboard row {} has an incomplete role action.",
                         row.order
                     ),
                     related_sample_id: Some(row.prompt_text_source_row_id.clone()),
                 });
             }
-            if field_name == "角色动作" && is_role_action_grounding_incomplete(field_value) {
+            if field_name == "visual_description"
+                && is_visual_description_grounding_incomplete(
+                    field_value,
+                    &row.person,
+                    &row.scene_scale,
+                    &row.character_action,
+                    &row.camera_movement,
+                    &row.shot_script,
+                )
+            {
                 findings.push(ProductWarning {
-                    code: "role_action_grounding_incomplete".to_string(),
-                    message: "角色动作信息不完整，请重新生成或检查当前镜头脚本。".to_string(),
+                    code: "visual_description_grounding_incomplete".to_string(),
+                    message: format!(
+                        "Live storyboard row {} has an incomplete visual description.",
+                        row.order
+                    ),
                     related_sample_id: Some(row.prompt_text_source_row_id.clone()),
                 });
             }
-            if field_name == "运镜"
+            if field_name == "camera_movement"
                 && is_camera_movement_grounding_incomplete(
                     field_value,
                     &row.shot_title,
+                    &row.scene_scale,
                     &row.visual_description,
+                    &row.shot_script,
                 )
             {
                 findings.push(ProductWarning {
                     code: "camera_movement_grounding_incomplete".to_string(),
-                    message: "运镜未完整生成，等待主线运镜 grounding。".to_string(),
+                    message: format!(
+                        "Live storyboard row {} has an incomplete camera movement.",
+                        row.order
+                    ),
                     related_sample_id: Some(row.prompt_text_source_row_id.clone()),
                 });
             }
@@ -2953,9 +3223,172 @@ fn is_role_action_grounding_incomplete(value: &str) -> bool {
     if trimmed.chars().count() < 28 {
         return true;
     }
-    !(trimmed.contains("从") && trimmed.contains("到") && trimmed.contains("镜头捕捉"))
+    !(trimmed.contains("从")
+        && trimmed.contains("到")
+        && trimmed.contains("镜头捕捉"))
 }
 
+fn is_camera_movement_grounding_incomplete(
+    camera_movement: &str,
+    shot_title: &str,
+    scene_scale: &str,
+    visual_description: &str,
+    shot_script: &str,
+) -> bool {
+    let trimmed = camera_movement.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if trimmed == shot_title.trim() || trimmed == visual_description.trim() || shot_script.trim().is_empty() {
+        return true;
+    }
+    if contains_product_control_text(trimmed)
+        || contains_any_story_term(
+            trimmed,
+            &[
+                "当前镜头主体完成动作",
+                "按当前脚本执行",
+                "visual_scene_core",
+                "fused_scene_performance_core_preserved",
+                "目标人物完成关键动作",
+            ],
+        )
+    {
+        return true;
+    }
+    if !scene_scale.trim().is_empty() && !trimmed.contains(scene_scale.trim()) {
+        return true;
+    }
+    !contains_any_story_term(
+        trimmed,
+        &[
+            "定机位",
+            "推进",
+            "跟随",
+            "横移",
+            "上摇",
+            "过肩",
+            "手持",
+            "跟拍",
+            "锁定",
+            "观察",
+            "捕捉",
+        ],
+    )
+}
+
+fn is_visual_description_grounding_incomplete(
+    visual_description: &str,
+    subject: &str,
+    scene_scale: &str,
+    character_action: &str,
+    camera_movement: &str,
+    shot_script: &str,
+) -> bool {
+    let trimmed = visual_description.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if trimmed == character_action.trim()
+        || trimmed == camera_movement.trim()
+        || trimmed == shot_script.trim()
+        || (!character_action.trim().is_empty() && trimmed.contains(character_action.trim()))
+    {
+        return true;
+    }
+    if contains_product_control_text(trimmed)
+        || contains_any_story_term(
+            trimmed,
+            &[
+                "当前镜头主体",
+                "按当前镜头脚本执行关键动作",
+                "保持连续性",
+                "visual_scene_core",
+                "fused_scene_performance_core_preserved",
+                "not_specified_by_v120_bridge",
+            ],
+        )
+    {
+        return true;
+    }
+    if !subject.trim().is_empty()
+        && !trimmed.contains(subject.trim())
+        && !subject_label_mentions_any_name(subject, trimmed)
+    {
+        return true;
+    }
+    let has_environment = contains_any_story_term(
+        trimmed,
+        &[
+            "断桥",
+            "桥边",
+            "桥面",
+            "焦土",
+            "裂痕",
+            "残垣",
+            "废墟",
+            "城门",
+            "门墙",
+            "林间",
+            "林隙",
+            "竹林",
+            "竹叶",
+            "营地",
+            "帐篷",
+            "巷口",
+            "雨夜",
+            "雨雾",
+            "湿地",
+            "战场",
+            "军阵",
+            "前沿",
+        ],
+    );
+    if !has_environment {
+        return true;
+    }
+    let has_composition = (!scene_scale.trim().is_empty() && trimmed.contains(scene_scale.trim()))
+        || contains_any_story_term(
+            trimmed,
+            &[
+                "正面",
+                "侧视角",
+                "俯拍",
+                "仰拍",
+                "对角构图",
+                "前后层次",
+                "画面中心",
+                "主体区域中央",
+            ],
+        );
+    if !has_composition {
+        return true;
+    }
+    let has_light_or_atmosphere = contains_any_story_term(
+        trimmed,
+        &[
+            "火光",
+            "火星",
+            "银辉",
+            "反光",
+            "冷光",
+            "烟尘",
+            "湿亮",
+            "钝暖色",
+            "粗粝",
+            "硬光",
+        ],
+    );
+    if !has_light_or_atmosphere {
+        return true;
+    }
+    let has_current_event = trimmed.contains("当前视觉事件");
+    if !has_current_event {
+        return true;
+    }
+    let has_focus = trimmed.contains("画面突出");
+    !has_focus || trimmed.chars().count() < 28
+}
 fn contains_forbidden_generation_terms(text: &str) -> bool {
     const FORBIDDEN_TERMS: &[&str] = &[
         "宫崎骏",
@@ -3308,8 +3741,10 @@ fn resolve_storyboard_grounding_context(
     request: &GenerateStoryboardRequest,
     expanded_script_text: String,
 ) -> StoryboardGroundingContext {
-    let shot_script =
+    let raw_shot_script =
         non_blank_string(request.shot_script.as_deref().unwrap_or_default()).unwrap_or_default();
+    let shot_script = sanitize_product_body_text(&raw_shot_script);
+    let expanded_script_text = sanitize_product_body_text(&expanded_script_text);
     let primary_scene_type =
         non_blank_string(request.primary_scene_type.as_deref().unwrap_or_default())
             .or_else(|| non_blank_string(request.scene_type.as_deref().unwrap_or_default()))
@@ -3370,7 +3805,6 @@ fn resolve_storyboard_grounding_context(
         adaptation_reason,
     }
 }
-
 fn build_storyboard_router_synopsis(grounding: &StoryboardGroundingContext) -> String {
     format!(
         "primary_scene_type={}; primary_scene_label={}; primary_scene_category={}; shot_scene_type={}; shot_scene_label={}; shot_intent={}; grounding_source={}; shot_script={}; expanded_script_text={}",
@@ -3430,13 +3864,14 @@ fn build_shot_grounded_row_draft(
     let character_action = derive_character_action_from_story(&segment, &grounding.grounding_text);
     let shot_title = derive_shot_title(index, &segment, &person, &character_action);
     let dialogue = extract_dialogue_from_story(&segment);
-    let visual_description = if segment.trim().is_empty() {
-        format!("{person}按已确认镜头脚本推进，画面保持主体和动作关系清晰。")
-    } else if segment.contains(&person) || subject_label_mentions_any_name(&person, &segment) {
-        segment.trim().to_string()
-    } else {
-        format!("{person}：{}", segment.trim())
-    };
+    let visual_description = build_visual_description_from_story(
+        &segment,
+        &grounding.grounding_text,
+        &person,
+        &scene_scale,
+        &grounding.shot_scene_label,
+        &grounding.shot_intent,
+    );
     let camera_movement = derive_camera_movement_from_story(
         &segment,
         &scene_scale,
@@ -3475,7 +3910,6 @@ fn build_shot_grounded_row_draft(
         scene_performance_projection,
     }
 }
-
 fn split_story_segments(text: &str) -> Vec<String> {
     text.replace("\r\n", "\n")
         .split(|character| {
@@ -3850,7 +4284,7 @@ fn subject_label_mentions_any_name(subject: &str, text: &str) -> bool {
 fn derive_shot_scene_scale(segment: &str) -> Option<String> {
     if contains_any_story_term(segment, &["掌心", "手臂", "银辉"]) {
         Some("特写".to_string())
-    } else if contains_any_story_term(segment, &["焦土", "犁痕"]) {
+    } else if contains_any_story_term(segment, &["焦土", "裂痕"]) {
         Some("全景".to_string())
     } else if contains_any_story_term(segment, &["心跳", "鼓点"]) {
         Some("近景".to_string())
@@ -3859,6 +4293,146 @@ fn derive_shot_scene_scale(segment: &str) -> Option<String> {
     }
 }
 
+fn build_visual_description_from_story(
+    segment: &str,
+    full_text: &str,
+    subject: &str,
+    scene_scale: &str,
+    shot_scene_label: &str,
+    shot_intent: &str,
+) -> String {
+    let source = if segment.trim().is_empty() {
+        full_text.trim()
+    } else {
+        segment.trim()
+    };
+    let mut parts = vec![format!(
+        "主体为{subject}，{}",
+        derive_visual_composition_clause(source, subject, scene_scale, shot_intent)
+    )];
+    if let Some(environment) = derive_visual_environment_clause(source, full_text, shot_scene_label) {
+        parts.push(environment);
+    }
+    if let Some(light_tone) = derive_visual_light_tone_clause(source, full_text) {
+        parts.push(light_tone);
+    }
+    parts.push(derive_visual_event_clause(source, subject));
+    parts.push(format!(
+        "画面突出{}",
+        derive_visual_focus_clause(source, shot_intent)
+    ));
+    parts.join("；")
+}
+
+fn derive_visual_composition_clause(
+    source: &str,
+    subject: &str,
+    scene_scale: &str,
+    shot_intent: &str,
+) -> String {
+    let scale = if scene_scale.trim().is_empty() {
+        "中景"
+    } else {
+        scene_scale.trim()
+    };
+    if scale.contains("特写") || contains_any_story_term(source, &["掌心", "手臂", "银辉"]) {
+        format!("{scale}压近{subject}的关键部位，以低角度把动作起势顶到画面前缘")
+    } else if contains_enemy_or_conflict_terms(source) {
+        format!("{scale}侧视角对角构图，把{subject}压在画面前侧的一步对冲距离里")
+    } else if contains_any_story_term(source, &["重逢", "护住", "护着", "回身"]) {
+        format!("{scale}正侧面构图，让{subject}占住画面中心并保留贴身站位关系")
+    } else if shot_intent == "dialogue" {
+        format!("{scale}正面或半侧视角收住{subject}的站位与视线关系")
+    } else if scale.contains("全景") {
+        format!("{scale}展开{subject}与环境的前后层次，主体位置和退路同时留在画面里")
+    } else {
+        format!("{scale}把{subject}放在主体区域中央，保留人物与周围空间的清晰关系")
+    }
+}
+
+fn derive_visual_environment_clause(
+    source: &str,
+    full_text: &str,
+    shot_scene_label: &str,
+) -> Option<String> {
+    let combined = format!("{source}\n{full_text}");
+    if contains_any_story_term(&combined, &["断桥", "桥边", "桥面"]) {
+        Some("场景落在断桥残口与桥边碎石之间，狭窄落脚点把人物退路压得很紧".to_string())
+    } else if contains_any_story_term(&combined, &["焦土", "裂痕", "残垣", "废墟"]) {
+        Some("场景落在焦土裂痕和残垣边缘，碎土与硬质断面把空间压成前线限位".to_string())
+    } else if contains_any_story_term(&combined, &["城门", "门墙"]) {
+        Some("场景落在城门前沿，门墙与地面高差把进退路线框进同一块画面".to_string())
+    } else if contains_any_story_term(&combined, &["林间", "林隙", "竹林", "竹叶"]) {
+        Some("场景落在林间空地，枝叶和树影把主体前后层次切得很清楚".to_string())
+    } else if contains_any_story_term(&combined, &["营地", "帐篷", "密营"]) {
+        Some("场景落在营地核心区域，帐篷和立柱把主体围在可见中心".to_string())
+    } else if contains_any_story_term(&combined, &["雨夜", "巷口", "雨雾", "湿地"]) {
+        Some("场景落在雨夜巷口，墙面与湿地反光把纵深压成一条冷硬通道".to_string())
+    } else if contains_any_story_term(&combined, &["战场", "军阵", "前沿"]) {
+        Some("场景落在战场前沿，阵线、尘土和空地把人物推到冲突最前面".to_string())
+    } else if shot_scene_label.contains("对白") {
+        None
+    } else {
+        None
+    }
+}
+
+fn derive_visual_light_tone_clause(source: &str, full_text: &str) -> Option<String> {
+    let combined = format!("{source}\n{full_text}");
+    if contains_any_story_term(&combined, &["火光", "火星"])
+        && contains_any_story_term(&combined, &["烟尘", "焦土", "裂痕"])
+    {
+        Some("火光和火星在烟尘里来回闪动，粗粝暗色把整幅画面压出持续的冲击感".to_string())
+    } else if contains_any_story_term(&combined, &["银辉", "掌心"]) {
+        Some("银辉冷光沿掌心和手臂向上爬升，把周围色调压成偏冷的硬光层".to_string())
+    } else if contains_any_story_term(&combined, &["雨夜", "雨雾", "湿地"]) {
+        Some("雨雾与湿地反光把画面压成冷色湿亮的质感，边缘轮廓更显锋利".to_string())
+    } else if contains_any_story_term(&combined, &["焦土", "烟尘", "裂痕"]) {
+        Some("焦土灰屑和扬起的烟尘压暗画面色调，空间显得发闷而粗粝".to_string())
+    } else if contains_any_story_term(&combined, &["残阳"]) {
+        Some("残阳只在边线留下一层钝暖色，主体仍被暗面和空气颗粒包住".to_string())
+    } else {
+        None
+    }
+}
+
+fn derive_visual_event_clause(source: &str, subject: &str) -> String {
+    if contains_any_story_term(source, &["重逢"]) {
+        format!("当前视觉事件是{subject}在断裂边缘重新并肩，视线和站位同时重新对上")
+    } else if contains_any_story_term(source, &["护住", "护着", "回身"]) {
+        format!("当前视觉事件是{subject}回身挡住来势，身体横切进对冲路线")
+    } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
+        format!("当前视觉事件是{subject}把距离继续压短，来袭方向直顶主体前线")
+    } else if contains_any_story_term(source, &["格挡", "刀锋", "攻击", "交锋"]) {
+        format!("当前视觉事件是{subject}与对手的锋线正面撞上，冲击点停在接触瞬间")
+    } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) {
+        format!("当前视觉事件是{subject}的掌心或手臂出现醒目的能量变化，力量在画面内继续上涌")
+    } else if contains_any_story_term(source, &["震退", "七步"]) {
+        format!("当前视觉事件是{subject}借反冲把对手震开，脚下碎土被力量带起")
+    } else {
+        format!("当前视觉事件是{subject}在当前空间内完成清晰可见的状态变化，动作落点停在镜头正要继续之前")
+    }
+}
+
+fn derive_visual_focus_clause(source: &str, shot_intent: &str) -> String {
+    if contains_any_story_term(source, &["重逢"]) {
+        "失而复得后的确认与仍未放松的紧绷感".to_string()
+    } else if contains_any_story_term(source, &["护住", "护着", "回身"]) {
+        "护人与来袭同时挤进画面的压迫感".to_string()
+    } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
+        "来势压近和退路被夺走的突迫感".to_string()
+    } else if contains_any_story_term(source, &["格挡", "刀锋", "攻击", "交锋"]) {
+        "正面硬碰时双方谁都不退的对峙感".to_string()
+    } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) || shot_intent == "reveal" {
+        "力量爆发前一刻的控场反转".to_string()
+    } else if contains_any_story_term(source, &["震退", "七步"]) {
+        "反击成立后的控场优势".to_string()
+    } else if shot_intent == "dialogue" {
+        "人物关系在静默停顿里的拉扯感".to_string()
+    } else {
+        "动作即将进入下一拍前的悬停感".to_string()
+    }
+}
 fn derive_character_action_from_story(segment: &str, full_text: &str) -> String {
     let source = if segment.trim().is_empty() {
         full_text
@@ -4044,15 +4618,6 @@ fn character_action_subject(character_action: &str) -> String {
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| "当前主体".to_string())
-}
-
-fn is_camera_movement_grounding_incomplete(
-    camera_movement: &str,
-    shot_title: &str,
-    visual_description: &str,
-) -> bool {
-    let trimmed = camera_movement.trim();
-    trimmed.is_empty() || trimmed == shot_title.trim() || trimmed == visual_description.trim()
 }
 
 fn derive_shot_title_action_core(segment: &str, character_action: &str) -> &'static str {
@@ -5099,9 +5664,18 @@ fn map_repair_recommendation(
 #[cfg(test)]
 mod tests {
     use core_domain::{
-        ExpandScriptRequest, FailurePatternRecord, KbRuntimeSummary, KbSnapshotRecord,
+        BridgeCallStatus, ExpandScriptRequest, FailurePatternRecord, GenerateStoryboardRequest,
+        GeneratedStoryboardRow, GoldenSampleAssetSource, GoldenSampleClassification,
+        GoldenSampleComparisonBaseline, GoldenSampleFailureMappingAsset, GoldenSampleFewshotState,
+        GoldenSampleFieldCoverageRuleAsset, GoldenSampleLibraryAsset,
+        GoldenSampleLibraryProvenance, GoldenSampleLibraryRecord, GoldenSampleNegativeSample,
+        GoldenSampleRepairMappingAsset, GoldenSampleRepairMappingPlanning,
+        GoldenSampleSourceContext, GoldenSampleSourceFields, GoldenSampleSourceRegister,
+        GoldenSampleV3CoreCoverage, GoldenSampleValidatorEvidence, KbBundleManifestRecord,
+        KbBundleRecordCounts, KbGoldenSampleRuntimePackage, KbRuntimeSummary, KbSnapshotRecord,
         PromptTemplateRecord, SceneTaxonomyRecord,
     };
+    use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
     use project_store::{
         DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeHandle, StoreSkeleton,
     };
@@ -5112,9 +5686,10 @@ mod tests {
         build_project_create_or_switch_snapshot_from_fixture, build_storyboard_preview_plan,
         build_storyboard_rendersegment_cut_preview_snapshot_from_fixture,
         build_validation_export_panel_snapshot_from_fixture,
-        build_writer_entry_snapshot_from_fixture, derive_character_action_from_story,
-        derive_product_person, derive_shot_title, resolve_expand_script_target_duration_seconds,
-        resolve_scene_taxonomy,
+        build_writer_entry_snapshot_from_fixture, contains_any_story_term,
+        contains_product_control_text, derive_character_action_from_story,
+        derive_product_person, derive_shot_title, expand_script, generate_storyboard,
+        resolve_expand_script_target_duration_seconds, resolve_scene_taxonomy,
     };
     use crate::state::load_desktop_shared_fixture;
     use crate::{
@@ -5242,6 +5817,365 @@ mod tests {
         state.kb_knowledge.failure_patterns.clear();
         state.kb_knowledge.prompt_templates.clear();
         state
+    }
+
+    fn test_state_with_golden_sample_runtime() -> AppState {
+        let mut state = test_state();
+        state.kb_runtime.summary.has_golden_sample_v120_package = true;
+        state.kb_runtime.summary.golden_sample_record_count = 1;
+        state.kb_runtime.summary.golden_sample_source_count = 1;
+        state.kb_golden_sample_runtime = Some(test_golden_sample_runtime_package());
+        state
+    }
+
+    fn test_golden_sample_runtime_package() -> KbGoldenSampleRuntimePackage {
+        let record = GoldenSampleLibraryRecord {
+            machine_id: "golden_sample_runtime_test_01".to_string(),
+            sample_id: "GS-RT-01".to_string(),
+            schema_version: "golden_sample_library.v0.2".to_string(),
+            source_fields: GoldenSampleSourceFields {
+                shot_id: "GS-RT-01".to_string(),
+                library_status: "official".to_string(),
+                reserve_reason: String::new(),
+                sample_type: "single_shot".to_string(),
+                sequence_id: "SEQ-01".to_string(),
+                shot_order: "01".to_string(),
+                sample_title: "断桥对撞".to_string(),
+                style_cluster: "hope-action".to_string(),
+                scene_category: "daily_dialogue".to_string(),
+                scene_tag: "断桥,交锋,银辉,碎土".to_string(),
+                quality_grade: "high".to_string(),
+                usable_for_fewshot: "Yes".to_string(),
+                technical_profile: "MS / eye-level / 24fps".to_string(),
+                scene_performance_core: "Bridge-edge confrontation before a direct clash."
+                    .to_string(),
+                camera_directing_core: "Hold the opposing lines and keep the bridge fracture visible."
+                    .to_string(),
+                audio_directing_core: "Wind, footfall, and impact tension.".to_string(),
+                continuity_negative_core: String::new(),
+                reference_bundle: String::new(),
+                ip_abstraction_note: "abstracted".to_string(),
+                covered_points: "composition / atmosphere / action".to_string(),
+                missed_points: String::new(),
+                teaching_note: "Positive runtime sample for deterministic storyboard tests."
+                    .to_string(),
+                prompt_body: "Cinematic bridge confrontation with clean prompt language."
+                    .to_string(),
+            },
+            provenance: GoldenSampleLibraryProvenance {
+                source_workbook: "workbook.xlsx".to_string(),
+                source_workbook_sha256: "hash".to_string(),
+                source_control_memo: "memo.docx".to_string(),
+                source_control_memo_sha256: "hash".to_string(),
+                source_row_index: 1,
+                source_library_status: "official".to_string(),
+                source_sample_type: "single_shot".to_string(),
+                comparison_baseline_source_id: "baseline".to_string(),
+                control_review_doc: "review.md".to_string(),
+                control_dispatch_doc: "dispatch.md".to_string(),
+            },
+            classification: GoldenSampleClassification {
+                core: "storyboard_runtime_positive".to_string(),
+                library_status: "official".to_string(),
+                sample_type: "single_shot".to_string(),
+                sequence_id: "SEQ-01".to_string(),
+                shot_order: "01".to_string(),
+                style_cluster: "hope-action".to_string(),
+                scene_category: "daily_dialogue".to_string(),
+                scene_tags: vec![
+                    "断桥".to_string(),
+                    "交锋".to_string(),
+                    "银辉".to_string(),
+                ],
+                quality_grade: "high".to_string(),
+                usable_for_fewshot: true,
+                coverage_surfaces: vec![
+                    "scene_performance_core".to_string(),
+                    "camera_directing_core".to_string(),
+                ],
+            },
+            fewshot: GoldenSampleFewshotState {
+                eligible: true,
+                source_value: "Yes".to_string(),
+                retrieval_status: "open".to_string(),
+            },
+            validator_evidence: GoldenSampleValidatorEvidence {
+                covered_points: "composition / atmosphere / action".to_string(),
+                missed_points: String::new(),
+                teaching_note: "No placeholder or reserve-only evidence remains.".to_string(),
+                source_quality_grade: "high".to_string(),
+                source_library_status: "official".to_string(),
+                source_sample_type: "single_shot".to_string(),
+                has_coverage_gap: false,
+                has_placeholder_signal: false,
+                surface_completeness: std::collections::BTreeMap::from([
+                    ("scene_performance_core".to_string(), true),
+                    ("camera_directing_core".to_string(), true),
+                    ("prompt_body".to_string(), true),
+                ]),
+                reference_bundle_present: false,
+            },
+            negative_sample: GoldenSampleNegativeSample {
+                is_negative_sample: false,
+                signal_codes: vec![],
+                reserve_reason: String::new(),
+            },
+            v3_core_coverage: GoldenSampleV3CoreCoverage {
+                core: "storyboard_runtime_positive".to_string(),
+                coverage_rule_ids: vec![],
+                source_coverage_statement: "covered".to_string(),
+                source_missing_statement: String::new(),
+                source_field_presence: std::collections::BTreeMap::from([
+                    ("scene_performance_core".to_string(), true),
+                    ("camera_directing_core".to_string(), true),
+                    ("prompt_body".to_string(), true),
+                ]),
+                comparison_baseline: GoldenSampleComparisonBaseline {
+                    primary_source_id: "v120".to_string(),
+                    comparison_source_id: "v108".to_string(),
+                },
+            },
+            repair_mapping_planning: GoldenSampleRepairMappingPlanning {
+                failure_mapping_id: "failure-map-runtime-test".to_string(),
+                repair_mapping_id: "repair-map-runtime-test".to_string(),
+                planning_only: true,
+            },
+        };
+        let source_context = GoldenSampleSourceContext {
+            primary_source_id: "v120".to_string(),
+            comparison_source_id: "v108".to_string(),
+        };
+
+        KbGoldenSampleRuntimePackage {
+            manifest: KbBundleManifestRecord {
+                snapshot_version: "v0.2".to_string(),
+                snapshot_name: "runtime-test-bundle".to_string(),
+                content_hash_algo: "sha256".to_string(),
+                content_hash: "runtime-test-hash".to_string(),
+                seed_import_format: "golden-sample-v0.2".to_string(),
+                imported_at: "2026-04-27T00:00:00Z".to_string(),
+                primary_key: "sample_id".to_string(),
+                bundle_order: vec![
+                    "golden_sample_library".to_string(),
+                    "golden_sample_field_coverage_rules".to_string(),
+                    "golden_sample_failure_mapping".to_string(),
+                    "golden_sample_repair_mapping".to_string(),
+                    "golden_sample_sources".to_string(),
+                ],
+                record_counts: KbBundleRecordCounts {
+                    golden_sample_library: 1,
+                    golden_sample_field_coverage_rules: 0,
+                    golden_sample_failure_mapping: 0,
+                    golden_sample_repair_mapping: 0,
+                    golden_sample_sources: 1,
+                    golden_sample_provenance_entries: 0,
+                },
+            },
+            golden_sample_library: GoldenSampleLibraryAsset {
+                schema_version: "golden_sample_library.v0.2".to_string(),
+                asset_name: "golden_sample_library".to_string(),
+                generated_at: "2026-04-27T00:00:00Z".to_string(),
+                source: GoldenSampleAssetSource {
+                    primary_workbook: "workbook.xlsx".to_string(),
+                    primary_workbook_sha256: "hash".to_string(),
+                    control_memo: "memo.docx".to_string(),
+                    control_memo_sha256: "hash".to_string(),
+                    control_review: "review.md".to_string(),
+                    control_dispatch: "dispatch.md".to_string(),
+                    comparison_baseline_source_id: "baseline".to_string(),
+                },
+                record_count: 1,
+                source_field_order: vec![
+                    "scene_category".to_string(),
+                    "scene_tag".to_string(),
+                    "prompt_body".to_string(),
+                ],
+                records: vec![record],
+            },
+            field_coverage_rules: GoldenSampleFieldCoverageRuleAsset {
+                schema_version: "golden_sample_field_coverage_rule.v0.2".to_string(),
+                asset_name: "golden_sample_field_coverage_rules".to_string(),
+                generated_at: "2026-04-27T00:00:00Z".to_string(),
+                source_context: source_context.clone(),
+                record_count: 0,
+                records: vec![],
+            },
+            failure_mapping: GoldenSampleFailureMappingAsset {
+                schema_version: "golden_sample_failure_mapping.v0.2".to_string(),
+                asset_name: "golden_sample_failure_mapping".to_string(),
+                generated_at: "2026-04-27T00:00:00Z".to_string(),
+                source_context: source_context.clone(),
+                failure_code_definitions: vec![],
+                record_count: 0,
+                records: vec![],
+            },
+            repair_mapping: GoldenSampleRepairMappingAsset {
+                schema_version: "golden_sample_repair_mapping.v0.2".to_string(),
+                asset_name: "golden_sample_repair_mapping".to_string(),
+                generated_at: "2026-04-27T00:00:00Z".to_string(),
+                source_context,
+                record_count: 0,
+                records: vec![],
+            },
+            source_register: GoldenSampleSourceRegister {
+                schema_version: "golden_sample_source_register.v0.2".to_string(),
+                register_name: "runtime-test-source-register".to_string(),
+                updated_at: "2026-04-27T00:00:00Z".to_string(),
+                sources: vec![],
+                provenance_entries: vec![],
+            },
+        }
+    }
+
+    fn assert_visual_description_is_enhanced(row: &GeneratedStoryboardRow) {
+        let visual = row.visual_description.as_str();
+        assert!(
+            visual.contains(&row.scene_scale)
+                || contains_any_story_term(
+                    visual,
+                    &["正面", "侧视角", "对角构图", "前后层次", "画面中心", "主体区域中央"],
+                ),
+            "visual_description should include composition: {}",
+            visual
+        );
+        assert!(
+            contains_any_story_term(
+                visual,
+                &[
+                    "断桥", "桥边", "桥面", "焦土", "裂痕", "残垣", "废墟", "城门", "林间",
+                    "营地", "雨夜", "战场",
+                ],
+            ),
+            "visual_description should include environment or space: {}",
+            visual
+        );
+        assert!(
+            contains_any_story_term(
+                visual,
+                &["火光", "火星", "银辉", "反光", "冷光", "烟尘", "湿亮", "钝暖色", "粗粝", "硬光"],
+            ),
+            "visual_description should include light, color, or atmosphere: {}",
+            visual
+        );
+        assert!(
+            visual.contains("当前视觉事件"),
+            "visual_description should describe the current visual event: {}",
+            visual
+        );
+        assert!(
+            visual.contains("画面突出"),
+            "visual_description should include a focus clause: {}",
+            visual
+        );
+    }
+
+    #[test]
+    fn expand_script_scrubs_product_control_text_from_visible_story_body() {
+        let state = test_state();
+        let response = expand_script(
+            &state,
+            ExpandScriptRequest {
+                scene_type: "xianxia_action".to_string(),
+                scene_label: Some("断桥交锋".to_string()),
+                scene_category: Some("xianxia_action".to_string()),
+                model_config_summary: None,
+                selected_total_duration_seconds: Some(30),
+                target_duration_seconds: Some(30),
+                target_duration_mode: "fixed_seconds".to_string(),
+                story_length_profile: String::new(),
+                source_material_length_chars: 0,
+                auto_segment_strategy: String::new(),
+                source_input_type: "full_story".to_string(),
+                authoring_mode: "rewrite_from_full_story".to_string(),
+                source_material_summary: String::new(),
+                source_story_facts: Default::default(),
+                preserved_fact_summary: String::new(),
+                changed_for_screenplay_summary: String::new(),
+                omitted_detail_summary: String::new(),
+                synopsis_text: [
+                    "scene_type: xianxia_action",
+                    "target_duration_seconds: 30",
+                    "source_package: desktop-test",
+                    "扩写剧本：按30秒连续剧情处理，保留真实人物名。",
+                    "段落1：林峰在断桥边护住叶倾颜，萧寒压近。",
+                    "段落2：银辉沿掌心上涌，碎土被震开。",
+                ]
+                .join("\n"),
+            },
+        );
+
+        assert_ne!(response.status, BridgeCallStatus::Blocked);
+        assert!(!contains_product_control_text(&response.expanded_script_text));
+        assert!(!response.expanded_script_text.contains("target_duration_seconds"));
+        assert!(!response.expanded_script_text.contains("扩写剧本"));
+        assert!(response.expanded_script_text.contains("林峰"));
+    }
+
+    #[test]
+    fn storyboard_rows_and_workbook_stay_clean_after_control_text_scrubbing() {
+        let state = test_state_with_golden_sample_runtime();
+        let polluted_script = [
+            "scene_type: daily_dialogue",
+            "target_duration_seconds: 30",
+            "source_package: desktop-test",
+            "扩写剧本：按30秒连续剧情处理，保留真实人物名。",
+            "段落1：林峰回身护住叶倾颜，萧寒压近断桥裂口，银辉冷光沿手臂上涌，脚下碎土被震开。",
+            "段落2：三人沿残墙与桥边碎石继续逼近，冲突停在正面对撞前一瞬。",
+        ]
+        .join("\n");
+
+        let storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "polluted-product-cleanup".to_string(),
+                script_id: None,
+                shot_script: None,
+                expanded_script_text: Some(polluted_script),
+                primary_scene_type: Some("daily_dialogue".to_string()),
+                primary_scene_label: Some("断桥交锋".to_string()),
+                primary_scene_category: Some("action_dialogue".to_string()),
+                shot_scene_type: None,
+                shot_scene_label: None,
+                shot_intent: None,
+                adaptation_reason: None,
+                selected_total_duration_seconds: 30,
+                target_duration_mode: String::new(),
+                auto_segment_strategy: String::new(),
+                model_config_summary: None,
+                scene_type: None,
+                scene_label: None,
+                scene_category: None,
+            },
+        );
+
+        assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
+        for row in &storyboard.rows {
+            assert_visual_description_is_enhanced(row);
+            assert!(!contains_product_control_text(&row.shot_script));
+            assert!(!contains_product_control_text(&row.visual_description));
+            assert!(!contains_product_control_text(&row.prompt_text));
+        }
+
+        let export = export_v120_storyboard_bundle(&V120StoryboardExportRequest {
+            export_manifest_id: "test-clean-export".to_string(),
+            result_id: storyboard.result_id.clone(),
+            selected_total_duration_seconds: storyboard.selected_total_duration_seconds,
+            source_result_id: storyboard.result_id.clone(),
+            edited_rows_applied: storyboard.dirty,
+            rows: storyboard.rows.clone(),
+        })
+        .expect("v120 export bundle should build");
+
+        let sheet = export
+            .workbook
+            .sheets
+            .iter()
+            .find(|sheet| sheet.machine_name == "v120_storyboard_rows")
+            .expect("storyboard workbook should expose storyboard rows");
+        for row in &sheet.rows {
+            assert!(!contains_product_control_text(&row[5]));
+            assert!(!contains_product_control_text(&row[8]));
+        }
     }
 
     #[test]

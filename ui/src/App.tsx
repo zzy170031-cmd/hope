@@ -535,6 +535,15 @@ export function App() {
     () => new Set(sceneTasks.filter((task) => task.candidateId !== "custom").map((task) => task.candidateId)),
     [sceneTasks],
   );
+  const confirmedSceneTaskIds = useMemo(
+    () =>
+      new Set(
+        finalizedShots
+          .filter((shot) => shot.confirmed && shot.shot_task_id)
+          .map((shot) => shot.shot_task_id),
+      ),
+    [finalizedShots],
+  );
   const generatedSceneTaskCount = useMemo(
     () => sceneTasks.filter((task) => task.status === "generated").length,
     [sceneTasks],
@@ -574,6 +583,13 @@ export function App() {
   const modelConfigSummary = useMemo(
     () => buildModelConfigSummary(modelConfig, modelProviderStatus),
     [modelConfig, modelProviderStatus],
+  );
+  const currentTaskDraftQueueTone = useMemo(
+    () =>
+      taskDraft?.editingTaskRecordId && confirmedSceneTaskIds.has(taskDraft.editingTaskRecordId)
+        ? "confirmed"
+        : "pending",
+    [confirmedSceneTaskIds, taskDraft?.editingTaskRecordId],
   );
   const modelRuntimeLabel = useMemo(
     () => formatModelProviderStatus(modelConfig, modelProviderStatus),
@@ -2989,6 +3005,11 @@ export function App() {
                     <div className="task-draft-label">镜头任务队列（将用于生成）</div>
                     {sceneTasks.length ? (
                       <select
+                        className={
+                          currentTaskDraftQueueTone === "confirmed"
+                            ? "task-queue-select__control task-queue-select__control--confirmed"
+                            : "task-queue-select__control task-queue-select__control--pending"
+                        }
                         value={taskDraft.editingTaskRecordId ?? ""}
                         onChange={(event) => {
                           const task = sceneTasks.find((item) => item.id === event.target.value);
@@ -2997,14 +3018,32 @@ export function App() {
                           }
                         }}
                       >
-                        <option value="" disabled>
+                        <option value="" disabled className="task-queue-select__placeholder">
                           选择镜头任务
                         </option>
-                        {sceneTasks.map((task, index) => (
-                          <option key={task.id} value={task.id}>
-                            {formatTaskDraftQueueOption(task, index, taskDraft, durationSeconds)}
-                          </option>
-                        ))}
+                        {sceneTasks.map((task, index) => {
+                          const queueTone = confirmedSceneTaskIds.has(task.id) ? "confirmed" : "pending";
+                          return (
+                            <option
+                              key={task.id}
+                              value={task.id}
+                              className={
+                                queueTone === "confirmed"
+                                  ? "task-queue-select__option task-queue-select__option--confirmed"
+                                  : "task-queue-select__option task-queue-select__option--pending"
+                              }
+                              style={{ color: queueTone === "confirmed" ? "var(--danger)" : "var(--navy)" }}
+                            >
+                              {formatTaskDraftQueueOption(
+                                task,
+                                index,
+                                taskDraft,
+                                durationSeconds,
+                                confirmedSceneTaskIds,
+                              )}
+                            </option>
+                          );
+                        })}
                       </select>
                     ) : (
                       <div className="task-queue__empty">还没有镜头任务，确认创建后会出现在这里。</div>
@@ -4458,12 +4497,17 @@ function formatTaskDraftQueueOption(
   index: number,
   draft: TaskDraftState,
   fallbackDurationSeconds: number,
+  confirmedTaskIds: Set<string>,
 ) {
   void fallbackDurationSeconds;
   const isEditingTask = task.id === draft.editingTaskRecordId;
   const segmentTitle = isEditingTask ? draft.segmentTitle : task.segmentTitle;
   const taskName = isEditingTask ? draft.taskName : task.name;
-  const statusText = task.status === "generated" ? `${task.rowCount ?? 0} 行已生成` : "待生成";
+  const statusText = confirmedTaskIds.has(task.id)
+    ? "已确认 / 已定稿"
+    : task.status === "generated"
+    ? "待确认"
+    : "待生成";
   return `${index + 1}. ${taskName} · ${segmentTitle} · ${statusText}`;
 }
 
