@@ -122,6 +122,7 @@ struct LiveStoryboardRowsEnvelope {
 struct StoryboardGroundingContext {
     shot_script: String,
     expanded_script_text: String,
+    raw_expanded_script_text: String,
     grounding_text: String,
     grounding_source: ShotGroundingSource,
     primary_scene_type: String,
@@ -185,6 +186,54 @@ const FINALIZED_BANK_FORBIDDEN_TERMS: &[&str] = &[
     "full raw kb rows",
     "full_kb_rows",
     "full_kb_rows_included",
+];
+
+const PRODUCT_CONTROL_LINE_PREFIXES: &[&str] = &[
+    "scene_type:",
+    "source_package:",
+    "target_duration_seconds:",
+    "source_input_type:",
+    "authoring_mode:",
+    "source_material_summary:",
+    "preserved_fact_summary:",
+    "character_names:",
+    "character_relationships:",
+    "preserved_event_order:",
+    "ending_state:",
+    "screenplay_title:",
+    "continuity_context_summary:",
+    "content_priority:",
+    "kb_guidance_mode:",
+    "source_story_facts_take_priority",
+    "source_story_facts_take_priority_over_kb_advice:",
+    "changed_for_screenplay_summary:",
+    "omitted_detail_summary:",
+    "dialogue_intent:",
+    "prompt_text_compilation",
+    "duration_source:",
+];
+
+const PRODUCT_CONTROL_ANYWHERE_TERMS: &[&str] = &[
+    "scene_type:",
+    "source_package:",
+    "source_input_type:",
+    "authoring_mode:",
+    "screenplay_title:",
+    "source_material_summary:",
+    "preserved_fact_summary:",
+    "continuity_context_summary:",
+    "content_priority:",
+    "kb_guidance_mode:",
+    "changed_for_screenplay_summary:",
+    "omitted_detail_summary:",
+    "source_material_body_begin",
+    "source_material_body_end",
+    "target_duration_seconds",
+    "扩写剧本：",
+    "扩写剧本:",
+    "readystub",
+    "prompt_text_compilation",
+    "duration_source",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -307,9 +356,9 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
             related_sample_id: None,
         });
     }
-    let expanded_script_text = if generated_script.warnings.is_empty() {
+    let stored_expanded_script_text = if generated_script.warnings.is_empty() {
         match validate_generated_script_text(&generated_script.text) {
-            Some(text) => text.to_string(),
+            Some(text) => text,
             None => {
                 warnings.push(ProductWarning {
                     code: "text_model_validator_failed".to_string(),
@@ -348,22 +397,25 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
             target_duration_seconds,
         )
     };
+    let expanded_script_text = sanitize_product_body_text(&stored_expanded_script_text);
     let status = if warnings.is_empty() {
         BridgeCallStatus::Ready
     } else {
         BridgeCallStatus::WarningOnly
     };
 
-    let response = ExpandScriptResponse {
+    let stored_response = ExpandScriptResponse {
         status,
         script_id,
-        expanded_script_text,
+        expanded_script_text: stored_expanded_script_text,
         script_hash,
         blockers: vec![],
         warnings,
         kb_router_result,
     };
-    state.remember_script(response.clone());
+    let mut response = stored_response.clone();
+    response.expanded_script_text = expanded_script_text;
+    state.remember_script(stored_response);
     response
 }
 
@@ -442,14 +494,14 @@ pub fn generate_novel_chapter(
     );
     let chapter_title =
         deterministic_chapter_title(request.chapter_order, &request.user_topic_or_synopsis);
-    let chapter_text = deterministic_v0_source_chapter_text(
+    let chapter_text = sanitize_product_body_text(&deterministic_v0_source_chapter_text(
         &request.user_topic_or_synopsis,
         &request.story_length_profile,
         &request.authoring_craft_summary,
         &continuity_profile.effective_context_summary,
         kb_summary_available,
         &source_analysis,
-    );
+    ));
     let chapter_summary_source = if source_analysis.authoring_mode == "expand_from_synopsis" {
         &request.user_topic_or_synopsis
     } else {
@@ -649,8 +701,9 @@ pub fn adapt_chapter_to_script(
         &dialogue_intent,
         &request.chapter_summary,
     );
-    let script_text =
+    let internal_script_text =
         deterministic_v0_script_text_for_authoring(&request, &scene_beats, &dialogue_intent);
+    let script_text = sanitize_product_body_text(&internal_script_text);
     let script_summary = format!(
         "剧本保留章节主线：{}",
         compact_product_summary(
@@ -667,7 +720,7 @@ pub fn adapt_chapter_to_script(
     );
 
     let mut continuity_warnings = validate_rewrite_fact_preservation(
-        &script_text,
+        &internal_script_text,
         &request.source_story_facts,
         &request.authoring_mode,
     );
@@ -713,7 +766,7 @@ pub fn adapt_chapter_to_script(
         story_id: response.story_id.clone(),
         chapter_id: response.chapter_id.clone(),
         chapter_order: response.chapter_order,
-        script_text,
+        script_text: internal_script_text,
         script_summary,
         source_input_type: response.source_input_type.clone(),
         authoring_mode: response.authoring_mode.clone(),
@@ -1058,9 +1111,13 @@ pub fn run_v0_story_to_storyboard_chain(
         };
     }
 
+    let internal_script_text = state
+        .find_v0_script(&script.script_id)
+        .map(|saved| saved.script_text)
+        .unwrap_or_else(|| script.script_text.clone());
     let split_response = split_script_to_shot_tasks(SplitScriptToShotTasksRequest {
         script_id: Some(script.script_id.clone()),
-        expanded_script_text: script.script_text.clone(),
+        expanded_script_text: internal_script_text.clone(),
         selected_total_duration_seconds: duration_plan.estimated_total_story_duration_seconds,
         target_duration_mode: duration_plan.target_duration_mode.clone(),
         auto_segment_strategy: duration_plan.auto_segment_strategy.clone(),
@@ -1133,7 +1190,7 @@ pub fn run_v0_story_to_storyboard_chain(
                 task_name: v0_shot_task_name(task),
                 script_id: Some(script.script_id.clone()),
                 shot_script: Some(task.shot_script.clone()),
-                expanded_script_text: Some(script.script_text.clone()),
+                expanded_script_text: Some(internal_script_text.clone()),
                 primary_scene_type: Some(request.primary_scene_type.clone()),
                 primary_scene_label: request.primary_scene_label.clone(),
                 primary_scene_category: request.primary_scene_category.clone(),
@@ -2370,6 +2427,7 @@ fn finalized_storyboard_payload_contains_forbidden_terms(
     FINALIZED_BANK_FORBIDDEN_TERMS
         .iter()
         .any(|term| payload.contains(term))
+        || contains_product_control_text(&payload)
         || contains_secret_like_sk_token(&payload)
 }
 
@@ -2945,6 +3003,7 @@ pub fn split_script_to_shot_tasks(
     request: SplitScriptToShotTasksRequest,
 ) -> SplitScriptToShotTasksResponse {
     let mut warnings = Vec::new();
+    let expanded_script_text = sanitize_product_body_text(&request.expanded_script_text);
     let target_duration_mode = normalize_target_duration_mode(&request.target_duration_mode)
         .unwrap_or(TARGET_DURATION_MODE_FIXED_SECONDS);
     if normalize_target_duration_mode(&request.target_duration_mode).is_none()
@@ -2955,14 +3014,14 @@ pub fn split_script_to_shot_tasks(
             "split_script_to_shot_tasks received an unsupported target_duration_mode and used fixed_seconds planning.",
         ));
     }
-    let mut source_segments = filtered_story_segments(&request.expanded_script_text);
+    let mut source_segments = filtered_story_segments(&expanded_script_text);
     if source_segments.is_empty() {
-        source_segments = split_story_segments(&request.expanded_script_text);
+        source_segments = split_story_segments(&expanded_script_text);
     }
     let mut explicit_boundary_count = 0usize;
     if target_duration_mode == TARGET_DURATION_MODE_LONG_TEXT_AUTO {
         let (long_text_segments, boundaries) =
-            extract_long_text_narrative_units(&request.expanded_script_text);
+            extract_long_text_narrative_units(&expanded_script_text);
         explicit_boundary_count = boundaries;
         if !long_text_segments.is_empty() {
             source_segments = long_text_segments;
@@ -3001,7 +3060,7 @@ pub fn split_script_to_shot_tasks(
             &durations,
         ));
         if grouped_units.is_empty() {
-            vec![request.expanded_script_text.trim().to_string()]
+            vec![expanded_script_text.trim().to_string()]
         } else {
             grouped_units
         }
@@ -3022,7 +3081,7 @@ pub fn split_script_to_shot_tasks(
     let script_hash = stable_hash_hex(&format!(
         "{}\n{}\n{}\n{}\n{}",
         request.script_id.as_deref().unwrap_or_default(),
-        request.expanded_script_text,
+        expanded_script_text,
         request.selected_total_duration_seconds,
         target_duration_mode,
         request.auto_segment_strategy
@@ -3033,13 +3092,13 @@ pub fn split_script_to_shot_tasks(
             planned_segments
                 .get(index)
                 .cloned()
-                .unwrap_or_else(|| request.expanded_script_text.trim().to_string())
+                .unwrap_or_else(|| expanded_script_text.trim().to_string())
         } else {
             story_segment_for_planned_row(
                 &source_segments,
                 index,
                 shot_count,
-                &request.expanded_script_text,
+                &expanded_script_text,
             )
         };
         let primary_scene_type = request.primary_scene_type.clone();
@@ -3060,7 +3119,7 @@ pub fn split_script_to_shot_tasks(
                 planned_segments
                     .get(index)
                     .map(String::as_str)
-                    .unwrap_or(&request.expanded_script_text),
+                    .unwrap_or(&expanded_script_text),
             ),
             adaptation_reason,
             grounding_source: ShotGroundingSource::ExpandedScriptText,
@@ -3408,13 +3467,14 @@ fn plan_v0_chain_duration(
 fn filtered_story_segments(text: &str) -> Vec<String> {
     let mut segments = split_story_segments(text)
         .into_iter()
-        .filter(|segment| !is_v0_screenplay_metadata_segment(segment))
+        .filter(|segment| !is_product_control_metadata_segment(segment))
         .map(|segment| normalize_story_unit(&segment))
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>();
     if segments.is_empty() {
         segments = split_story_segments(text)
             .into_iter()
+            .filter_map(|segment| sanitize_product_body_line(&segment))
             .map(|segment| normalize_story_unit(&segment))
             .filter(|segment| !segment.is_empty())
             .collect();
@@ -3481,7 +3541,7 @@ fn extract_long_text_narrative_units(text: &str) -> (Vec<String>, usize) {
     let mut explicit_boundary_count = 0usize;
     for line in normalized.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || is_v0_screenplay_metadata_segment(trimmed) {
+        if trimmed.is_empty() || is_product_control_metadata_segment(trimmed) {
             continue;
         }
         if let Some(stripped) = strip_numbered_story_prefix(trimmed) {
@@ -3518,11 +3578,25 @@ fn strip_numbered_story_prefix(line: &str) -> Option<String> {
             continue;
         }
         let lower = label.to_ascii_lowercase();
-        if label.chars().any(|character| character.is_ascii_digit())
-            || lower.starts_with("scene")
-            || lower.starts_with("shot")
-            || lower.starts_with("event")
-            || lower.starts_with("beat")
+        let looks_like_story_label = label.chars().any(|character| character.is_ascii_digit())
+            || lower == "scene"
+            || lower.starts_with("scene ")
+            || lower.starts_with("scene_")
+            || lower == "shot"
+            || lower.starts_with("shot ")
+            || lower.starts_with("shot_")
+            || lower == "event"
+            || lower.starts_with("event ")
+            || lower.starts_with("event_")
+            || lower == "beat"
+            || lower.starts_with("beat ")
+            || lower.starts_with("beat_")
+            || label.starts_with("段落")
+            || label.starts_with("场景")
+            || label.starts_with("镜头")
+            || label.starts_with("事件")
+            || label.starts_with("节拍");
+        if looks_like_story_label
         {
             return Some(body.to_string());
         }
@@ -4593,6 +4667,71 @@ fn is_v0_screenplay_metadata_segment(segment: &str) -> bool {
         || trimmed.starts_with("结尾状态保留")
 }
 
+fn contains_product_control_text(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    PRODUCT_CONTROL_ANYWHERE_TERMS
+        .iter()
+        .any(|term| lower.contains(term))
+}
+
+fn is_product_control_metadata_segment(segment: &str) -> bool {
+    let trimmed = segment.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    is_v0_screenplay_metadata_segment(trimmed)
+        || PRODUCT_CONTROL_LINE_PREFIXES
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+        || matches!(
+            lower.as_str(),
+            "source_material_body_begin" | "source_material_body_end"
+        )
+        || trimmed.starts_with("扩写剧本：")
+        || trimmed.starts_with("扩写剧本:")
+        || lower.contains("readystub")
+}
+
+fn sanitize_product_body_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("synopsis:") {
+        let value = trimmed["synopsis:".len()..].trim();
+        return (!value.is_empty()).then(|| value.to_string());
+    }
+    if is_product_control_metadata_segment(trimmed) {
+        return None;
+    }
+    if let Some(stripped) = strip_numbered_story_prefix(trimmed) {
+        let value = stripped.trim();
+        return (!value.is_empty() && !contains_product_control_text(value))
+            .then(|| value.to_string());
+    }
+    if contains_product_control_text(trimmed) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn sanitize_product_body_text(text: &str) -> String {
+    let normalized = text.replace("\r\n", "\n");
+    let mut lines = normalized
+        .lines()
+        .filter_map(sanitize_product_body_line)
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        lines = split_story_segments(&normalized)
+            .into_iter()
+            .filter_map(|segment| sanitize_product_body_line(&segment))
+            .collect();
+    }
+    lines.join("\n")
+}
+
 fn deterministic_chapter_title(chapter_order: u32, topic: &str) -> String {
     format!(
         "第{}章：{}",
@@ -5161,12 +5300,15 @@ fn resolve_storyboard_grounding_context(
     request: &GenerateStoryboardRequest,
     expanded_script_text: String,
 ) -> StoryboardGroundingContext {
-    let shot_script =
+    let raw_shot_script =
         non_blank_string(request.shot_script.as_deref().unwrap_or_default()).unwrap_or_default();
+    let raw_expanded_script_text = expanded_script_text;
+    let shot_script = sanitize_product_body_text(&raw_shot_script);
+    let expanded_script_text = sanitize_product_body_text(&raw_expanded_script_text);
     let primary_scene_type =
         non_blank_string(request.primary_scene_type.as_deref().unwrap_or_default())
-            .or_else(|| non_blank_string(&extract_scene_type(&expanded_script_text)))
-            .or_else(|| non_blank_string(&extract_scene_type(&shot_script)))
+            .or_else(|| non_blank_string(&extract_scene_type(&raw_expanded_script_text)))
+            .or_else(|| non_blank_string(&extract_scene_type(&raw_shot_script)))
             .unwrap_or_default();
     let grounding_source = if !shot_script.trim().is_empty() {
         ShotGroundingSource::ShotScript
@@ -5199,6 +5341,7 @@ fn resolve_storyboard_grounding_context(
     StoryboardGroundingContext {
         shot_script,
         expanded_script_text,
+        raw_expanded_script_text,
         grounding_text,
         grounding_source,
         primary_scene_type: primary_scene_type.clone(),
@@ -5249,7 +5392,7 @@ fn screenplay_metadata_value(text: &str, prefix: &str) -> Option<String> {
 
 fn build_storyboard_model_story_input(grounding: &StoryboardGroundingContext) -> String {
     let continuity_context_summary = screenplay_metadata_value(
-        &grounding.expanded_script_text,
+        &grounding.raw_expanded_script_text,
         "continuity_context_summary:",
     )
     .unwrap_or_else(|| {
@@ -5257,7 +5400,7 @@ fn build_storyboard_model_story_input(grounding: &StoryboardGroundingContext) ->
             .to_string()
     });
     let content_priority =
-        screenplay_metadata_value(&grounding.expanded_script_text, "content_priority:")
+        screenplay_metadata_value(&grounding.raw_expanded_script_text, "content_priority:")
             .unwrap_or_else(|| {
                 "content_facts>writing_continuity>scene_expression>director_scheduling>storyboard"
                     .to_string()
@@ -6654,12 +6797,13 @@ fn infer_duration_seconds_from_text(text: &str) -> Option<u16> {
     None
 }
 
-fn validate_generated_script_text(text: &str) -> Option<&str> {
+fn validate_generated_script_text(text: &str) -> Option<String> {
     let trimmed = text.trim();
-    if trimmed.is_empty() || contains_forbidden_generation_terms(trimmed) {
+    let cleaned = sanitize_product_body_text(trimmed);
+    if trimmed.is_empty() || cleaned.is_empty() || contains_forbidden_generation_terms(&cleaned) {
         None
     } else {
-        Some(trimmed)
+        Some(trimmed.to_string())
     }
 }
 
@@ -6754,6 +6898,16 @@ fn validate_storyboard_rows(
                     code: "text_model_validator_failed".to_string(),
                     message: format!(
                         "Storyboard row {} includes forbidden real-name or brand-like content in {}.",
+                        row.shot_id, field_name
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
+            if contains_product_control_text(field_value) {
+                findings.push(ProductWarning {
+                    code: "internal_control_text_leaked".to_string(),
+                    message: format!(
+                        "Storyboard row {} leaked internal control text in {}.",
                         row.shot_id, field_name
                     ),
                     related_sample_id: Some(row.prompt_text_source_row_id.clone()),
@@ -7885,7 +8039,8 @@ mod tests {
         build_prompt_text_compilation_request, build_qwen_request_payload,
         build_storyboard_preview_plan, build_text_generation_request,
         build_validation_export_panel_snapshot_from_fixture, compile_seedance_prompt_text,
-        contains_any_story_term, default_text_model_provider, expand_script, export_bundle,
+        contains_any_story_term, contains_product_control_text, default_text_model_provider,
+        expand_script, export_bundle,
         export_storyboard_bank, generate_storyboard, is_visual_description_grounding_incomplete,
         list_storyboard_shot_results, project_scene_performance, remove_storyboard_shot_result,
         resolve_scene_taxonomy, run_kb_router, run_qwen_text_generation_with_transport,
@@ -8084,13 +8239,19 @@ mod tests {
         row: &core_domain::GeneratedStoryboardRow,
     ) {
         let combined = format!(
-            "{} {} {} {} {} {}",
+            "{} {} {} {} {} {} {} {}",
+            row.shot_script,
             row.person,
             row.shot_title,
             row.visual_description,
             row.character_action,
             row.camera_movement,
+            row.dialogue,
             row.prompt_text
+        );
+        assert!(
+            !contains_product_control_text(&combined),
+            "storyboard row leaked internal control text: {combined}"
         );
         for forbidden in [
             "交锋双方",
@@ -8152,9 +8313,26 @@ mod tests {
                 "枝叶",
             ],
         ));
+        assert!(contains_any_story_term(
+            &row.visual_description,
+            &[
+                "冷光",
+                "火光",
+                "反光",
+                "烟尘",
+                "湿亮",
+                "粗粝",
+                "硬光",
+                "灰云",
+            ],
+        ));
     }
 
     fn assert_prompt_text_has_no_internal_payload(prompt_text: &str) {
+        assert!(
+            !contains_product_control_text(prompt_text),
+            "prompt_text leaked internal control text: {prompt_text}"
+        );
         for forbidden in [
             "KB摘要",
             "KB上下文",
@@ -9129,6 +9307,119 @@ mod tests {
     }
 
     #[test]
+    fn storyboard_export_and_bank_keep_user_fields_clean_after_scrubbing_control_text() {
+        let state = test_state();
+        let polluted_script = [
+            "scene_type: daily_dialogue",
+            "target_duration_seconds: 30",
+            "synopsis: 林峰与叶倾颜在断桥裂口前重新并肩，萧寒压近而至。",
+            "扩写剧本：按30秒连续剧情处理，保留真实人物名、主体关系、动作对象和清晰起承转合。",
+            "ReadyStub",
+            "prompt_text_compilation_status: ReadyStub",
+            "duration_source: storyboard_duration_plan.allocated_row_duration_seconds",
+            "段落1：林峰回身护住叶倾颜，萧寒压近断桥裂口，银辉冷光沿手臂上涌，脚下碎土被震开。",
+            "段落2：三人沿残墙与桥边碎石继续逼近，冲突停在正面对撞前一瞬。",
+        ]
+        .join("\n");
+
+        let storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "polluted-product-cleanup".to_string(),
+                script_id: None,
+                shot_script: None,
+                expanded_script_text: Some(polluted_script),
+                primary_scene_type: None,
+                primary_scene_label: Some("断桥交锋".to_string()),
+                primary_scene_category: Some("action_dialogue".to_string()),
+                shot_scene_type: None,
+                shot_scene_label: None,
+                shot_intent: None,
+                adaptation_reason: None,
+                selected_total_duration_seconds: 30,
+            },
+        );
+
+        assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
+        for row in &storyboard.rows {
+            assert_visual_description_is_enhanced(row);
+            assert_storyboard_row_has_no_vague_or_internal_terms(row);
+            assert_prompt_text_has_no_internal_payload(&row.prompt_text);
+            assert!(!contains_product_control_text(&row.shot_script));
+            assert!(!contains_product_control_text(&row.visual_description));
+            assert!(row.prompt_text.contains(&row.visual_description));
+        }
+
+        let save = save_storyboard_shot_result(
+            &state,
+            finalized_save_request_from_storyboard(
+                "project-clean-001",
+                "script-clean-001",
+                1,
+                true,
+                &storyboard,
+            ),
+        );
+        assert_ne!(save.status, BridgeCallStatus::Blocked);
+        assert!(save.blockers.is_empty(), "{:?}", save.blockers);
+        let saved_shot = save.shot.expect("clean storyboard should be saved");
+        assert!(!contains_product_control_text(&saved_shot.prompt_text));
+        for row in &saved_shot.rows {
+            assert_visual_description_is_enhanced(row);
+            assert!(!contains_product_control_text(&row.visual_description));
+            assert!(!contains_product_control_text(&row.prompt_text));
+        }
+
+        let export = export_bundle(
+            &state,
+            ExportBundleRequest {
+                result_id: Some(storyboard.result_id.clone()),
+                task_id: None,
+                export_format: "xlsx".to_string(),
+            },
+        );
+        let json_artifact = export
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.artifact_kind == "storyboard_json")
+            .expect("json artifact should exist");
+        let json_text = fs::read_to_string(json_artifact.artifact_path.as_ref().unwrap())
+            .expect("json artifact should be readable");
+        let workbook: serde_json::Value =
+            serde_json::from_str(&json_text).expect("json artifact should parse");
+        let rows = workbook["v120_storyboard_rows"]
+            .as_array()
+            .expect("json export should expose the storyboard row array");
+        let visual_column = export_engine::V120_STORYBOARD_COLUMNS[14];
+        let prompt_column = export_engine::V120_STORYBOARD_COLUMNS[17];
+
+        for row in rows {
+            let row = row
+                .as_object()
+                .expect("json export row should serialize into an object");
+            let visual = row
+                .get(visual_column)
+                .and_then(serde_json::Value::as_str)
+                .expect("visual_description cell should be text");
+            let prompt = row
+                .get(prompt_column)
+                .and_then(serde_json::Value::as_str)
+                .expect("prompt_text cell should be text");
+            assert!(!contains_product_control_text(visual));
+            assert!(!contains_product_control_text(prompt));
+            assert!(contains_any_story_term(
+                visual,
+                &["断桥", "桥边", "残墙", "碎土", "裂口"]
+            ));
+            assert!(contains_any_story_term(
+                visual,
+                &["冷光", "烟尘", "反光", "粗粝", "硬光"]
+            ));
+            assert!(prompt.contains(visual));
+        }
+    }
+
+    #[test]
     fn generate_storyboard_uses_named_people_in_product_fields() {
         let state = test_state();
         let shot_script = "男主林峰和女主叶倾颜在断桥重逢。敌将萧寒追杀而至，林峰抬起银辉手臂迎着萧寒格挡。叶倾颜回身护住林峰。";
@@ -9866,16 +10157,8 @@ mod tests {
 
         assert_ne!(script_15.status, BridgeCallStatus::Blocked);
         assert_ne!(script_60.status, BridgeCallStatus::Blocked);
-        assert!(
-            script_15
-                .expanded_script_text
-                .contains("target_duration_seconds: 15")
-        );
-        assert!(
-            script_60
-                .expanded_script_text
-                .contains("target_duration_seconds: 60")
-        );
+        assert!(!contains_product_control_text(&script_15.expanded_script_text));
+        assert!(!contains_product_control_text(&script_60.expanded_script_text));
         assert!(
             script_60.expanded_script_text.chars().count()
                 > script_15.expanded_script_text.chars().count() * 3 / 2
@@ -9884,12 +10167,12 @@ mod tests {
             script_60
                 .expanded_script_text
                 .lines()
-                .filter(|line| line.starts_with("段落"))
+                .filter(|line| !line.trim().is_empty())
                 .count()
                 > script_15
                     .expanded_script_text
                     .lines()
-                    .filter(|line| line.starts_with("段落"))
+                    .filter(|line| !line.trim().is_empty())
                     .count()
         );
     }
@@ -10216,7 +10499,14 @@ mod tests {
         );
 
         assert_eq!(script.status, BridgeCallStatus::WarningOnly);
-        assert!(script.expanded_script_text.contains("source_package:"));
+        assert!(!contains_product_control_text(&script.expanded_script_text));
+        assert!(
+            state
+                .find_script(&script.script_id)
+                .expect("script should be stored for follow-up storyboard work")
+                .expanded_script_text
+                .contains("source_package:")
+        );
         assert!(
             script
                 .warnings
@@ -10245,7 +10535,7 @@ mod tests {
         );
 
         assert!(script.script_id.starts_with("script-"));
-        assert!(script.expanded_script_text.contains("daily_dialogue"));
+        assert!(!contains_product_control_text(&script.expanded_script_text));
         assert!(
             script
                 .warnings
@@ -10551,10 +10841,13 @@ mod tests {
             );
             assert_ne!(script.status, BridgeCallStatus::Blocked);
             assert!(
-                script
+                state
+                    .find_script(&script.script_id)
+                    .expect("stored script should preserve internal scene metadata")
                     .expanded_script_text
                     .contains("scene_type: daily_dialogue")
             );
+            assert!(!contains_product_control_text(&script.expanded_script_text));
 
             let storyboard = generate_storyboard(
                 &state,
