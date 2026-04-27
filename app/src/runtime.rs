@@ -1075,6 +1075,23 @@ pub fn run_v0_story_to_storyboard_chain(
         selected_sample_ids: request.selected_sample_ids.clone(),
     });
     warnings.extend(split_response.warnings.clone());
+    dedupe_product_warnings(&mut warnings);
+    let shot_task_durations = split_response
+        .shot_tasks
+        .iter()
+        .map(|task| task.duration_seconds)
+        .collect::<Vec<_>>();
+    let duration_plan_summary = if duration_plan.target_duration_mode
+        == TARGET_DURATION_MODE_LONG_TEXT_AUTO
+    {
+        build_long_text_duration_plan_summary(
+            split_response.shot_tasks.len(),
+            &shot_task_durations,
+            true,
+        )
+    } else {
+        duration_plan.duration_plan_summary.clone()
+    };
     let shot_task_plan = ShotTaskPlan {
         script_id: script.script_id.clone(),
         story_id: request.story_id.clone(),
@@ -1088,7 +1105,7 @@ pub fn run_v0_story_to_storyboard_chain(
         estimated_total_story_duration_seconds: duration_plan
             .estimated_total_story_duration_seconds,
         generated_shot_task_count: split_response.shot_tasks.len() as u32,
-        duration_plan_summary: duration_plan.duration_plan_summary.clone(),
+        duration_plan_summary: duration_plan_summary.clone(),
         continuity_delta: format!(
             "shot_task_plan:{} split script into {} grounded shot tasks",
             script.script_id,
@@ -1218,7 +1235,7 @@ pub fn run_v0_story_to_storyboard_chain(
             estimated_total_story_duration_seconds: duration_plan
                 .estimated_total_story_duration_seconds,
             generated_shot_task_count: shot_task_plan.generated_shot_task_count,
-            duration_plan_summary: duration_plan.duration_plan_summary.clone(),
+            duration_plan_summary: duration_plan_summary.clone(),
             source_input_type: chapter.source_input_type.clone(),
             authoring_mode: chapter.authoring_mode.clone(),
             source_material_summary: chapter.source_material_summary.clone(),
@@ -1295,7 +1312,7 @@ pub fn run_v0_story_to_storyboard_chain(
         estimated_total_story_duration_seconds: duration_plan
             .estimated_total_story_duration_seconds,
         generated_shot_task_count: shot_task_plan.generated_shot_task_count,
-        duration_plan_summary: duration_plan.duration_plan_summary.clone(),
+        duration_plan_summary: duration_plan_summary,
         source_input_type: chapter.source_input_type.clone(),
         authoring_mode: chapter.authoring_mode.clone(),
         source_material_summary: chapter.source_material_summary.clone(),
@@ -2928,13 +2945,6 @@ pub fn split_script_to_shot_tasks(
     request: SplitScriptToShotTasksRequest,
 ) -> SplitScriptToShotTasksResponse {
     let mut warnings = Vec::new();
-    let mut source_segments = split_story_segments(&request.expanded_script_text)
-        .into_iter()
-        .filter(|segment| !is_v0_screenplay_metadata_segment(segment))
-        .collect::<Vec<_>>();
-    if source_segments.is_empty() {
-        source_segments = split_story_segments(&request.expanded_script_text);
-    }
     let target_duration_mode = normalize_target_duration_mode(&request.target_duration_mode)
         .unwrap_or(TARGET_DURATION_MODE_FIXED_SECONDS);
     if normalize_target_duration_mode(&request.target_duration_mode).is_none()
@@ -2945,9 +2955,24 @@ pub fn split_script_to_shot_tasks(
             "split_script_to_shot_tasks received an unsupported target_duration_mode and used fixed_seconds planning.",
         ));
     }
-    let durations = if target_duration_mode == TARGET_DURATION_MODE_LONG_TEXT_AUTO {
-        let planned =
-            allocate_long_text_auto_shot_task_durations(request.selected_total_duration_seconds);
+    let mut source_segments = filtered_story_segments(&request.expanded_script_text);
+    if source_segments.is_empty() {
+        source_segments = split_story_segments(&request.expanded_script_text);
+    }
+    let mut explicit_boundary_count = 0usize;
+    if target_duration_mode == TARGET_DURATION_MODE_LONG_TEXT_AUTO {
+        let (long_text_segments, boundaries) =
+            extract_long_text_narrative_units(&request.expanded_script_text);
+        explicit_boundary_count = boundaries;
+        if !long_text_segments.is_empty() {
+            source_segments = long_text_segments;
+        }
+    }
+    let mut durations = if target_duration_mode == TARGET_DURATION_MODE_LONG_TEXT_AUTO {
+        let planned = allocate_long_text_auto_shot_task_durations(
+            request.selected_total_duration_seconds,
+            source_segments.len(),
+        );
         if planned.is_empty() {
             warnings.push(duration_plan_warning(
                 "long_text_auto_duration_plan_missing",
@@ -2965,7 +2990,34 @@ pub fn split_script_to_shot_tasks(
         allocate_storyboard_row_durations(request.selected_total_duration_seconds, 0)
             .unwrap_or_else(|| vec![request.selected_total_duration_seconds])
     };
+    let mut planned_segments = if target_duration_mode == TARGET_DURATION_MODE_LONG_TEXT_AUTO {
+        let expanded_units = expand_story_units_to_target_count(&source_segments, durations.len());
+        let grouped_units = group_story_units_to_target_count(&expanded_units, durations.len());
+        warnings.extend(build_long_text_segmentation_warnings(
+            &source_segments,
+            &expanded_units,
+            &grouped_units,
+            explicit_boundary_count,
+            &durations,
+        ));
+        if grouped_units.is_empty() {
+            vec![request.expanded_script_text.trim().to_string()]
+        } else {
+            grouped_units
+        }
+    } else {
+        source_segments.clone()
+    };
+    if target_duration_mode == TARGET_DURATION_MODE_LONG_TEXT_AUTO {
+        durations = rebalance_long_text_auto_durations_by_density(&durations, &planned_segments);
+    }
     let shot_count = durations.len();
+    if target_duration_mode == TARGET_DURATION_MODE_LONG_TEXT_AUTO
+        && planned_segments.len() != shot_count
+        && shot_count > 0
+    {
+        planned_segments = group_story_units_to_target_count(&planned_segments, shot_count);
+    }
     let mut shot_tasks = Vec::new();
     let script_hash = stable_hash_hex(&format!(
         "{}\n{}\n{}\n{}\n{}",
@@ -2977,12 +3029,19 @@ pub fn split_script_to_shot_tasks(
     ));
 
     for index in 0..shot_count {
-        let shot_script = story_segment_for_planned_row(
-            &source_segments,
-            index,
-            shot_count,
-            &request.expanded_script_text,
-        );
+        let shot_script = if target_duration_mode == TARGET_DURATION_MODE_LONG_TEXT_AUTO {
+            planned_segments
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| request.expanded_script_text.trim().to_string())
+        } else {
+            story_segment_for_planned_row(
+                &source_segments,
+                index,
+                shot_count,
+                &request.expanded_script_text,
+            )
+        };
         let primary_scene_type = request.primary_scene_type.clone();
         let shot_scene_type = infer_shot_scene_type(&shot_script, &primary_scene_type);
         let adaptation_reason = if shot_scene_type == primary_scene_type {
@@ -2998,7 +3057,7 @@ pub fn split_script_to_shot_tasks(
             shot_scene_type: shot_scene_type.clone(),
             shot_scene_label: derive_shot_scene_label(&shot_scene_type),
             shot_intent: derive_shot_intent(
-                source_segments
+                planned_segments
                     .get(index)
                     .map(String::as_str)
                     .unwrap_or(&request.expanded_script_text),
@@ -3007,6 +3066,7 @@ pub fn split_script_to_shot_tasks(
             grounding_source: ShotGroundingSource::ExpandedScriptText,
         });
     }
+    dedupe_product_warnings(&mut warnings);
 
     SplitScriptToShotTasksResponse {
         script_id: request.script_id,
@@ -3261,8 +3321,14 @@ fn plan_v0_chain_duration(
             .trim()
             .to_string()
             .if_empty(AUTO_SEGMENT_STRATEGY_LONG_TEXT);
-        let shot_task_durations =
-            allocate_long_text_auto_shot_task_durations(estimated_total_story_duration_seconds);
+        let narrative_beat_count = estimate_long_text_auto_narrative_beat_count(
+            source_material_length_chars,
+            &source_analysis.source_story_facts,
+        );
+        let shot_task_durations = allocate_long_text_auto_shot_task_durations(
+            estimated_total_story_duration_seconds,
+            narrative_beat_count,
+        );
         let generated_shot_task_count = shot_task_durations.len() as u32;
         let mut warnings = Vec::new();
         if request.auto_segment_strategy.trim().is_empty() {
@@ -3283,16 +3349,16 @@ fn plan_v0_chain_duration(
                 "long_text_auto must split source material into multiple concrete shot tasks instead of one compressed clip.",
             ));
         }
-        let duration_plan_summary = format!(
-            "mode={}; story_length_profile={}; source_chars={}; source_input_type={}; strategy={}; estimated_total={}s; generated_shot_tasks={}; shot_task_durations={}; layers=writing_continuity>scene_expression_adaptation>director_scheduling>shot_language",
-            TARGET_DURATION_MODE_LONG_TEXT_AUTO,
-            story_length_profile,
-            source_material_length_chars,
-            source_analysis.source_input_type,
-            auto_segment_strategy,
-            estimated_total_story_duration_seconds,
-            generated_shot_task_count,
-            join_durations(&shot_task_durations)
+        if generated_shot_task_count as usize != narrative_beat_count {
+            warnings.push(duration_plan_warning(
+                "long_text_duration_plan_adjusted",
+                "long_text_auto adjusted shot-task count to keep beat-aligned segments inside Seedance-friendly 10-15 second durations.",
+            ));
+        }
+        let duration_plan_summary = build_long_text_duration_plan_summary(
+            generated_shot_task_count as usize,
+            &shot_task_durations,
+            false,
         );
 
         return V0ChainDurationPlan {
@@ -3337,6 +3403,397 @@ fn plan_v0_chain_duration(
         ),
         warnings: vec![],
     }
+}
+
+fn filtered_story_segments(text: &str) -> Vec<String> {
+    let mut segments = split_story_segments(text)
+        .into_iter()
+        .filter(|segment| !is_v0_screenplay_metadata_segment(segment))
+        .map(|segment| normalize_story_unit(&segment))
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.is_empty() {
+        segments = split_story_segments(text)
+            .into_iter()
+            .map(|segment| normalize_story_unit(&segment))
+            .filter(|segment| !segment.is_empty())
+            .collect();
+    }
+    segments
+}
+
+fn normalize_story_unit(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn estimate_long_text_auto_narrative_beat_count(
+    source_material_length_chars: u32,
+    facts: &SourceStoryFacts,
+) -> usize {
+    let event_based = facts.event_order.len().max(facts.core_events.len()).max(1);
+    let length_based = match source_material_length_chars {
+        0..=220 => 3,
+        221..=800 => 5,
+        801..=2_000 => 7,
+        2_001..=2_500 => 8,
+        2_501..=3_500 => 10,
+        3_501..=6_000 => 12,
+        _ => 14,
+    };
+    event_based.max(length_based).min(18)
+}
+
+fn build_long_text_duration_plan_summary(
+    shot_task_count: usize,
+    durations: &[u16],
+    completed: bool,
+) -> String {
+    let action = if completed {
+        "segmented"
+    } else {
+        "plans to segment"
+    };
+    let duration_profile = if durations.iter().any(|duration| *duration == 15) {
+        if durations
+            .iter()
+            .any(|duration| *duration == SEEDANCE_REMAINDER_SEGMENT_SECONDS)
+        {
+            "10-15 second durations, with a 5-second remainder only when needed"
+        } else {
+            "10-15 second durations, with 15-second tasks reserved for denser beats"
+        }
+    } else if durations
+        .iter()
+        .any(|duration| *duration == SEEDANCE_REMAINDER_SEGMENT_SECONDS)
+    {
+        "10-second durations, with a 5-second remainder only when needed"
+    } else {
+        "10-second durations"
+    };
+    format!(
+        "Long text auto {action} the story around narrative beats into {shot_task_count} shot tasks; each storyboard row keeps Seedance-friendly {duration_profile}."
+    )
+}
+
+fn extract_long_text_narrative_units(text: &str) -> (Vec<String>, usize) {
+    let normalized = text.replace("\r\n", "\n");
+    let mut units = Vec::new();
+    let mut explicit_boundary_count = 0usize;
+    for line in normalized.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || is_v0_screenplay_metadata_segment(trimmed) {
+            continue;
+        }
+        if let Some(stripped) = strip_numbered_story_prefix(trimmed) {
+            explicit_boundary_count += 1;
+            let primary_sentence = first_story_sentence(&stripped);
+            let candidate = if primary_sentence.trim().is_empty() {
+                stripped
+            } else {
+                primary_sentence
+            };
+            units.extend(split_dense_story_unit(&candidate, false));
+            continue;
+        }
+        for segment in filtered_story_segments(trimmed) {
+            units.extend(split_dense_story_unit(&segment, false));
+        }
+    }
+    let merged = merge_short_story_units(units);
+    if merged.is_empty() {
+        (filtered_story_segments(text), explicit_boundary_count)
+    } else {
+        (merged, explicit_boundary_count)
+    }
+}
+
+fn strip_numbered_story_prefix(line: &str) -> Option<String> {
+    for delimiter in [':', '：'] {
+        let Some((prefix, remainder)) = line.split_once(delimiter) else {
+            continue;
+        };
+        let label = prefix.trim();
+        let body = remainder.trim();
+        if label.is_empty() || body.is_empty() {
+            continue;
+        }
+        let lower = label.to_ascii_lowercase();
+        if label.chars().any(|character| character.is_ascii_digit())
+            || lower.starts_with("scene")
+            || lower.starts_with("shot")
+            || lower.starts_with("event")
+            || lower.starts_with("beat")
+        {
+            return Some(body.to_string());
+        }
+    }
+    None
+}
+
+fn split_dense_story_unit(text: &str, allow_midpoint_fallback: bool) -> Vec<String> {
+    let normalized = normalize_story_unit(text);
+    if normalized.is_empty() {
+        return vec![];
+    }
+    let char_count = normalized.chars().count();
+    let comma_like_count = normalized
+        .chars()
+        .filter(|character| matches!(character, ',' | '，' | ';' | '；'))
+        .count();
+    if char_count < 48 && comma_like_count == 0 {
+        return vec![normalized];
+    }
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    for character in normalized.chars() {
+        if matches!(character, ',' | '，' | ';' | '；') {
+            let candidate = normalize_story_unit(&current);
+            if !candidate.is_empty() {
+                parts.push(candidate);
+            }
+            current.clear();
+            continue;
+        }
+        current.push(character);
+    }
+    let tail = normalize_story_unit(&current);
+    if !tail.is_empty() {
+        parts.push(tail);
+    }
+    let mut merged = merge_short_story_units(parts);
+    if merged.len() > 1 {
+        return merged;
+    }
+    if allow_midpoint_fallback {
+        merged = split_story_unit_near_midpoint(&normalized);
+        if merged.len() > 1 {
+            return merge_short_story_units(merged);
+        }
+    }
+    vec![normalized]
+}
+
+fn split_story_unit_near_midpoint(text: &str) -> Vec<String> {
+    let words = text.split_whitespace().collect::<Vec<_>>();
+    if words.len() >= 8 {
+        let midpoint = words.len() / 2;
+        let left = words[..midpoint].join(" ");
+        let right = words[midpoint..].join(" ");
+        let left = normalize_story_unit(&left);
+        let right = normalize_story_unit(&right);
+        if !left.is_empty() && !right.is_empty() {
+            return vec![left, right];
+        }
+    }
+
+    let characters = text.chars().collect::<Vec<_>>();
+    if characters.len() >= 100 {
+        let midpoint = characters.len() / 2;
+        let left = characters[..midpoint].iter().collect::<String>();
+        let right = characters[midpoint..].iter().collect::<String>();
+        let left = normalize_story_unit(&left);
+        let right = normalize_story_unit(&right);
+        if !left.is_empty() && !right.is_empty() {
+            return vec![left, right];
+        }
+    }
+
+    vec![normalize_story_unit(text)]
+}
+
+fn merge_short_story_units(units: Vec<String>) -> Vec<String> {
+    let mut merged: Vec<String> = Vec::new();
+    for unit in units {
+        let normalized = normalize_story_unit(&unit);
+        if normalized.is_empty() {
+            continue;
+        }
+        if normalized.chars().count() < 18 {
+            if let Some(previous) = merged.last_mut() {
+                previous.push(' ');
+                previous.push_str(&normalized);
+            } else {
+                merged.push(normalized);
+            }
+        } else {
+            merged.push(normalized);
+        }
+    }
+    if merged.len() >= 2 {
+        let merge_tail = merged
+            .last()
+            .map(|unit| unit.chars().count() < 18)
+            .unwrap_or(false);
+        if merge_tail {
+            if let Some(tail) = merged.pop() {
+                if let Some(previous) = merged.last_mut() {
+                    previous.push(' ');
+                    previous.push_str(&tail);
+                } else {
+                    merged.push(tail);
+                }
+            }
+        }
+    }
+    merged
+}
+
+fn expand_story_units_to_target_count(units: &[String], target_count: usize) -> Vec<String> {
+    let mut expanded = merge_short_story_units(units.to_vec());
+    while expanded.len() < target_count {
+        let mut best_index = None;
+        let mut best_parts = Vec::new();
+        let mut best_score = 0usize;
+        for (index, unit) in expanded.iter().enumerate() {
+            let parts = split_dense_story_unit(unit, true);
+            if parts.len() <= 1 {
+                continue;
+            }
+            let score = estimate_long_text_segment_density(unit);
+            if score > best_score {
+                best_index = Some(index);
+                best_parts = parts;
+                best_score = score;
+            }
+        }
+        let Some(index) = best_index else {
+            break;
+        };
+        expanded.splice(index..=index, best_parts);
+        expanded = merge_short_story_units(expanded);
+    }
+    expanded
+}
+
+fn group_story_units_to_target_count(units: &[String], target_count: usize) -> Vec<String> {
+    if target_count == 0 || units.is_empty() {
+        return vec![];
+    }
+    if units.len() <= target_count {
+        return units.to_vec();
+    }
+    let mut grouped = Vec::with_capacity(target_count);
+    for index in 0..target_count {
+        let start = index * units.len() / target_count;
+        let mut end = (index + 1) * units.len() / target_count;
+        if index + 1 == target_count {
+            end = units.len();
+        }
+        if end <= start {
+            continue;
+        }
+        grouped.push(normalize_story_unit(&units[start..end].join(" ")));
+    }
+    grouped
+}
+
+fn build_long_text_segmentation_warnings(
+    raw_units: &[String],
+    expanded_units: &[String],
+    planned_segments: &[String],
+    explicit_boundary_count: usize,
+    durations: &[u16],
+) -> Vec<ProductWarning> {
+    let mut warnings = Vec::new();
+    let target_count = durations.len();
+    if explicit_boundary_count == 0 {
+        warnings.push(duration_plan_warning(
+            "long_text_segment_boundary_uncertain",
+            "long_text_auto inferred some segment boundaries from sentence density because the screenplay did not expose enough explicit beat markers.",
+        ));
+    }
+    if raw_units.len() > target_count.saturating_add(2) {
+        warnings.push(duration_plan_warning(
+            "long_text_segment_too_fragmented",
+            "Long text exposed more micro-beats than the preferred Seedance plan, so adjacent beats were merged into fuller shot tasks.",
+        ));
+    }
+    let dense_segments = planned_segments
+        .iter()
+        .zip(durations.iter())
+        .filter(|(segment, duration)| segment.chars().count() > usize::from(**duration) * 22)
+        .count();
+    if raw_units.len() < target_count || dense_segments > 0 {
+        warnings.push(duration_plan_warning(
+            "long_text_segment_too_dense",
+            "Some long-text shot tasks still carry dense plot material, so manual review is recommended before final lock.",
+        ));
+    }
+    if raw_units.len() != target_count || expanded_units.len() != target_count {
+        warnings.push(duration_plan_warning(
+            "long_text_duration_plan_adjusted",
+            "long_text_auto adjusted shot-task count to keep beat-aligned segments inside Seedance-friendly 10-15 second durations.",
+        ));
+    }
+    if !planned_segments.is_empty() {
+        warnings.push(duration_plan_warning(
+            "long_text_event_order_preserved",
+            "long_text_auto kept the accepted event order while regrouping the screenplay into shot tasks.",
+        ));
+    }
+    dedupe_product_warnings(&mut warnings);
+    warnings
+}
+
+fn estimate_long_text_segment_density(text: &str) -> usize {
+    let normalized = normalize_story_unit(text);
+    let lower = normalized.to_ascii_lowercase();
+    let punctuation_bonus = normalized
+        .chars()
+        .filter(|character| matches!(character, ',' | '，' | ';' | '；' | ':' | '：'))
+        .count()
+        * 12;
+    let transition_bonus = [
+        " then ",
+        " while ",
+        " before ",
+        " after ",
+        " meanwhile ",
+        " but ",
+    ]
+    .iter()
+    .filter(|marker| lower.contains(*marker))
+    .count()
+        * 8;
+    normalized.chars().count() + punctuation_bonus + transition_bonus
+}
+
+fn rebalance_long_text_auto_durations_by_density(
+    durations: &[u16],
+    planned_segments: &[String],
+) -> Vec<u16> {
+    if durations.len() != planned_segments.len() || durations.is_empty() {
+        return durations.to_vec();
+    }
+    let fifteen_count = durations.iter().filter(|duration| **duration == 15).count();
+    let five_count = durations
+        .iter()
+        .filter(|duration| **duration == SEEDANCE_REMAINDER_SEGMENT_SECONDS)
+        .count();
+    let mut rebalanced = vec![SEEDANCE_STANDARD_SEGMENT_SECONDS; durations.len()];
+    let mut ranked = planned_segments
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| (index, estimate_long_text_segment_density(segment)))
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+    let mut assigned = std::collections::BTreeSet::new();
+    for (index, _) in ranked.iter().take(fifteen_count) {
+        rebalanced[*index] = 15;
+        assigned.insert(*index);
+    }
+
+    let mut lightest = planned_segments
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| (index, estimate_long_text_segment_density(segment)))
+        .filter(|(index, _)| !assigned.contains(index))
+        .collect::<Vec<_>>();
+    lightest.sort_by(|left, right| left.1.cmp(&right.1).then(left.0.cmp(&right.0)));
+    for (index, _) in lightest.iter().take(five_count) {
+        rebalanced[*index] = SEEDANCE_REMAINDER_SEGMENT_SECONDS;
+    }
+    rebalanced
 }
 
 trait IfEmpty {
@@ -3429,20 +3886,40 @@ fn round_duration_to_five(duration_seconds: u16) -> u16 {
         * SEEDANCE_REMAINDER_SEGMENT_SECONDS
 }
 
-fn allocate_long_text_auto_shot_task_durations(total_duration_seconds: u16) -> Vec<u16> {
+fn allocate_long_text_auto_shot_task_durations(
+    total_duration_seconds: u16,
+    narrative_beat_count: usize,
+) -> Vec<u16> {
     if total_duration_seconds < SEEDANCE_STANDARD_SEGMENT_SECONDS
         || total_duration_seconds % SEEDANCE_REMAINDER_SEGMENT_SECONDS != 0
     {
         return vec![];
     }
-    let mut remaining = total_duration_seconds;
-    let mut durations = Vec::new();
-    while remaining >= SEEDANCE_STANDARD_SEGMENT_SECONDS {
-        durations.push(SEEDANCE_STANDARD_SEGMENT_SECONDS);
-        remaining -= SEEDANCE_STANDARD_SEGMENT_SECONDS;
-    }
-    if remaining == SEEDANCE_REMAINDER_SEGMENT_SECONDS {
-        durations.push(SEEDANCE_REMAINDER_SEGMENT_SECONDS);
+    let min_count = usize::from(total_duration_seconds.div_ceil(15));
+    let max_count = usize::from(total_duration_seconds / SEEDANCE_REMAINDER_SEGMENT_SECONDS);
+    let preferred_count = usize::from(total_duration_seconds.div_ceil(10)).min(max_count);
+    let target_count = narrative_beat_count
+        .max(1)
+        .min(max_count)
+        .clamp(min_count, preferred_count.max(min_count));
+    let mut durations = vec![SEEDANCE_STANDARD_SEGMENT_SECONDS; target_count];
+    let baseline_total = u16::try_from(target_count)
+        .ok()
+        .and_then(|count| count.checked_mul(SEEDANCE_STANDARD_SEGMENT_SECONDS))
+        .unwrap_or(total_duration_seconds);
+    if total_duration_seconds > baseline_total {
+        let upgrades = usize::from(
+            (total_duration_seconds - baseline_total) / SEEDANCE_REMAINDER_SEGMENT_SECONDS,
+        );
+        for duration in durations.iter_mut().take(upgrades) {
+            *duration += SEEDANCE_REMAINDER_SEGMENT_SECONDS;
+        }
+    } else if baseline_total > total_duration_seconds {
+        let reductions =
+            usize::from((baseline_total - total_duration_seconds) / SEEDANCE_REMAINDER_SEGMENT_SECONDS);
+        for duration in durations.iter_mut().rev().take(reductions) {
+            *duration -= SEEDANCE_REMAINDER_SEGMENT_SECONDS;
+        }
     }
     durations
 }
@@ -9014,14 +9491,21 @@ mod tests {
         assert!(
             durations
                 .iter()
-                .all(|duration| *duration == SEEDANCE_STANDARD_SEGMENT_SECONDS
+                .all(|duration| *duration == 15
+                    || *duration == SEEDANCE_STANDARD_SEGMENT_SECONDS
                     || *duration == SEEDANCE_REMAINDER_SEGMENT_SECONDS)
         );
         assert_eq!(response.storyboard_results.len(), durations.len());
         assert!(
             response
                 .duration_plan_summary
-                .contains("director_scheduling")
+                .contains("narrative beats")
+        );
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "long_text_event_order_preserved")
         );
     }
 
@@ -9055,14 +9539,31 @@ mod tests {
     }
 
     #[test]
-    fn long_text_auto_allocator_uses_ten_second_tasks_and_five_second_remainder() {
-        let durations = allocate_long_text_auto_shot_task_durations(105);
+    fn long_text_auto_allocator_balances_dense_beats_and_seedance_remainders() {
+        let dense_beat_durations = allocate_long_text_auto_shot_task_durations(105, 7);
+        let fragmented_beat_durations = allocate_long_text_auto_shot_task_durations(105, 20);
 
-        assert_eq!(durations.iter().copied().sum::<u16>(), 105);
-        assert_eq!(durations.last(), Some(&SEEDANCE_REMAINDER_SEGMENT_SECONDS));
-        assert!(durations.iter().all(|duration| *duration <= 15));
+        assert_eq!(dense_beat_durations.iter().copied().sum::<u16>(), 105);
+        assert!(dense_beat_durations.iter().all(|duration| *duration <= 15));
         assert!(
-            durations
+            dense_beat_durations
+                .iter()
+                .all(|duration| *duration == 15 || *duration == SEEDANCE_STANDARD_SEGMENT_SECONDS)
+        );
+        assert!(
+            dense_beat_durations
+                .iter()
+                .any(|duration| *duration == 15)
+        );
+
+        assert_eq!(fragmented_beat_durations.iter().copied().sum::<u16>(), 105);
+        assert_eq!(
+            fragmented_beat_durations.last(),
+            Some(&SEEDANCE_REMAINDER_SEGMENT_SECONDS)
+        );
+        assert!(fragmented_beat_durations.iter().all(|duration| *duration <= 15));
+        assert!(
+            fragmented_beat_durations
                 .iter()
                 .all(|duration| *duration == SEEDANCE_STANDARD_SEGMENT_SECONDS
                     || *duration == SEEDANCE_REMAINDER_SEGMENT_SECONDS)
