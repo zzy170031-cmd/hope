@@ -858,6 +858,9 @@ mod tests {
     }
     #[test]
     fn export_v120_storyboard_bundle_writes_ready_structured_artifacts() {
+        let enriched_visual_description =
+            "主体为两人对话，近景正侧面构图；桥边碎石和冷雾压紧空间；当前视觉事件是视线停住后的一次克制点头；画面突出出发前的静默拉扯感。"
+                .to_string();
         let request = V120StoryboardExportRequest {
             export_manifest_id: "storyboard-export-152".to_string(),
             result_id: "storyboard-152".to_string(),
@@ -880,7 +883,7 @@ mod tests {
                 shot_title: "Bridge dialogue sample".to_string(),
                 scene_scale: "MCU".to_string(),
                 camera_movement: "MCU static camera observes the dialogue beat.".to_string(),
-                visual_description: "Two leads hold a restrained dialogue beat.".to_string(),
+                visual_description: enriched_visual_description.clone(),
                 character_action: "One lead answers with a quiet nod.".to_string(),
                 dialogue: "We move before dawn.".to_string(),
                 prompt_text: "鏅ご鎻愮ず璇?Seedance2.0 stub".to_string(),
@@ -900,7 +903,7 @@ mod tests {
                     source_sample_title: "Bridge dialogue sample".to_string(),
                     scene_scale: "MCU".to_string(),
                     person: "lead_pair".to_string(),
-                    visual_description: "Two leads hold a restrained dialogue beat.".to_string(),
+                    visual_description: enriched_visual_description.clone(),
                     character_action: "One lead answers with a quiet nod.".to_string(),
                     fused_source_text: "Dialogue bridge evidence".to_string(),
                     sequence_grouping: SequenceGrouping {
@@ -925,6 +928,11 @@ mod tests {
 
         assert_eq!(bundle.workbook.sheets.len(), 1);
         assert_eq!(bundle.workbook.sheets[0].rows.len(), 1);
+        assert_eq!(
+            &bundle.workbook.sheets[0].columns[..V120_STORYBOARD_COLUMNS.len()],
+            V120_STORYBOARD_COLUMNS
+        );
+        assert_eq!(bundle.workbook.sheets[0].rows[0][14], enriched_visual_description);
         assert_eq!(bundle.artifacts.len(), 3);
         assert!(
             bundle
@@ -944,6 +952,7 @@ mod tests {
         assert!(json_text.contains("Bridge dialogue sample"));
         assert!(json_text.contains("运镜"));
         assert!(json_text.contains("MCU static camera observes the dialogue beat."));
+        assert!(json_text.contains("桥边碎石和冷雾压紧空间"));
         assert!(json_text.contains("ReadyStub"));
         assert!(json_text.contains("seedance_prompt_text_stub"));
         assert!(json_text.contains("storyboard-152"));

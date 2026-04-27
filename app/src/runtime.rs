@@ -1474,17 +1474,32 @@ fn generate_storyboard_with_live_text(
             );
         }
 
-        let draft = build_shot_grounded_row_draft(
+        let deterministic_draft = build_shot_grounded_row_draft(
             &grounding,
             index,
             row_count,
             row_durations[index],
             record,
         );
+        let mut final_draft = deterministic_draft.clone();
+        if let Some(patch) = live_row_patches.get(index) {
+            apply_live_storyboard_patch(&mut final_draft, patch);
+            if !draft_is_grounded_in_story(&final_draft, &grounding) {
+                warnings.push(ProductWarning {
+                    code: "text_model_live_storyboard_fallback".to_string(),
+                    message:
+                        "Live storyboard content did not stay grounded in shot_script, so Hope kept the deterministic shot-grounded row."
+                            .to_string(),
+                    related_sample_id: Some(final_draft.shot_id.clone()),
+                });
+                final_draft = deterministic_draft;
+            }
+        }
+
         let prompt_compilation = compile_seedance_prompt_text(
             state,
             build_shot_prompt_text_compilation_request(
-                &draft,
+                &final_draft,
                 &grounding,
                 &kb_router_result,
                 record.map(|item| item.source_fields.continuity_negative_core.as_str()),
@@ -1495,26 +1510,9 @@ fn generate_storyboard_with_live_text(
         rows.push(build_generated_storyboard_row(
             (index + 1) as u32,
             &grounding,
-            &draft,
+            &final_draft,
             &prompt_compilation,
         ));
-
-        if let Some(patch) = live_row_patches.get(index) {
-            let row = rows
-                .last_mut()
-                .expect("storyboard row must exist immediately after push");
-            apply_live_storyboard_patch(row, patch);
-            if !row_is_grounded_in_story(row, &grounding) {
-                warnings.push(ProductWarning {
-                    code: "text_model_live_storyboard_fallback".to_string(),
-                    message:
-                        "Live storyboard content did not stay grounded in shot_script, so Hope kept the deterministic shot-grounded row."
-                            .to_string(),
-                    related_sample_id: Some(row.shot_id.clone()),
-                });
-                restore_shot_grounded_row(row, &draft, &grounding);
-            }
-        }
     }
 
     let validator_findings =
@@ -4244,13 +4242,14 @@ fn build_shot_grounded_row_draft(
     let character_action = derive_character_action_from_story(&segment, &grounding.grounding_text);
     let shot_title = derive_shot_title(index, &segment, &person, &character_action);
     let dialogue = extract_dialogue_from_story(&segment);
-    let visual_description = if segment.trim().is_empty() {
-        format!("{person}按已确认镜头脚本推进，画面保持主体和动作关系清晰。")
-    } else if segment.contains(&person) || subject_label_mentions_any_name(&person, &segment) {
-        segment.trim().to_string()
-    } else {
-        format!("{person}：{}", segment.trim())
-    };
+    let visual_description = build_visual_description_from_story(
+        &segment,
+        &grounding.grounding_text,
+        &person,
+        &scene_scale,
+        &grounding.shot_scene_label,
+        &grounding.shot_intent,
+    );
     let camera_movement = derive_camera_movement_from_story(
         &segment,
         &scene_scale,
@@ -4357,34 +4356,6 @@ fn build_generated_storyboard_row(
         external_reference_handle_candidates: vec![],
         sequence_grouping: draft.sequence_grouping.clone(),
     }
-}
-
-fn restore_shot_grounded_row(
-    row: &mut GeneratedStoryboardRow,
-    draft: &ShotGroundedRowDraft,
-    grounding: &StoryboardGroundingContext,
-) {
-    row.shot_script = draft.shot_script.clone();
-    row.primary_scene_type = grounding.primary_scene_type.clone();
-    row.primary_scene_label = grounding.primary_scene_label.clone();
-    row.primary_scene_category = grounding.primary_scene_category.clone();
-    row.shot_scene_type = grounding.shot_scene_type.clone();
-    row.shot_scene_label = grounding.shot_scene_label.clone();
-    row.shot_intent = grounding.shot_intent.clone();
-    row.adaptation_reason = grounding.adaptation_reason.clone();
-    row.grounding_source = grounding.grounding_source;
-    row.person = draft.person.clone();
-    row.shot_title = draft.shot_title.clone();
-    row.scene_scale = draft.scene_scale.clone();
-    row.visual_description = draft.visual_description.clone();
-    row.character_action = draft.character_action.clone();
-    row.camera_movement = draft.camera_movement.clone();
-    row.dialogue = draft.dialogue.clone();
-    row.scene_performance_projection = draft.scene_performance_projection.clone();
-    row.external_reference_handle_candidates.clear();
-    row.shot_duration_seconds = draft.duration_seconds;
-    row.duration_source = STORYBOARD_DURATION_SOURCE.to_string();
-    row.sequence_grouping = draft.sequence_grouping.clone();
 }
 
 fn split_story_segments(text: &str) -> Vec<String> {
@@ -4619,6 +4590,147 @@ fn derive_shot_scene_scale(segment: &str) -> String {
         "近景".to_string()
     } else {
         "中景".to_string()
+    }
+}
+
+fn build_visual_description_from_story(
+    segment: &str,
+    full_text: &str,
+    subject: &str,
+    scene_scale: &str,
+    shot_scene_label: &str,
+    shot_intent: &str,
+) -> String {
+    let source = if segment.trim().is_empty() {
+        full_text.trim()
+    } else {
+        segment.trim()
+    };
+    let mut parts = vec![format!(
+        "主体为{subject}，{}",
+        derive_visual_composition_clause(source, subject, scene_scale, shot_intent)
+    )];
+    if let Some(environment) = derive_visual_environment_clause(source, full_text, shot_scene_label) {
+        parts.push(environment);
+    }
+    if let Some(light_tone) = derive_visual_light_tone_clause(source, full_text) {
+        parts.push(light_tone);
+    }
+    parts.push(derive_visual_event_clause(source, subject));
+    parts.push(format!(
+        "画面突出{}",
+        derive_visual_focus_clause(source, shot_intent)
+    ));
+    parts.join("；")
+}
+
+fn derive_visual_composition_clause(
+    source: &str,
+    subject: &str,
+    scene_scale: &str,
+    shot_intent: &str,
+) -> String {
+    let scale = if scene_scale.trim().is_empty() {
+        "中景"
+    } else {
+        scene_scale.trim()
+    };
+    if scale.contains("特写") || contains_any_story_term(source, &["掌心", "手臂", "银辉"]) {
+        format!("{scale}压近{subject}的关键部位，以低角度把动作起势顶到画面前缘")
+    } else if contains_enemy_or_conflict_terms(source) {
+        format!("{scale}侧视角对角构图，把{subject}压在画面前侧的一步对冲距离里")
+    } else if contains_any_story_term(source, &["重逢", "护住", "护着", "回身"]) {
+        format!("{scale}正侧面构图，让{subject}占住画面中心并保留贴身站位关系")
+    } else if shot_intent == "dialogue" {
+        format!("{scale}正面或半侧视角收住{subject}的站位与视线关系")
+    } else if scale.contains("全景") {
+        format!("{scale}展开{subject}与环境的前后层次，主体位置和退路同时留在画面里")
+    } else {
+        format!("{scale}把{subject}放在主体区中央，保留人物与周围空间的清晰关系")
+    }
+}
+
+fn derive_visual_environment_clause(
+    source: &str,
+    full_text: &str,
+    shot_scene_label: &str,
+) -> Option<String> {
+    let combined = format!("{source}\n{full_text}");
+    if contains_any_story_term(&combined, &["断桥", "桥边", "桥面"]) {
+        Some("场景落在断桥残口与桥边碎石之间，狭窄落脚点把人物退路压得很紧".to_string())
+    } else if contains_any_story_term(&combined, &["焦土", "裂痕", "残垣", "废墟"]) {
+        Some("场景落在焦土裂痕和残垣边缘，碎土与硬质断面把空间压成前线险位".to_string())
+    } else if contains_any_story_term(&combined, &["城门", "门墙"]) {
+        Some("场景落在城门前沿，门墙与地面高差把进退路线框进同一块画面".to_string())
+    } else if contains_any_story_term(&combined, &["林间", "林隙", "竹林", "竹叶"]) {
+        Some("场景落在林间空地，枝叶和树影把主体前后层次切得很清楚".to_string())
+    } else if contains_any_story_term(&combined, &["营地", "帐幕", "密营"]) {
+        Some("场景落在营地核心区域，帐幕和立柱把主体围在可见中心".to_string())
+    } else if contains_any_story_term(&combined, &["雨夜", "巷口", "雨雾", "湿地"]) {
+        Some("场景落在雨夜巷口，墙面与湿地反光把纵深压成一条冷硬通道".to_string())
+    } else if contains_any_story_term(&combined, &["战场", "军阵", "前沿"]) {
+        Some("场景落在战场前沿，阵线、尘土和空地把人物推到冲突最前面".to_string())
+    } else if shot_scene_label.contains("对白") {
+        None
+    } else {
+        None
+    }
+}
+
+fn derive_visual_light_tone_clause(source: &str, full_text: &str) -> Option<String> {
+    let combined = format!("{source}\n{full_text}");
+    if contains_any_story_term(&combined, &["火光", "火星"])
+        && contains_any_story_term(&combined, &["烟尘", "焦土", "裂痕"])
+    {
+        Some("火光和火星在烟尘里来回闪动，粗粝暗色把整幅画面压出持续的冲击感".to_string())
+    } else if contains_any_story_term(&combined, &["银辉", "掌心"]) {
+        Some("银辉冷光沿掌心和手臂向上爬升，把周围色调压成偏冷的硬光".to_string())
+    } else if contains_any_story_term(&combined, &["雨夜", "雨雾", "湿地"]) {
+        Some("雨雾与湿地反光把画面压成冷色湿亮的质感，边缘轮廓更显锋利".to_string())
+    } else if contains_any_story_term(&combined, &["焦土", "烟尘", "裂痕"]) {
+        Some("焦土灰屑和扬起的烟尘压暗画面色调，空间显得发闷而粗粝".to_string())
+    } else if contains_any_story_term(&combined, &["残阳"]) {
+        Some("残阳只在边线留下一层钝暖色，主体仍被暗面和空气颗粒包住".to_string())
+    } else {
+        None
+    }
+}
+
+fn derive_visual_event_clause(source: &str, subject: &str) -> String {
+    if contains_any_story_term(source, &["重逢"]) {
+        format!("当前视觉事件是{subject}在断裂边缘重新并肩，视线和站位同时重新对上")
+    } else if contains_any_story_term(source, &["护住", "护着", "回身"]) {
+        format!("当前视觉事件是{subject}回身挡住来势，身体横切进对冲路线")
+    } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
+        format!("当前视觉事件是{subject}把距离继续压短，来袭方向直逼主体前线")
+    } else if contains_any_story_term(source, &["格挡", "刀锋", "攻击", "交锋"]) {
+        format!("当前视觉事件是{subject}与对手的锋线正面撞上，冲击点停在接触瞬间")
+    } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) {
+        format!("当前视觉事件是{subject}的掌心或手臂出现醒目的能量变化，力量在画面内继续上涌")
+    } else if contains_any_story_term(source, &["震退", "七步"]) {
+        format!("当前视觉事件是{subject}借反冲把对手震开，脚下碎土被力量带起")
+    } else {
+        format!("当前视觉事件是{subject}在当前空间内完成清晰可见的状态变化，动作落点停在镜头正要继续之前")
+    }
+}
+
+fn derive_visual_focus_clause(source: &str, shot_intent: &str) -> String {
+    if contains_any_story_term(source, &["重逢"]) {
+        "失而复得后的确认与仍未放松的紧绷感".to_string()
+    } else if contains_any_story_term(source, &["护住", "护着", "回身"]) {
+        "护人与来袭同时挤进画面的压迫感".to_string()
+    } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
+        "来势压近和退路被夺走的突袭感".to_string()
+    } else if contains_any_story_term(source, &["格挡", "刀锋", "攻击", "交锋"]) {
+        "正面硬碰时双方谁都不退的对峙感".to_string()
+    } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) || shot_intent == "reveal" {
+        "力量爆发前一刻的控场反转".to_string()
+    } else if contains_any_story_term(source, &["震退", "七步"]) {
+        "反击成立后的控场优势".to_string()
+    } else if shot_intent == "dialogue" {
+        "人物关系在静默停顿里的拉扯感".to_string()
+    } else {
+        "动作即将进入下一拍前的悬停感".to_string()
     }
 }
 
@@ -5017,19 +5129,18 @@ fn extract_dialogue_from_story(segment: &str) -> String {
     chars[start + 1..end].iter().collect::<String>()
 }
 
-fn row_is_grounded_in_story(
-    row: &GeneratedStoryboardRow,
+fn draft_is_grounded_in_story(
+    draft: &ShotGroundedRowDraft,
     grounding: &StoryboardGroundingContext,
 ) -> bool {
     let combined = format!(
-        "{} {} {} {} {} {} {}",
-        row.person,
-        row.shot_title,
-        row.visual_description,
-        row.character_action,
-        row.camera_movement,
-        row.dialogue,
-        row.prompt_text
+        "{} {} {} {} {} {}",
+        draft.person,
+        draft.shot_title,
+        draft.visual_description,
+        draft.character_action,
+        draft.camera_movement,
+        draft.dialogue
     );
     if contains_any_story_term(
         &combined,
@@ -5517,27 +5628,32 @@ fn extract_live_storyboard_row_patches(
     })
 }
 
-fn apply_live_storyboard_patch(row: &mut GeneratedStoryboardRow, patch: &LiveStoryboardRowPatch) {
+fn apply_live_storyboard_patch(draft: &mut ShotGroundedRowDraft, patch: &LiveStoryboardRowPatch) {
     if let Some(value) = non_blank_string(&patch.shot_title) {
-        row.shot_title = value;
+        draft.shot_title = value;
+        draft.scene_performance_projection.source_sample_title = draft.shot_title.clone();
     }
     if let Some(value) = non_blank_string(&patch.person) {
-        row.person = value;
+        draft.person = value;
+        draft.scene_performance_projection.person = draft.person.clone();
     }
     if let Some(value) = non_blank_string(&patch.scene_scale) {
-        row.scene_scale = value;
+        draft.scene_scale = value;
+        draft.scene_performance_projection.scene_scale = draft.scene_scale.clone();
     }
     if let Some(value) = non_blank_string(&patch.visual_description) {
-        row.visual_description = value;
+        draft.visual_description = value;
+        draft.scene_performance_projection.visual_description = draft.visual_description.clone();
     }
     if let Some(value) = non_blank_string(&patch.character_action) {
-        row.character_action = value;
+        draft.character_action = value;
+        draft.scene_performance_projection.character_action = draft.character_action.clone();
     }
     if let Some(value) = non_blank_string(&patch.camera_movement) {
-        row.camera_movement = value;
+        draft.camera_movement = value;
     }
     if let Some(value) = non_blank_string(&patch.dialogue) {
-        row.dialogue = value;
+        draft.dialogue = value;
     }
 }
 
@@ -5632,6 +5748,25 @@ fn validate_storyboard_rows(
                     related_sample_id: Some(row.prompt_text_source_row_id.clone()),
                 });
             }
+            if field_name == "visual_description"
+                && is_visual_description_grounding_incomplete(
+                    field_value,
+                    &row.person,
+                    &row.scene_scale,
+                    &row.character_action,
+                    &row.camera_movement,
+                    &row.shot_script,
+                )
+            {
+                findings.push(ProductWarning {
+                    code: "visual_description_grounding_incomplete".to_string(),
+                    message: format!(
+                        "Storyboard row {} has an incomplete visual description; it must anchor subject, environment, composition, visible elements, current visual event, and the conflict focus without repeating role action or camera movement.",
+                        row.shot_id
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
             if field_name == "camera_movement"
                 && is_camera_movement_grounding_incomplete(
                     field_value,
@@ -5705,6 +5840,138 @@ fn is_camera_movement_grounding_incomplete(
             "捕捉",
         ],
     )
+}
+
+fn is_visual_description_grounding_incomplete(
+    visual_description: &str,
+    subject: &str,
+    scene_scale: &str,
+    character_action: &str,
+    camera_movement: &str,
+    shot_script: &str,
+) -> bool {
+    let trimmed = visual_description.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if trimmed == character_action.trim()
+        || trimmed == camera_movement.trim()
+        || trimmed == shot_script.trim()
+        || (!character_action.trim().is_empty() && trimmed.contains(character_action.trim()))
+    {
+        return true;
+    }
+    if contains_forbidden_v0_product_payload(trimmed)
+        || contains_any_story_term(
+            trimmed,
+            &[
+                "当前镜头主体",
+                "按当前镜头脚本执行关键动作",
+                "保持连续性",
+                "visual_scene_core",
+                "fused_scene_performance_core_preserved",
+                "not_specified_by_v120_bridge",
+                "气氛紧张",
+                "画面震撼",
+            ],
+        )
+    {
+        return true;
+    }
+    if !subject.trim().is_empty()
+        && !trimmed.contains(subject.trim())
+        && !subject_label_mentions_any_name(subject, trimmed)
+    {
+        return true;
+    }
+    let has_environment = contains_any_story_term(
+        trimmed,
+        &[
+            "断桥",
+            "桥边",
+            "桥面",
+            "焦土",
+            "裂痕",
+            "残垣",
+            "废墟",
+            "城门",
+            "门墙",
+            "林间",
+            "林隙",
+            "竹林",
+            "竹叶",
+            "营地",
+            "帐幕",
+            "巷口",
+            "雨夜",
+            "雨雾",
+            "湿地",
+            "战场",
+            "军阵",
+            "前沿",
+        ],
+    );
+    if !has_environment {
+        return true;
+    }
+    let has_composition = (!scene_scale.trim().is_empty() && trimmed.contains(scene_scale.trim()))
+        || contains_any_story_term(
+            trimmed,
+            &[
+                "正面",
+                "侧视角",
+                "俯拍",
+                "仰拍",
+                "对角构图",
+                "三角构图",
+                "前景",
+                "画面中心",
+                "主体区中央",
+                "前后层次",
+                "一步对冲距离",
+                "贴身站位",
+            ],
+        );
+    if !has_composition {
+        return true;
+    }
+    let has_visible_elements = contains_any_story_term(
+        trimmed,
+        &[
+            "碎石",
+            "碎土",
+            "烟尘",
+            "火光",
+            "火星",
+            "银辉",
+            "反光",
+            "冷光",
+            "并肩",
+            "挡住",
+            "压短",
+            "撞上",
+            "上涌",
+            "震开",
+            "带起",
+        ],
+    );
+    if !has_visible_elements {
+        return true;
+    }
+    let has_focus = trimmed.contains("画面突出")
+        || contains_any_story_term(
+            trimmed,
+            &[
+                "压迫感",
+                "对峙感",
+                "突袭感",
+                "控场优势",
+                "控场反转",
+                "拉扯感",
+                "悬停感",
+            ],
+        );
+    !has_focus || trimmed.chars().count() < 28
 }
 
 fn is_role_action_grounding_incomplete(value: &str) -> bool {
@@ -5905,6 +6172,21 @@ fn compile_seedance_prompt_text(
             message:
                 "角色动作未能完整说明主体、动作、对象、起止状态与镜头捕捉瞬间，已保留产品态占位。"
                     .to_string(),
+            related_sample_id: Some(request.row.shot_id.clone()),
+        });
+    }
+    if is_visual_description_grounding_incomplete(
+        &request.row.visual_description,
+        &character_action_subject(&request.row.character_action),
+        &request.row.scene_scale,
+        &request.row.character_action,
+        &request.row.camera_movement,
+        request.shot_script.as_deref().unwrap_or_default(),
+    ) {
+        warnings.push(ProductWarning {
+            code: "visual_description_grounding_incomplete".to_string(),
+            message: "画面描述未能完整交代主体、环境、构图、可见元素、当前视觉事件与冲突落点，已保留产品态 warning。"
+                .to_string(),
             related_sample_id: Some(request.row.shot_id.clone()),
         });
     }
@@ -6545,12 +6827,13 @@ mod tests {
         build_storyboard_preview_plan, build_text_generation_request,
         build_validation_export_panel_snapshot_from_fixture, compile_seedance_prompt_text,
         contains_any_story_term, default_text_model_provider, expand_script, export_bundle,
-        export_storyboard_bank, generate_storyboard, list_storyboard_shot_results,
-        project_scene_performance, remove_storyboard_shot_result, resolve_scene_taxonomy,
-        run_kb_router, run_qwen_text_generation_with_transport, run_v0_story_to_storyboard_chain,
-        save_storyboard_rows, save_storyboard_shot_result, select_golden_sample_records,
-        serialize_storyboard_rows, stable_hash_hex, stable_source_material_length_chars,
-        subject_label_mentions_any_name, update_storyboard_shot_result,
+        export_storyboard_bank, generate_storyboard, is_visual_description_grounding_incomplete,
+        list_storyboard_shot_results, project_scene_performance, remove_storyboard_shot_result,
+        resolve_scene_taxonomy, run_kb_router, run_qwen_text_generation_with_transport,
+        run_v0_story_to_storyboard_chain, save_storyboard_rows, save_storyboard_shot_result,
+        select_golden_sample_records, serialize_storyboard_rows, stable_hash_hex,
+        stable_source_material_length_chars, subject_label_mentions_any_name,
+        update_storyboard_shot_result,
     };
     use crate::state::AppState;
     use validators::{WEEK3_SHARED_FIXTURE_PATH, load_week3_shared_fixture};
@@ -6766,6 +7049,50 @@ mod tests {
                 "storyboard row leaked vague/internal term {forbidden}: {combined}"
             );
         }
+    }
+
+    fn assert_visual_description_is_enhanced(row: &core_domain::GeneratedStoryboardRow) {
+        assert!(
+            row.visual_description.contains("主体为"),
+            "visual_description should anchor subject: {}",
+            row.visual_description
+        );
+        assert!(
+            row.visual_description.contains(&row.scene_scale),
+            "visual_description should carry scene scale/composition context: {}",
+            row.visual_description
+        );
+        assert!(
+            row.visual_description.contains("当前视觉事件是"),
+            "visual_description should describe the current visual event: {}",
+            row.visual_description
+        );
+        assert!(
+            row.visual_description.contains("画面突出"),
+            "visual_description should land on conflict focus: {}",
+            row.visual_description
+        );
+        assert_ne!(row.visual_description, row.character_action);
+        assert_ne!(row.visual_description, row.shot_script);
+        assert!(contains_any_story_term(
+            &row.visual_description,
+            &[
+                "断桥",
+                "桥边",
+                "焦土",
+                "裂痕",
+                "残垣",
+                "碎石",
+                "碎土",
+                "烟尘",
+                "银辉",
+                "雨夜",
+                "巷口",
+                "战场",
+                "帐幕",
+                "枝叶",
+            ],
+        ));
     }
 
     fn assert_prompt_text_has_no_internal_payload(prompt_text: &str) {
@@ -7677,6 +8004,7 @@ mod tests {
             assert!(row.character_action.contains("从"));
             assert!(row.character_action.contains("到"));
             assert!(row.character_action.contains("镜头捕捉"));
+            assert_visual_description_is_enhanced(row);
             assert!(!row.camera_movement.trim().is_empty());
             assert_ne!(row.camera_movement, row.shot_title);
             assert_ne!(row.camera_movement, row.visual_description);
@@ -7697,6 +8025,7 @@ mod tests {
                 ],
             ));
             assert!(row.prompt_text.contains(&row.camera_movement));
+            assert!(row.prompt_text.contains(&row.visual_description));
             assert!(row.prompt_text.contains(&row.shot_script));
             assert!(!row.prompt_text.contains("KB摘要"));
             assert!(!row.prompt_text.contains("KB上下文"));
@@ -7715,6 +8044,11 @@ mod tests {
             assert!(
                 !row.prompt_text
                     .contains("Compose a restrained dialogue shot")
+            );
+            assert!(
+                !row.prompt_text_compilation_warnings
+                    .iter()
+                    .any(|warning| warning.code == "visual_description_grounding_incomplete")
             );
             assert!(
                 !row.prompt_text_compilation_warnings
@@ -7799,6 +8133,7 @@ mod tests {
             assert!(row.character_action.contains("从"));
             assert!(row.character_action.contains("到"));
             assert!(row.character_action.contains("镜头捕捉"));
+            assert_visual_description_is_enhanced(row);
             assert!(!row.camera_movement.trim().is_empty());
             assert_ne!(row.camera_movement, row.shot_title);
             assert_ne!(row.camera_movement, row.visual_description);
@@ -7807,9 +8142,15 @@ mod tests {
                 row.prompt_text.contains(&row.person)
                     || subject_label_mentions_any_name(&row.person, &row.prompt_text)
             );
+            assert!(row.prompt_text.contains(&row.visual_description));
             assert!(row.prompt_text.contains(&row.camera_movement));
             assert_storyboard_row_has_no_vague_or_internal_terms(row);
             assert_prompt_text_has_no_internal_payload(&row.prompt_text);
+            assert!(
+                !row.prompt_text_compilation_warnings
+                    .iter()
+                    .any(|warning| warning.code == "visual_description_grounding_incomplete")
+            );
         }
     }
 
@@ -7851,15 +8192,34 @@ mod tests {
             assert!(row.character_action.contains("从"));
             assert!(row.character_action.contains("到"));
             assert!(row.character_action.contains("镜头捕捉"));
+            assert_visual_description_is_enhanced(row);
             assert!(!row.camera_movement.trim().is_empty());
             assert_ne!(row.camera_movement, row.shot_title);
             assert_ne!(row.camera_movement, row.visual_description);
             assert!(row.camera_movement.contains(&row.scene_scale));
             assert!(row.prompt_text.contains(&row.person));
+            assert!(row.prompt_text.contains(&row.visual_description));
             assert!(row.prompt_text.contains(&row.camera_movement));
             assert_storyboard_row_has_no_vague_or_internal_terms(row);
             assert_prompt_text_has_no_internal_payload(&row.prompt_text);
+            assert!(
+                !row.prompt_text_compilation_warnings
+                    .iter()
+                    .any(|warning| warning.code == "visual_description_grounding_incomplete")
+            );
         }
+    }
+
+    #[test]
+    fn visual_description_validator_flags_action_only_copy() {
+        assert!(is_visual_description_grounding_incomplete(
+            "主角挥刀逼近对手",
+            "主角",
+            "中景",
+            "主角从压低重心开始，挥刀逼近对手，到逼到墙角时结束，镜头捕捉刀锋压近的一瞬间。",
+            "中景侧视角对角构图，跟随主角压近一步",
+            "主角挥刀逼近对手"
+        ));
     }
 
     #[test]
