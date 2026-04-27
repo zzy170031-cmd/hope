@@ -420,12 +420,11 @@ export function App() {
   const activeScriptDurationSeconds = isLongTextDurationMode
     ? estimateLongTextAutoDurationSeconds(sourceInputAnalysis)
     : durationSeconds;
-  const durationModeStatus = isLongTextDurationMode
-    ? formatDurationPlanProductMessage(expandedScriptResult) || LONG_TEXT_RECOMMENDATION_MESSAGE
-    : "";
-  const sourceInputStatusText = durationModeStatus
-    ? `${sourceInputAnalysis.statusMessage} ${durationModeStatus}`
-    : sourceInputAnalysis.statusMessage;
+  const sourceInputStatusText = compactSourceInputStatusText(
+    sourceInputAnalysis,
+    targetDurationMode,
+    expandedScriptResult,
+  );
   const contentBridgeItems = useMemo(
     () =>
       buildContentBridgeItems(
@@ -462,17 +461,6 @@ export function App() {
     durationSeconds,
   );
   const currentTaskSceneLabel = currentSceneTask?.sourceSceneLabel ?? acceptedScriptScene?.label ?? selectedSceneOption.label;
-  const taskSourceLabel = hasTaskScript
-    ? `${taskSegmentTitle || "自定义镜头片段"} · ${
-        taskScriptId ? `来源 ${taskScriptId}` : "来源扩写剧本正文"
-      }`
-    : sceneTasks.length
-      ? `已新建 ${sceneTasks.length} 个镜头任务，请在分镜产出区导入镜头任务。`
-    : canImportScript
-    ? `已确认扩写剧本${acceptedScriptId ? ` ${acceptedScriptId}` : ""}，可拆解镜头。`
-    : expandedScript.trim()
-    ? "扩写剧本已生成，请先点击“确定使用”再拆解镜头。"
-    : "先在剧本区完成扩写，再拆解镜头。";
   const shotCandidates = useMemo(
     () => buildShotCandidates(acceptedScript, shotCandidateBaseDuration, targetDurationMode),
     [acceptedScript, shotCandidateBaseDuration, targetDurationMode],
@@ -2240,7 +2228,6 @@ qwen_request: {
           <section className="panel-section panel-section--task">
             <div className="section-name section-name--inline">
               <span>镜头拆解</span>
-              <span className="section-status">拆解状态：{taskSourceLabel}</span>
             </div>
             <div className="task-row task-row--compact">
               <label className="task-index-select">
@@ -2530,7 +2517,6 @@ qwen_request: {
                 查看全部
               </button>
             </div>
-            <div className="export-message">{exportMessage.trim()}</div>
             <div className="export-actions">
               <button
                 type="button"
@@ -3187,6 +3173,40 @@ function sourceInputTypeProductLabel(sourceInputType: SourceInputType) {
     case "synopsis":
     default:
       return "故事梗概";
+  }
+}
+
+function compactSourceInputStatusText(
+  analysis: SourceInputAnalysis,
+  targetDurationMode: TargetDurationMode,
+  response: ExpandScriptResponse | null,
+) {
+  if (analysis.sourceMaterialLengthChars <= 0) {
+    return "请输入或导入故事材料。";
+  }
+
+  const responseMode = normalizeTargetDurationModeForUi(
+    response?.target_duration_mode ?? response?.targetDurationMode ?? targetDurationMode,
+  );
+  const shotTaskCount = Number(response?.generated_shot_task_count ?? response?.generatedShotTaskCount ?? 0);
+  if (responseMode === LONG_TEXT_DURATION_MODE || analysis.recommendsLongTextMode) {
+    return shotTaskCount > 1
+      ? `长文本已自动分段：${shotTaskCount} 个镜头任务。`
+      : "已识别为长文本，将按剧情自动分段。";
+  }
+
+  switch (analysis.sourceInputType) {
+    case "full_story":
+      return "完整故事，将保留事实改写。";
+    case "novel_chapter":
+      return "小说章节，将保留顺序改写。";
+    case "screenplay_text":
+      return "已有剧本，将整理为分镜剧本。";
+    case "mixed_material":
+      return "混合材料，将整理为可拍剧本。";
+    case "synopsis":
+    default:
+      return "故事梗概，将扩写生成剧本。";
   }
 }
 
