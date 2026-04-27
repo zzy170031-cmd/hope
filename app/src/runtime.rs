@@ -430,13 +430,23 @@ pub fn generate_novel_chapter(
     let router_result = run_kb_router(state, router_request);
     let kb_summary_available = !request.kb_context_summary.trim().is_empty()
         || !router_result.kb_context_summary.trim().is_empty();
+    let continuity_profile = build_v0_continuity_profile(
+        &source_analysis,
+        &request.continuity_context_summary,
+        if request.kb_context_summary.trim().is_empty() {
+            &router_result.kb_context_summary
+        } else {
+            &request.kb_context_summary
+        },
+        &request.retrieval_trace_user_summary,
+    );
     let chapter_title =
         deterministic_chapter_title(request.chapter_order, &request.user_topic_or_synopsis);
     let chapter_text = deterministic_v0_source_chapter_text(
         &request.user_topic_or_synopsis,
         &request.story_length_profile,
         &request.authoring_craft_summary,
-        &request.continuity_context_summary,
+        &continuity_profile.effective_context_summary,
         kb_summary_available,
         &source_analysis,
     );
@@ -461,22 +471,27 @@ pub fn generate_novel_chapter(
     let scene_purpose = "建立本章冲突、角色动机和可拆分的镜头行动。".to_string();
     let visualizable_action = first_story_sentence(&chapter_text);
     let chapter_cliffhanger = "下一段需要承接本章末尾的选择结果和未解压力。".to_string();
-    let director_bridge = "后续改编应优先保留角色目标、行动对象、空间关系和情绪转折。".to_string();
-    let character_motivation_summary = character_desire.clone();
-    let conflict_progression_summary = conflict_engine.clone();
-    let emotional_progression_summary = emotional_turn.clone();
-    let timeline_continuity_summary = format!(
+    let _director_bridge = "后续改编应优先保留角色目标、行动对象、空间关系和情绪转折。".to_string();
+    let character_motivation_summary = continuity_profile.character_motivation_summary.clone();
+    let conflict_progression_summary = continuity_profile.conflict_progression_summary.clone();
+    let emotional_progression_summary = continuity_profile.emotional_progression_summary.clone();
+    let _timeline_continuity_summary = format!(
         "第{}章按单一连续段落推进，不静默跳时空。",
         request.chapter_order
     );
-    let prop_state_summary =
+    let _prop_state_summary =
         "道具状态仅按梗概中已出现的信息保留，未出现的关键道具不新增归属。".to_string();
-    let next_scene_bridge = chapter_cliffhanger.clone();
+    let _next_scene_bridge = chapter_cliffhanger.clone();
+    let director_bridge = continuity_profile.director_bridge.clone();
+    let timeline_continuity_summary = continuity_profile.timeline_continuity_summary.clone();
+    let prop_state_summary = continuity_profile.prop_state_summary.clone();
+    let next_scene_bridge = continuity_profile.next_scene_bridge.clone();
     let continuity_delta = format!(
         "chapter:{} established summary={}, motivation={}, next_bridge={}",
         request.chapter_id, chapter_summary, character_motivation_summary, next_scene_bridge
     );
     let mut warnings = source_analysis.continuity_warnings.clone();
+    warnings.extend(continuity_profile.warnings.clone());
     if !kb_summary_available {
         warnings.push(ProductWarning {
             code: "v0_kb_context_summary_not_supplied".to_string(),
@@ -486,6 +501,8 @@ pub fn generate_novel_chapter(
             related_sample_id: None,
         });
     }
+    dedupe_product_warnings(&mut warnings);
+    let continuity_warnings = warnings.clone();
 
     let response = GenerateNovelChapterResponse {
         status: if warnings.is_empty() {
@@ -526,7 +543,7 @@ pub fn generate_novel_chapter(
         timeline_continuity_summary,
         prop_state_summary,
         next_scene_bridge,
-        continuity_warnings: source_analysis.continuity_warnings.clone(),
+        continuity_warnings: continuity_warnings.clone(),
         continuity_delta: continuity_delta.clone(),
     };
     state.remember_v0_chapter(ChapterAcceptedState {
@@ -543,7 +560,7 @@ pub fn generate_novel_chapter(
         preserved_fact_summary: response.preserved_fact_summary.clone(),
         changed_for_screenplay_summary: response.changed_for_screenplay_summary.clone(),
         omitted_detail_summary: response.omitted_detail_summary.clone(),
-        continuity_warnings: response.continuity_warnings.clone(),
+        continuity_warnings: continuity_warnings,
         continuity_delta,
         accepted_at_ms: now_ms,
     });
@@ -649,11 +666,12 @@ pub fn adapt_chapter_to_script(
         scene_beats.len()
     );
 
-    let continuity_warnings = validate_rewrite_fact_preservation(
+    let mut continuity_warnings = validate_rewrite_fact_preservation(
         &script_text,
         &request.source_story_facts,
         &request.authoring_mode,
     );
+    dedupe_product_warnings(&mut continuity_warnings);
     let response = AdaptChapterToScriptResponse {
         status: if continuity_warnings.is_empty() {
             BridgeCallStatus::Ready
@@ -790,7 +808,7 @@ pub fn update_continuity_state(
         },
         compact_product_summary(&request.continuity_delta, "连续性已更新", 140),
     );
-    let warnings = if request.finalized_storyboard_refs.is_empty() {
+    let mut warnings = if request.finalized_storyboard_refs.is_empty() {
         vec![ProductWarning {
             code: "v0_continuity_without_finalized_refs".to_string(),
             message: "Continuity was updated without finalized storyboard refs; next stage will rely on text summaries only."
@@ -800,6 +818,8 @@ pub fn update_continuity_state(
     } else {
         vec![]
     };
+    warnings.extend(validate_continuity_state_against_source_facts(&request));
+    dedupe_product_warnings(&mut warnings);
     let continuity_state = StoryContinuityState {
         story_id: request.story_id.clone(),
         chapter_id: request.chapter_id.clone(),
@@ -853,6 +873,17 @@ pub fn run_v0_story_to_storyboard_chain(
     let source_analysis = analyze_v0_source_input(&request.user_topic_or_synopsis);
     let duration_plan = plan_v0_chain_duration(&request, &source_analysis);
     let mut warnings = duration_plan.warnings.clone();
+    let request_continuity_warnings = build_v0_chain_advisory_warnings(
+        &source_analysis.source_story_facts,
+        &request.continuity_context_summary,
+        &request.kb_context_summary,
+        &request.directing_kb_context_summary,
+    );
+    let mut chain_continuity_warnings = source_analysis.continuity_warnings.clone();
+    warnings.extend(request_continuity_warnings.clone());
+    chain_continuity_warnings.extend(request_continuity_warnings.clone());
+    dedupe_product_warnings(&mut warnings);
+    dedupe_product_warnings(&mut chain_continuity_warnings);
     let mut blockers = validate_run_v0_story_to_storyboard_chain_request(&request);
     blockers.extend(
         duration_plan
@@ -872,6 +903,7 @@ pub fn run_v0_story_to_storyboard_chain(
                 .continuity_warnings
                 .iter()
                 .chain(duration_plan.warnings.iter())
+                .chain(request_continuity_warnings.iter())
                 .cloned()
                 .collect(),
             target_duration_mode: duration_plan.target_duration_mode,
@@ -889,7 +921,7 @@ pub fn run_v0_story_to_storyboard_chain(
             preserved_fact_summary: source_analysis.preserved_fact_summary,
             changed_for_screenplay_summary: source_analysis.changed_for_screenplay_summary,
             omitted_detail_summary: source_analysis.omitted_detail_summary,
-            continuity_warnings: source_analysis.continuity_warnings,
+            continuity_warnings: chain_continuity_warnings,
             chapter: None,
             script: None,
             shot_task_plan: None,
@@ -930,6 +962,10 @@ pub fn run_v0_story_to_storyboard_chain(
         },
     );
     warnings.extend(chapter.warnings.clone());
+    dedupe_product_warnings(&mut warnings);
+    let mut chapter_stage_continuity_warnings = chain_continuity_warnings.clone();
+    chapter_stage_continuity_warnings.extend(chapter.continuity_warnings.clone());
+    dedupe_product_warnings(&mut chapter_stage_continuity_warnings);
     if !chapter.blockers.is_empty() {
         blockers.extend(chapter.blockers.clone());
         return RunV0StoryToStoryboardChainResponse {
@@ -951,7 +987,7 @@ pub fn run_v0_story_to_storyboard_chain(
             preserved_fact_summary: chapter.preserved_fact_summary.clone(),
             changed_for_screenplay_summary: chapter.changed_for_screenplay_summary.clone(),
             omitted_detail_summary: chapter.omitted_detail_summary.clone(),
-            continuity_warnings: chapter.continuity_warnings.clone(),
+            continuity_warnings: chapter_stage_continuity_warnings,
             chapter: Some(chapter),
             script: None,
             shot_task_plan: None,
@@ -975,7 +1011,10 @@ pub fn run_v0_story_to_storyboard_chain(
             preserved_fact_summary: chapter.preserved_fact_summary.clone(),
             source_material_summary: chapter.source_material_summary.clone(),
             screenwriting_adaptation_summary,
-            continuity_context_summary: request.continuity_context_summary.clone(),
+            continuity_context_summary: build_script_stage_continuity_context(
+                &request.continuity_context_summary,
+                &chapter,
+            ),
             kb_context_summary: request.kb_context_summary.clone(),
             selected_sample_ids: request.selected_sample_ids.clone(),
             selected_kb_rules: request.selected_kb_rules.clone(),
@@ -984,6 +1023,10 @@ pub fn run_v0_story_to_storyboard_chain(
         },
     );
     warnings.extend(script.warnings.clone());
+    dedupe_product_warnings(&mut warnings);
+    let mut script_stage_continuity_warnings = chapter_stage_continuity_warnings.clone();
+    script_stage_continuity_warnings.extend(script.continuity_warnings.clone());
+    dedupe_product_warnings(&mut script_stage_continuity_warnings);
     if !script.blockers.is_empty() {
         blockers.extend(script.blockers.clone());
         return RunV0StoryToStoryboardChainResponse {
@@ -1005,12 +1048,7 @@ pub fn run_v0_story_to_storyboard_chain(
             preserved_fact_summary: chapter.preserved_fact_summary.clone(),
             changed_for_screenplay_summary: script.changed_for_screenplay_summary.clone(),
             omitted_detail_summary: script.omitted_detail_summary.clone(),
-            continuity_warnings: chapter
-                .continuity_warnings
-                .iter()
-                .chain(script.continuity_warnings.iter())
-                .cloned()
-                .collect(),
+            continuity_warnings: script_stage_continuity_warnings,
             chapter: Some(chapter),
             script: Some(script),
             shot_task_plan: None,
@@ -1188,12 +1226,7 @@ pub fn run_v0_story_to_storyboard_chain(
             preserved_fact_summary: chapter.preserved_fact_summary.clone(),
             changed_for_screenplay_summary: script.changed_for_screenplay_summary.clone(),
             omitted_detail_summary: script.omitted_detail_summary.clone(),
-            continuity_warnings: chapter
-                .continuity_warnings
-                .iter()
-                .chain(script.continuity_warnings.iter())
-                .cloned()
-                .collect(),
+            continuity_warnings: script_stage_continuity_warnings.clone(),
             chapter: Some(chapter),
             script: Some(script),
             shot_task_plan: Some(shot_task_plan),
@@ -1217,7 +1250,12 @@ pub fn run_v0_story_to_storyboard_chain(
             preserved_fact_summary: chapter.preserved_fact_summary.clone(),
             changed_for_screenplay_summary: script.changed_for_screenplay_summary.clone(),
             omitted_detail_summary: script.omitted_detail_summary.clone(),
-            character_state_summary: chapter.character_motivation_summary.clone(),
+            character_state_summary: format!(
+                "motivation={}; emotional_progression={}; conflict_progression={}",
+                chapter.character_motivation_summary,
+                chapter.emotional_progression_summary,
+                chapter.conflict_progression_summary
+            ),
             location_state_summary: "地点连续性按章节和脚本中已确认的空间关系保留。".to_string(),
             prop_state_summary: chapter.prop_state_summary.clone(),
             timeline_state_summary: chapter.timeline_continuity_summary.clone(),
@@ -1232,9 +1270,13 @@ pub fn run_v0_story_to_storyboard_chain(
         },
     );
     warnings.extend(continuity_response.warnings.clone());
+    dedupe_product_warnings(&mut warnings);
     if !continuity_response.blockers.is_empty() {
         blockers.extend(continuity_response.blockers.clone());
     }
+    let mut final_continuity_warnings = script_stage_continuity_warnings;
+    final_continuity_warnings.extend(continuity_response.warnings.clone());
+    dedupe_product_warnings(&mut final_continuity_warnings);
 
     RunV0StoryToStoryboardChainResponse {
         status: if !blockers.is_empty() {
@@ -1261,12 +1303,7 @@ pub fn run_v0_story_to_storyboard_chain(
         preserved_fact_summary: chapter.preserved_fact_summary.clone(),
         changed_for_screenplay_summary: script.changed_for_screenplay_summary.clone(),
         omitted_detail_summary: script.omitted_detail_summary.clone(),
-        continuity_warnings: chapter
-            .continuity_warnings
-            .iter()
-            .chain(script.continuity_warnings.iter())
-            .cloned()
-            .collect(),
+        continuity_warnings: final_continuity_warnings,
         chapter: Some(chapter),
         script: Some(script),
         shot_task_plan: Some(shot_task_plan),
@@ -3170,6 +3207,19 @@ struct V0ChainDurationPlan {
     warnings: Vec<ProductWarning>,
 }
 
+#[derive(Debug, Clone)]
+struct V0ContinuityProfile {
+    effective_context_summary: String,
+    character_motivation_summary: String,
+    conflict_progression_summary: String,
+    emotional_progression_summary: String,
+    timeline_continuity_summary: String,
+    prop_state_summary: String,
+    next_scene_bridge: String,
+    director_bridge: String,
+    warnings: Vec<ProductWarning>,
+}
+
 fn plan_v0_chain_duration(
     request: &RunV0StoryToStoryboardChainRequest,
     source_analysis: &SourceInputAnalysis,
@@ -3679,6 +3729,357 @@ fn omitted_detail_summary(source_input_type: &str, facts: &SourceStoryFacts) -> 
     }
 }
 
+fn summarize_fact_entries(
+    entries: &[String],
+    fallback: &str,
+    max_items: usize,
+    max_chars: usize,
+) -> String {
+    if entries.is_empty() {
+        return fallback.to_string();
+    }
+    let joined = entries
+        .iter()
+        .take(max_items)
+        .map(|entry| compact_product_summary(entry, fallback, max_chars))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    compact_product_summary(&joined, fallback, max_chars)
+}
+
+fn hint_requests_fact_override(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let has_override = [
+        "replace",
+        "override",
+        "swap",
+        "新增",
+        "加入",
+        "改为",
+        "改成",
+        "替换",
+        "重写",
+    ]
+    .iter()
+    .any(|term| lower.contains(term));
+    let has_guard = [
+        "do not override",
+        "source facts remain authoritative",
+        "summary-only",
+        "advisory only",
+        "don't override",
+        "不覆盖",
+        "不改",
+        "不新增",
+        "仅供参考",
+        "只做参考",
+    ]
+    .iter()
+    .any(|term| lower.contains(term));
+    has_override && !has_guard
+}
+
+fn build_v0_chain_advisory_warnings(
+    facts: &SourceStoryFacts,
+    continuity_context_summary: &str,
+    kb_context_summary: &str,
+    directing_kb_context_summary: &str,
+) -> Vec<ProductWarning> {
+    let mut warnings = Vec::new();
+    if continuity_context_summary.trim().is_empty() {
+        warnings.push(ProductWarning {
+            code: "continuity_context_missing".to_string(),
+            message:
+                "No continuity_context_summary was supplied, so Hope inferred continuity handoff from accepted facts only."
+                    .to_string(),
+            related_sample_id: None,
+        });
+    }
+    if !source_facts_are_empty(facts) && hint_requests_fact_override(kb_context_summary) {
+        warnings.push(ProductWarning {
+            code: "kb_hint_conflicts_with_source_fact".to_string(),
+            message:
+                "Summary-only KB guidance appears to override accepted source facts; Hope kept content facts authoritative."
+                    .to_string(),
+            related_sample_id: None,
+        });
+    }
+    if !source_facts_are_empty(facts) && hint_requests_fact_override(directing_kb_context_summary) {
+        warnings.push(ProductWarning {
+            code: "director_hint_conflicts_with_content_fact".to_string(),
+            message:
+                "Directing guidance appears to rewrite accepted content facts; Hope kept directing in a scheduling-only role."
+                    .to_string(),
+            related_sample_id: None,
+        });
+    }
+    warnings
+}
+
+fn build_v0_continuity_profile(
+    analysis: &SourceInputAnalysis,
+    continuity_context_summary: &str,
+    kb_context_summary: &str,
+    retrieval_trace_user_summary: &str,
+) -> V0ContinuityProfile {
+    let facts = &analysis.source_story_facts;
+    let mut warnings =
+        build_v0_chain_advisory_warnings(facts, continuity_context_summary, kb_context_summary, "");
+    let subject_summary = if facts.character_names.is_empty() {
+        "accepted on-page characters".to_string()
+    } else {
+        subject_label_from_names(
+            &facts
+                .character_names
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>(),
+        )
+    };
+    let relationship_summary = summarize_fact_entries(
+        &facts.character_relationships,
+        "character relationships stay anchored to accepted facts.",
+        3,
+        150,
+    );
+    let conflict_progression_summary = summarize_fact_entries(
+        &facts.conflict_progression,
+        "conflict cause and effect must stay continuous across the next beat.",
+        3,
+        180,
+    );
+    let emotional_progression_summary = summarize_fact_entries(
+        &facts.emotional_progression,
+        "emotional progression keeps moving from the prior accepted beat without a reset.",
+        3,
+        180,
+    );
+    let timeline_continuity_summary = if facts.event_order.is_empty() {
+        summarize_fact_entries(
+            &facts.timeline_facts,
+            "event order and timeline stay aligned with accepted chapter facts.",
+            4,
+            180,
+        )
+    } else {
+        summarize_fact_entries(
+            &facts.event_order,
+            "event order and timeline stay aligned with accepted chapter facts.",
+            4,
+            180,
+        )
+    };
+    let prop_state_summary = summarize_fact_entries(
+        &facts.prop_state,
+        "props keep only accepted ownership, availability, and damage state.",
+        3,
+        180,
+    );
+    let next_scene_bridge = if facts.ending_state.trim().is_empty() {
+        compact_product_summary(
+            continuity_context_summary,
+            "next beat must inherit unresolved action and pressure from the accepted ending state.",
+            180,
+        )
+    } else {
+        format!(
+            "next beat inherits accepted ending state: {}",
+            compact_product_summary(
+                &facts.ending_state,
+                "accepted ending state carries forward.",
+                140
+            )
+        )
+    };
+    let character_motivation_summary = format!(
+        "{} keeps acting from accepted goals and relationships. relation_guard={} continuity_guard={}",
+        subject_summary,
+        relationship_summary,
+        compact_product_summary(
+            continuity_context_summary,
+            "motivation carries from the prior accepted state without a reset.",
+            120
+        )
+    );
+    let director_bridge = format!(
+        "content facts stay authoritative, writing preserves continuity, scene controls expression, and directing schedules shots only. kb_summary_only={} retrieval_trace={}",
+        compact_product_summary(
+            kb_context_summary,
+            "no external KB summary was supplied.",
+            100
+        ),
+        compact_product_summary(
+            retrieval_trace_user_summary,
+            "no retrieval trace user summary was supplied.",
+            80
+        )
+    );
+    let effective_context_summary = format!(
+        "content_facts_first={}; writing_continuity={}; timeline_guard={}; prop_guard={}; emotion_guard={}; conflict_guard={}; next_scene_bridge={}",
+        compact_product_summary(
+            &analysis.preserved_fact_summary,
+            "accepted source facts remain authoritative.",
+            120
+        ),
+        compact_product_summary(
+            continuity_context_summary,
+            "continue from accepted facts and do not drift relationships, motives, or event order.",
+            120
+        ),
+        timeline_continuity_summary,
+        prop_state_summary,
+        emotional_progression_summary,
+        conflict_progression_summary,
+        compact_product_summary(
+            &next_scene_bridge,
+            "next beat inherits unresolved tension from the current accepted end state.",
+            100
+        )
+    );
+    if !facts.character_names.is_empty()
+        && !character_motivation_summary.contains(&facts.character_names[0])
+    {
+        warnings.push(ProductWarning {
+            code: "character_motivation_drift_detected".to_string(),
+            message:
+                "Character motivation routing lost the accepted character anchor, so manual review is recommended."
+                    .to_string(),
+            related_sample_id: None,
+        });
+    }
+    dedupe_product_warnings(&mut warnings);
+    V0ContinuityProfile {
+        effective_context_summary,
+        character_motivation_summary,
+        conflict_progression_summary,
+        emotional_progression_summary,
+        timeline_continuity_summary,
+        prop_state_summary,
+        next_scene_bridge,
+        director_bridge,
+        warnings,
+    }
+}
+
+fn build_script_stage_continuity_context(
+    base_context_summary: &str,
+    chapter: &GenerateNovelChapterResponse,
+) -> String {
+    format!(
+        "base_continuity={}; chapter_summary={}; character_state={}; conflict_progression={}; emotional_progression={}; timeline={}; props={}; next_scene_bridge={}",
+        compact_product_summary(
+            base_context_summary,
+            "continue from accepted facts without continuity drift.",
+            120
+        ),
+        compact_product_summary(&chapter.chapter_summary, "accepted chapter summary", 100),
+        compact_product_summary(
+            &chapter.character_motivation_summary,
+            "character motivation follows accepted chapter facts.",
+            100
+        ),
+        compact_product_summary(
+            &chapter.conflict_progression_summary,
+            "conflict progression remains causal and continuous.",
+            100
+        ),
+        compact_product_summary(
+            &chapter.emotional_progression_summary,
+            "emotional progression keeps moving forward.",
+            100
+        ),
+        compact_product_summary(
+            &chapter.timeline_continuity_summary,
+            "timeline remains aligned with accepted event order.",
+            100
+        ),
+        compact_product_summary(
+            &chapter.prop_state_summary,
+            "prop state remains aligned with accepted facts.",
+            100
+        ),
+        compact_product_summary(
+            &chapter.next_scene_bridge,
+            "next scene must inherit unresolved accepted pressure.",
+            100
+        )
+    )
+}
+
+fn summary_mentions_fact_anchor(summary: &str, entries: &[String]) -> bool {
+    if entries.is_empty() {
+        return true;
+    }
+    entries.iter().take(4).any(|entry| {
+        let anchor = compact_product_summary(entry, "", 24);
+        !anchor.trim().is_empty() && summary.contains(anchor.trim())
+    })
+}
+
+fn validate_continuity_state_against_source_facts(
+    request: &UpdateContinuityStateRequest,
+) -> Vec<ProductWarning> {
+    let mut warnings = Vec::new();
+    if !summary_mentions_fact_anchor(
+        &request.timeline_state_summary,
+        &request.source_story_facts.event_order,
+    ) {
+        warnings.push(ProductWarning {
+            code: "event_order_drift_detected".to_string(),
+            message:
+                "Continuity state no longer reflects accepted source event order or timeline anchors."
+                    .to_string(),
+            related_sample_id: None,
+        });
+    }
+    if !summary_mentions_fact_anchor(&request.prop_state_summary, &request.source_story_facts.prop_state) {
+        warnings.push(ProductWarning {
+            code: "prop_state_drift_detected".to_string(),
+            message:
+                "Continuity state no longer reflects accepted prop ownership or prop-state anchors."
+                    .to_string(),
+            related_sample_id: None,
+        });
+    }
+    if !summary_mentions_fact_anchor(
+        &request.character_state_summary,
+        &request.source_story_facts.emotional_progression,
+    ) {
+        warnings.push(ProductWarning {
+            code: "emotional_progression_drift_detected".to_string(),
+            message:
+                "Continuity state no longer reflects accepted emotional progression anchors."
+                    .to_string(),
+            related_sample_id: None,
+        });
+    }
+    if !summary_mentions_fact_anchor(
+        &request.character_state_summary,
+        &request.source_story_facts.conflict_progression,
+    ) {
+        warnings.push(ProductWarning {
+            code: "conflict_progression_drift_detected".to_string(),
+            message:
+                "Continuity state no longer reflects accepted conflict-causality anchors."
+                    .to_string(),
+            related_sample_id: None,
+        });
+    }
+    warnings
+}
+
+fn dedupe_product_warnings(warnings: &mut Vec<ProductWarning>) {
+    let mut seen = std::collections::BTreeSet::new();
+    warnings.retain(|warning| {
+        seen.insert((
+            warning.code.clone(),
+            warning.message.clone(),
+            warning.related_sample_id.clone(),
+        ))
+    });
+}
+
 fn source_facts_are_empty(facts: &SourceStoryFacts) -> bool {
     facts.character_names.is_empty()
         && facts.core_events.is_empty()
@@ -3694,6 +4095,16 @@ fn is_v0_screenplay_metadata_segment(segment: &str) -> bool {
         || lower.starts_with("authoring_mode:")
         || lower.starts_with("source_material_summary:")
         || lower.starts_with("preserved_fact_summary:")
+        || lower.starts_with("continuity_context_summary:")
+        || lower.starts_with("content_priority:")
+        || lower.starts_with("kb_guidance_mode:")
+        || lower.starts_with("timeline_guard:")
+        || lower.starts_with("prop_state_guard:")
+        || lower.starts_with("location_guard:")
+        || lower.starts_with("ending_state_guard:")
+        || lower.starts_with("emotional_progression_guard:")
+        || lower.starts_with("conflict_progression_guard:")
+        || lower.starts_with("dialogue_intent:")
         || lower.starts_with("source_story_facts_take_priority")
         || lower.starts_with("changed_for_screenplay_summary:")
         || lower.starts_with("omitted_detail_summary:")
@@ -3872,12 +4283,40 @@ fn deterministic_v0_script_text_for_authoring(
     if request.authoring_mode == "expand_from_synopsis"
         || source_facts_are_empty(&request.source_story_facts)
     {
-        return deterministic_v0_script_text(
-            &format!("V0 screenplay adaptation chapter {}", request.chapter_order),
-            scene_beats,
-            dialogue_intent,
-            &request.chapter_summary,
-        );
+        let mut lines = vec![
+            format!("screenplay_title: V0 chapter {}", request.chapter_order),
+            format!("source_input_type: {}", request.source_input_type),
+            format!("authoring_mode: {}", request.authoring_mode),
+            format!("preserved_fact_summary: {}", request.preserved_fact_summary),
+            format!(
+                "continuity_context_summary: {}",
+                compact_product_summary(
+                    &request.continuity_context_summary,
+                    "continue from accepted source state without continuity drift.",
+                    220
+                )
+            ),
+            "content_priority: content_facts>writing_continuity>scene_expression>director_scheduling>storyboard".to_string(),
+            "kb_guidance_mode: summary_only_advisory".to_string(),
+            "source_story_facts_take_priority_over_kb_advice: true".to_string(),
+            format!(
+                "changed_for_screenplay_summary: {}",
+                changed_for_screenplay_summary(&request.source_input_type, &request.authoring_mode)
+            ),
+            format!(
+                "omitted_detail_summary: {}",
+                omitted_detail_summary(&request.source_input_type, &request.source_story_facts)
+            ),
+            format!("dialogue_intent: {}", dialogue_intent),
+        ];
+        for (index, beat) in scene_beats.iter().enumerate() {
+            let scene_no = index + 1;
+            lines.push(format!(
+                "scene_{scene_no}: {}. Characters inherit the prior accepted state, perform visible action, and leave a clean bridge into the next shot.",
+                compact_product_summary(beat, "character advances the current conflict", 180)
+            ));
+        }
+        return lines.join("\n");
     }
 
     let mut lines = vec![
@@ -3885,6 +4324,16 @@ fn deterministic_v0_script_text_for_authoring(
         format!("source_input_type: {}", request.source_input_type),
         format!("authoring_mode: {}", request.authoring_mode),
         format!("preserved_fact_summary: {}", request.preserved_fact_summary),
+        format!(
+            "continuity_context_summary: {}",
+            compact_product_summary(
+                &request.continuity_context_summary,
+                "continue from accepted source state without continuity drift.",
+                220
+            )
+        ),
+        "content_priority: content_facts>writing_continuity>scene_expression>director_scheduling>storyboard".to_string(),
+        "kb_guidance_mode: summary_only_advisory".to_string(),
         "source_story_facts_take_priority_over_kb_advice: true".to_string(),
         format!(
             "changed_for_screenplay_summary: {}",
@@ -3934,6 +4383,17 @@ fn deterministic_v0_script_text_for_authoring(
                 .join(" | ")
         ));
     }
+    if !request.source_story_facts.timeline_facts.is_empty() {
+        lines.push(format!(
+            "timeline_guard: {}",
+            summarize_fact_entries(
+                &request.source_story_facts.timeline_facts,
+                "timeline stays aligned with accepted chapter facts.",
+                4,
+                180
+            )
+        ));
+    }
     if !request.source_story_facts.prop_state.is_empty() {
         lines.push(format!(
             "道具状态保留：{}",
@@ -3945,6 +4405,17 @@ fn deterministic_v0_script_text_for_authoring(
                 .cloned()
                 .collect::<Vec<_>>()
                 .join(" | ")
+        ));
+    }
+    if !request.source_story_facts.prop_state.is_empty() {
+        lines.push(format!(
+            "prop_state_guard: {}",
+            summarize_fact_entries(
+                &request.source_story_facts.prop_state,
+                "prop ownership and state remain aligned with accepted facts.",
+                4,
+                180
+            )
         ));
     }
     if !request.source_story_facts.location_facts.is_empty() {
@@ -3960,10 +4431,51 @@ fn deterministic_v0_script_text_for_authoring(
                 .join(" | ")
         ));
     }
+    if !request.source_story_facts.location_facts.is_empty() {
+        lines.push(format!(
+            "location_guard: {}",
+            summarize_fact_entries(
+                &request.source_story_facts.location_facts,
+                "locations remain aligned with accepted source facts.",
+                4,
+                180
+            )
+        ));
+    }
+    if !request.source_story_facts.emotional_progression.is_empty() {
+        lines.push(format!(
+            "emotional_progression_guard: {}",
+            summarize_fact_entries(
+                &request.source_story_facts.emotional_progression,
+                "emotional progression keeps moving forward without a reset.",
+                4,
+                180
+            )
+        ));
+    }
+    if !request.source_story_facts.conflict_progression.is_empty() {
+        lines.push(format!(
+            "conflict_progression_guard: {}",
+            summarize_fact_entries(
+                &request.source_story_facts.conflict_progression,
+                "conflict causality stays aligned with accepted source facts.",
+                4,
+                180
+            )
+        ));
+    }
     if !request.source_story_facts.ending_state.trim().is_empty() {
         lines.push(format!(
             "结尾状态保留：{}",
             request.source_story_facts.ending_state
+        ));
+        lines.push(format!(
+            "ending_state_guard: {}",
+            compact_product_summary(
+                &request.source_story_facts.ending_state,
+                "accepted ending state carries into the next beat.",
+                180
+            )
         ));
     }
     lines.join("\n")
@@ -3992,6 +4504,16 @@ fn validate_rewrite_fact_preservation(
                 "Screenplay rewrite did not preserve named source characters: {}.",
                 missing_names.join("、")
             ),
+            related_sample_id: None,
+        });
+    }
+
+    if !missing_names.is_empty() {
+        warnings.push(ProductWarning {
+            code: "character_motivation_drift_detected".to_string(),
+            message:
+                "Character motivation continuity may have drifted because accepted named characters disappeared from the screenplay rewrite."
+                    .to_string(),
             related_sample_id: None,
         });
     }
@@ -4031,6 +4553,40 @@ fn validate_rewrite_fact_preservation(
         warnings.push(ProductWarning {
             code: "rewrite_changed_event_order".to_string(),
             message: "Screenplay rewrite changed the detected source event order.".to_string(),
+            related_sample_id: None,
+        });
+    }
+
+    if event_order_changed {
+        warnings.push(ProductWarning {
+            code: "event_order_drift_detected".to_string(),
+            message:
+                "Screenplay rewrite no longer follows the accepted source event order and should be reviewed."
+                    .to_string(),
+            related_sample_id: None,
+        });
+    }
+
+    if !facts.prop_state.is_empty()
+        && !script_text.contains("prop_state_guard:")
+        && !script_text.contains("道具状态保留")
+    {
+        warnings.push(ProductWarning {
+            code: "prop_state_drift_detected".to_string(),
+            message:
+                "Screenplay rewrite did not carry forward accepted prop-state anchors."
+                    .to_string(),
+            related_sample_id: None,
+        });
+    }
+
+    if !facts.emotional_progression.is_empty() && !script_text.contains("emotional_progression_guard:")
+    {
+        warnings.push(ProductWarning {
+            code: "emotional_progression_drift_detected".to_string(),
+            message:
+                "Screenplay rewrite did not carry forward accepted emotional progression anchors."
+                    .to_string(),
             related_sample_id: None,
         });
     }
@@ -4204,9 +4760,35 @@ fn build_storyboard_router_synopsis(grounding: &StoryboardGroundingContext) -> S
     )
 }
 
+fn screenplay_metadata_value(text: &str, prefix: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix(prefix)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
 fn build_storyboard_model_story_input(grounding: &StoryboardGroundingContext) -> String {
+    let continuity_context_summary = screenplay_metadata_value(
+        &grounding.expanded_script_text,
+        "continuity_context_summary:",
+    )
+    .unwrap_or_else(|| {
+        "continue from accepted shot facts without drifting relationships, motivation, event order, timeline, or prop state."
+            .to_string()
+    });
+    let content_priority =
+        screenplay_metadata_value(&grounding.expanded_script_text, "content_priority:")
+            .unwrap_or_else(|| {
+                "content_facts>writing_continuity>scene_expression>director_scheduling>storyboard"
+                    .to_string()
+            });
     format!(
-        "grounding_priority=1.shot_script 2.expanded_script_text 3.primary_scene_fields 4.kb_router_summary\nshot_script={}\nexpanded_script_text={}\nprimary_scene_type={}\nprimary_scene_label={}\nprimary_scene_category={}\nshot_scene_type={}\nshot_scene_label={}\nshot_intent={}\nadaptation_reason={}",
+        "grounding_priority=1.shot_script 2.expanded_script_text 3.primary_scene_fields 4.kb_router_summary\ncontent_priority={}\ncontinuity_context_summary={}\nshot_script={}\nexpanded_script_text={}\nprimary_scene_type={}\nprimary_scene_label={}\nprimary_scene_category={}\nshot_scene_type={}\nshot_scene_label={}\nshot_intent={}\nadaptation_reason={}",
+        content_priority,
+        continuity_context_summary,
         grounding.shot_script,
         grounding.expanded_script_text,
         grounding.primary_scene_type,
@@ -5445,9 +6027,9 @@ fn build_qwen_request_payload(
         TextGenerationOutputSchema::RepairPlanJson => "repair_plan_json",
         TextGenerationOutputSchema::SeedancePromptText => "seedance_prompt_text",
     };
-    let system_prompt = "You are Hope's controlled text-generation layer. Ground storyboard output in shot_script first, then expanded_script_text, then primary scene fields, and only then compressed KB context. Never invent real director names, IP names, brand names, or external asset bindings. Do not expand to full KB rows.";
+    let system_prompt = "You are Hope's controlled text-generation layer. Ground storyboard output in shot_script first, then expanded_script_text, then primary scene fields, and only then compressed KB context. Preserve accepted character relationships, motivation, event order, timeline, prop state, emotional progression, conflict causality, and next-scene handoff. Scene changes expression only; directing schedules shots only. Never invent real director names, IP names, brand names, or external asset bindings. Do not expand to full KB rows.";
     let user_prompt = format!(
-        "task_type={:?}\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema={}\nconstraints=for expand_script, write to the requested duration_seconds; for storyboard, each row must use a Seedance-friendly duration from the duration plan; shot_script is authoritative when present; KB samples are summary-only references and must not replace current story; keep total duration conserved; do not emit full KB; do not emit raw prompt_body as final prompt_text; do not use real director/IP/brand names.",
+        "task_type={:?}\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema={}\nconstraints=for expand_script, write to the requested duration_seconds; for storyboard, each row must use a Seedance-friendly duration from the duration plan; shot_script is authoritative when present; preserve relationships, motivation, event order, timeline, prop state, emotional progression, conflict causality, and next-scene continuity; scene only changes expression; directing only schedules shots; KB samples are summary-only references and must not replace current story; keep total duration conserved; do not emit full KB; do not emit raw prompt_body as final prompt_text; do not use real director/IP/brand names.",
         request.task_type,
         scene_type,
         duration_seconds,
@@ -8660,6 +9242,60 @@ mod tests {
                 .continuity_warnings
                 .iter()
                 .any(|warning| warning.code == "source_input_type_uncertain")
+        );
+    }
+
+    #[test]
+    fn v0_story_to_storyboard_chain_warns_when_continuity_context_is_missing() {
+        let state = test_state();
+        let mut request =
+            v0_chain_request_for_source("story-v0-missing-continuity", "Lin guards the bridge.");
+        request.continuity_context_summary = String::new();
+
+        let response = run_v0_story_to_storyboard_chain(&state, request);
+
+        assert_ne!(response.status, BridgeCallStatus::Blocked, "{response:#?}");
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "continuity_context_missing")
+        );
+        assert!(
+            response
+                .continuity_warnings
+                .iter()
+                .any(|warning| warning.code == "continuity_context_missing")
+        );
+    }
+
+    #[test]
+    fn v0_story_to_storyboard_chain_warns_on_conflicting_kb_and_directing_hints() {
+        let state = test_state();
+        let mut request = v0_chain_request_for_source(
+            "story-v0-conflicting-hints",
+            "Lin holds the bridge keepsake, Ye warns him, and Xiao closes the gate before the enemy arrives.",
+        );
+        request.kb_context_summary =
+            "Replace the accepted enemy with Shen Mo and add a throne plot.".to_string();
+        request.directing_kb_context_summary =
+            "Replace the accepted motive with a betrayal twist and add a throne plot."
+                .to_string();
+
+        let response = run_v0_story_to_storyboard_chain(&state, request);
+
+        assert_ne!(response.status, BridgeCallStatus::Blocked, "{response:#?}");
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "kb_hint_conflicts_with_source_fact")
+        );
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "director_hint_conflicts_with_content_fact")
         );
     }
 
