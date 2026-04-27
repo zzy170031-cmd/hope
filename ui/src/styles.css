@@ -1018,9 +1018,25 @@ textarea {
 }
 
 .current-shot-status--confirmed {
-  border-color: rgba(55, 132, 82, 0.34);
-  background: #f4fff7;
-  color: #28623d;
+  border-color: rgba(191, 74, 70, 0.46);
+  background: #fff7f5;
+  color: var(--danger);
+}
+
+.current-shot-status--pending {
+  border-color: rgba(17, 28, 51, 0.32);
+  background: #f7faff;
+  color: var(--navy);
+}
+
+.current-shot-status--confirmed strong,
+.current-shot-status--confirmed span {
+  color: var(--danger);
+}
+
+.current-shot-status--pending strong,
+.current-shot-status--pending span {
+  color: var(--navy);
 }
 
 .section-name--inline {
@@ -1992,8 +2008,17 @@ textarea {
 
 .task-queue-select select {
   height: var(--control-height);
+  width: 100%;
   min-width: 0;
   padding: 0 14px;
+}
+
+.task-queue-select__field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .task-queue-select__control {
@@ -2017,6 +2042,34 @@ textarea {
 }
 
 .task-queue-select__option--pending {
+  color: var(--navy);
+}
+
+.task-queue-select__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 86px;
+  height: var(--control-height);
+  padding: 0 10px;
+  border: 1px solid rgba(17, 28, 51, 0.28);
+  border-radius: var(--radius-sm);
+  background: #f7faff;
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.task-queue-select__status--confirmed {
+  border-color: rgba(191, 74, 70, 0.46);
+  background: #fff7f5;
+  color: var(--danger);
+}
+
+.task-queue-select__status--pending {
+  border-color: rgba(17, 28, 51, 0.32);
+  background: #f7faff;
   color: var(--navy);
 }
 

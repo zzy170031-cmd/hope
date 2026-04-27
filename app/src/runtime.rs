@@ -3297,6 +3297,7 @@ fn is_visual_description_grounding_incomplete(
         return true;
     }
     if contains_product_control_text(trimmed)
+        || contains_forbidden_generation_terms(trimmed)
         || contains_any_story_term(
             trimmed,
             &[
@@ -3306,6 +3307,8 @@ fn is_visual_description_grounding_incomplete(
                 "visual_scene_core",
                 "fused_scene_performance_core_preserved",
                 "not_specified_by_v120_bridge",
+                "气氛紧张",
+                "画面震撼",
             ],
         )
     {
@@ -3317,33 +3320,7 @@ fn is_visual_description_grounding_incomplete(
     {
         return true;
     }
-    let has_environment = contains_any_story_term(
-        trimmed,
-        &[
-            "断桥",
-            "桥边",
-            "桥面",
-            "焦土",
-            "裂痕",
-            "残垣",
-            "废墟",
-            "城门",
-            "门墙",
-            "林间",
-            "林隙",
-            "竹林",
-            "竹叶",
-            "营地",
-            "帐篷",
-            "巷口",
-            "雨夜",
-            "雨雾",
-            "湿地",
-            "战场",
-            "军阵",
-            "前沿",
-        ],
-    );
+    let has_environment = has_visual_environment_signal(trimmed);
     if !has_environment {
         return true;
     }
@@ -3356,37 +3333,42 @@ fn is_visual_description_grounding_incomplete(
                 "俯拍",
                 "仰拍",
                 "对角构图",
-                "前后层次",
+                "三角构图",
+                "前景",
                 "画面中心",
-                "主体区域中央",
+                "主体区中央",
+                "前后层次",
+                "一步对冲距离",
+                "贴身站位",
             ],
         );
     if !has_composition {
         return true;
     }
-    let has_light_or_atmosphere = contains_any_story_term(
-        trimmed,
-        &[
-            "火光",
-            "火星",
-            "银辉",
-            "反光",
-            "冷光",
-            "烟尘",
-            "湿亮",
-            "钝暖色",
-            "粗粝",
-            "硬光",
-        ],
-    );
-    if !has_light_or_atmosphere {
+    let has_visible_elements = has_visual_concrete_element_signal(trimmed)
+        || contains_any_story_term(
+            trimmed,
+            &["并肩", "挡住", "压短", "撞上", "上涌", "震开", "带起"],
+        );
+    if !has_visible_elements {
         return true;
     }
-    let has_current_event = trimmed.contains("当前视觉事件");
-    if !has_current_event {
+    if !has_visual_light_tone_or_material_signal(trimmed) {
         return true;
     }
-    let has_focus = trimmed.contains("画面突出");
+    let has_focus = trimmed.contains("画面突出")
+        || contains_any_story_term(
+            trimmed,
+            &[
+                "压迫感",
+                "对峙感",
+                "突袭感",
+                "控场优势",
+                "控场反转",
+                "拉扯感",
+                "悬停感",
+            ],
+        );
     !has_focus || trimmed.chars().count() < 28
 }
 fn contains_forbidden_generation_terms(text: &str) -> bool {
@@ -4310,12 +4292,18 @@ fn build_visual_description_from_story(
         "主体为{subject}，{}",
         derive_visual_composition_clause(source, subject, scene_scale, shot_intent)
     )];
-    if let Some(environment) = derive_visual_environment_clause(source, full_text, shot_scene_label) {
-        parts.push(environment);
-    }
-    if let Some(light_tone) = derive_visual_light_tone_clause(source, full_text) {
-        parts.push(light_tone);
-    }
+    parts.push(derive_visual_environment_clause(
+        source,
+        full_text,
+        shot_scene_label,
+        shot_intent,
+    ));
+    parts.push(derive_visual_light_tone_clause(
+        source,
+        full_text,
+        shot_scene_label,
+        shot_intent,
+    ));
     parts.push(derive_visual_event_clause(source, subject));
     parts.push(format!(
         "画面突出{}",
@@ -4354,45 +4342,204 @@ fn derive_visual_environment_clause(
     source: &str,
     full_text: &str,
     shot_scene_label: &str,
-) -> Option<String> {
+    shot_intent: &str,
+) -> String {
     let combined = format!("{source}\n{full_text}");
-    if contains_any_story_term(&combined, &["断桥", "桥边", "桥面"]) {
-        Some("场景落在断桥残口与桥边碎石之间，狭窄落脚点把人物退路压得很紧".to_string())
-    } else if contains_any_story_term(&combined, &["焦土", "裂痕", "残垣", "废墟"]) {
-        Some("场景落在焦土裂痕和残垣边缘，碎土与硬质断面把空间压成前线限位".to_string())
-    } else if contains_any_story_term(&combined, &["城门", "门墙"]) {
-        Some("场景落在城门前沿，门墙与地面高差把进退路线框进同一块画面".to_string())
-    } else if contains_any_story_term(&combined, &["林间", "林隙", "竹林", "竹叶"]) {
-        Some("场景落在林间空地，枝叶和树影把主体前后层次切得很清楚".to_string())
-    } else if contains_any_story_term(&combined, &["营地", "帐篷", "密营"]) {
-        Some("场景落在营地核心区域，帐篷和立柱把主体围在可见中心".to_string())
-    } else if contains_any_story_term(&combined, &["雨夜", "巷口", "雨雾", "湿地"]) {
-        Some("场景落在雨夜巷口，墙面与湿地反光把纵深压成一条冷硬通道".to_string())
-    } else if contains_any_story_term(&combined, &["战场", "军阵", "前沿"]) {
-        Some("场景落在战场前沿，阵线、尘土和空地把人物推到冲突最前面".to_string())
-    } else if shot_scene_label.contains("对白") {
-        None
+    let ruin_terms = collect_story_terms(
+        &combined,
+        &[
+            "断桥",
+            "桥边",
+            "桥面",
+            "焦土",
+            "裂痕",
+            "残垣",
+            "废墟",
+            "断楼",
+            "残墙",
+            "混凝土",
+            "钢筋",
+        ],
+        2,
+    );
+    if !ruin_terms.is_empty() {
+        let anchors = format_story_term_pair(&ruin_terms, "危险空间");
+        format!("场景压在{anchors}之间，主体的来路与退路都被挤在同一层空间里")
     } else {
-        None
+        let indoor_terms = collect_story_terms(
+            &combined,
+            &[
+                "宫殿",
+                "大殿",
+                "殿内",
+                "房间",
+                "屋内",
+                "船舱",
+                "茶楼",
+                "营帐",
+                "桌案",
+                "屏风",
+                "门窗",
+            ],
+            2,
+        );
+        if !indoor_terms.is_empty() {
+            let anchors = format_story_term_pair(&indoor_terms, "室内层次");
+            format!("场景收在{anchors}围出的室内空间里，人物与器物的前后关系被压得很清楚")
+        } else {
+            let forest_terms = collect_story_terms(
+                &combined,
+                &[
+                    "山林",
+                    "林间",
+                    "林隙",
+                    "竹林",
+                    "竹叶",
+                    "树影",
+                    "雾气",
+                    "薄雾",
+                ],
+                2,
+            );
+            if !forest_terms.is_empty() {
+                let anchors = format_story_term_pair(&forest_terms, "野外空间");
+                format!("场景落在{anchors}拉开的野外空间里，主体前后的层次被自然地势带得很开")
+            } else {
+                let street_terms = collect_story_terms(
+                    &combined,
+                    &[
+                        "街巷",
+                        "街口",
+                        "巷口",
+                        "街灯",
+                        "人流",
+                        "雨水",
+                        "屋顶",
+                    ],
+                    2,
+                );
+                if !street_terms.is_empty() {
+                    let anchors = format_story_term_pair(&street_terms, "街面动线");
+                    format!("场景压在{anchors}串起的街面动线里，主体与来路退路都被放进同一层画面")
+                } else {
+                    let open_terms = collect_story_terms(
+                        &combined,
+                        &[
+                            "战场",
+                            "军阵",
+                            "前沿",
+                            "营地",
+                            "旷野",
+                            "开阔地",
+                            "湿地",
+                            "雨夜",
+                            "雨雾",
+                        ],
+                        2,
+                    );
+                    if !open_terms.is_empty() {
+                        let anchors = format_story_term_pair(&open_terms, "开阔地带");
+                        format!("场景摊在{anchors}之间，主体与空场的距离关系被直接亮在画面里")
+                    } else if shot_scene_label.contains("对白") || shot_intent == "dialogue" {
+                        "场景收在当前人物对话发生的近身空间里，站位关系和前后距离都被留在同一层画面".to_string()
+                    } else {
+                        "场景落在当前动作发生的可见空间里，主体与周围环境的前后关系被清楚交代".to_string()
+                    }
+                }
+            }
+        }
     }
 }
 
-fn derive_visual_light_tone_clause(source: &str, full_text: &str) -> Option<String> {
-    let combined = format!("{source}\n{full_text}");
-    if contains_any_story_term(&combined, &["火光", "火星"])
-        && contains_any_story_term(&combined, &["烟尘", "焦土", "裂痕"])
-    {
-        Some("火光和火星在烟尘里来回闪动，粗粝暗色把整幅画面压出持续的冲击感".to_string())
-    } else if contains_any_story_term(&combined, &["银辉", "掌心"]) {
-        Some("银辉冷光沿掌心和手臂向上爬升，把周围色调压成偏冷的硬光层".to_string())
-    } else if contains_any_story_term(&combined, &["雨夜", "雨雾", "湿地"]) {
-        Some("雨雾与湿地反光把画面压成冷色湿亮的质感，边缘轮廓更显锋利".to_string())
-    } else if contains_any_story_term(&combined, &["焦土", "烟尘", "裂痕"]) {
-        Some("焦土灰屑和扬起的烟尘压暗画面色调，空间显得发闷而粗粝".to_string())
-    } else if contains_any_story_term(&combined, &["残阳"]) {
-        Some("残阳只在边线留下一层钝暖色，主体仍被暗面和空气颗粒包住".to_string())
+fn derive_visual_tone_effect(source: &str, shot_intent: &str) -> String {
+    if contains_any_story_term(source, &["追杀", "压近", "逼近", "来袭", "对冲"]) {
+        "把空间压得更紧，危险感直接贴到主体身上".to_string()
+    } else if contains_any_story_term(source, &["护住", "护着", "回身", "挡住"]) {
+        "把贴身相护时的压力托得更实".to_string()
+    } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) || shot_intent == "reveal" {
+        "把力量将起未起的压迫感顶在画面前沿".to_string()
+    } else if shot_intent == "dialogue" {
+        "让静场里的试探和停顿压得更深".to_string()
     } else {
-        None
+        "把当前这拍的情绪压力稳稳按在画面里".to_string()
+    }
+}
+
+fn derive_visual_light_tone_clause(
+    source: &str,
+    full_text: &str,
+    shot_scene_label: &str,
+    shot_intent: &str,
+) -> String {
+    let combined = format!("{source}\n{full_text}");
+    let light_terms = collect_story_terms(
+        &combined,
+        &[
+            "冷白光",
+            "冷光",
+            "银辉",
+            "火光",
+            "火星",
+            "烛光",
+            "街灯",
+            "灯影",
+            "灯火",
+            "月光",
+            "晨光",
+            "暮色",
+            "残阳",
+            "反光",
+            "雨雾",
+            "雾气",
+            "薄雾",
+            "阴影",
+            "树影",
+            "灰云",
+        ],
+        2,
+    );
+    let surface_terms = collect_story_terms(
+        &combined,
+        &[
+            "钢筋",
+            "锈屑",
+            "混凝土",
+            "碎石",
+            "碎土",
+            "烟尘",
+            "灰尘",
+            "石面",
+            "布面",
+            "桌案",
+            "屏风",
+            "门窗",
+            "雨水",
+            "湿地",
+            "枝叶",
+            "人流",
+        ],
+        2,
+    );
+    let effect = derive_visual_tone_effect(source, shot_intent);
+    if !light_terms.is_empty() && !surface_terms.is_empty() {
+        let light = format_story_term_pair(&light_terms, "光线");
+        let surface = format_story_term_pair(&surface_terms, "环境表面");
+        format!("{light}落在{surface}上，{effect}")
+    } else if !light_terms.is_empty() {
+        let light = format_story_term_pair(&light_terms, "光线");
+        format!("{light}把画面层次拉开，{effect}")
+    } else if !surface_terms.is_empty() {
+        let surface = format_story_term_pair(&surface_terms, "环境表面");
+        format!("{surface}的质地被看得很实，{effect}")
+    } else if contains_any_story_term(&combined, &["宫殿", "大殿", "殿内", "房间", "屋内", "船舱", "茶楼", "营帐"])
+    {
+        format!("室内明暗把空间压得更深，木面与布面的层次让这一拍显得更稳更紧，{effect}")
+    } else if contains_any_story_term(&combined, &["山林", "林间", "竹林", "街巷", "巷口", "旷野", "开阔地"]) {
+        format!("空气与地表把远近层次自然拉开，当前环境的湿度和颗粒感一直托着剧情压力，{effect}")
+    } else if shot_scene_label.contains("对白") || shot_intent == "dialogue" {
+        "光线被收得很克制，人物面部与衣料表面只剩窄窄反差，让静场里的试探和停顿压得更深".to_string()
+    } else {
+        format!("明暗层次把主体从背景里剥出来，空气与地表的质感让这一拍更有剧情压力，{effect}")
     }
 }
 
@@ -4681,6 +4828,166 @@ fn story_anchor_terms(text: &str) -> Vec<&'static str> {
 
 fn contains_any_story_term(value: &str, terms: &[&str]) -> bool {
     terms.iter().any(|term| value.contains(term))
+}
+
+fn collect_story_terms<'a>(value: &str, terms: &[&'a str], max: usize) -> Vec<&'a str> {
+    let mut found = Vec::new();
+    for term in terms {
+        if value.contains(term) && !found.contains(term) {
+            found.push(*term);
+            if found.len() >= max {
+                break;
+            }
+        }
+    }
+    found
+}
+
+fn format_story_term_pair(terms: &[&str], fallback: &str) -> String {
+    match terms {
+        [] => fallback.to_string(),
+        [one] => (*one).to_string(),
+        [first, second, ..] => format!("{first}与{second}"),
+    }
+}
+
+fn has_visual_environment_signal(text: &str) -> bool {
+    contains_any_story_term(
+        text,
+        &[
+            "断桥",
+            "桥边",
+            "桥面",
+            "焦土",
+            "裂痕",
+            "残垣",
+            "废墟",
+            "断楼",
+            "残墙",
+            "混凝土",
+            "钢筋",
+            "城门",
+            "门墙",
+            "宫殿",
+            "大殿",
+            "殿内",
+            "房间",
+            "室内",
+            "屋内",
+            "船舱",
+            "茶楼",
+            "营帐",
+            "桌案",
+            "屏风",
+            "门窗",
+            "街巷",
+            "街口",
+            "街灯",
+            "人流",
+            "林间",
+            "林隙",
+            "山林",
+            "竹林",
+            "竹叶",
+            "树影",
+            "雾气",
+            "薄雾",
+            "营地",
+            "帐幕",
+            "巷口",
+            "雨夜",
+            "雨雾",
+            "雨水",
+            "湿地",
+            "战场",
+            "军阵",
+            "前沿",
+            "旷野",
+            "开阔地",
+            "近身空间",
+            "可见空间",
+            "室内空间",
+            "野外空间",
+            "开阔地带",
+            "街面动线",
+        ],
+    )
+}
+
+fn has_visual_concrete_element_signal(text: &str) -> bool {
+    contains_any_story_term(
+        text,
+        &[
+            "碎石",
+            "碎土",
+            "烟尘",
+            "火光",
+            "火星",
+            "银辉",
+            "反光",
+            "冷光",
+            "冷白光",
+            "烛光",
+            "街灯",
+            "灯影",
+            "月光",
+            "钢筋",
+            "锈屑",
+            "混凝土",
+            "刀锋",
+            "门墙",
+            "桌案",
+            "屏风",
+            "门窗",
+            "枝叶",
+            "树影",
+            "帐幕",
+            "石面",
+            "布面",
+            "雨水",
+            "雾气",
+            "人流",
+        ],
+    )
+}
+
+fn has_visual_light_tone_or_material_signal(text: &str) -> bool {
+    contains_any_story_term(
+        text,
+        &[
+            "冷光",
+            "冷白光",
+            "冷白",
+            "银辉",
+            "火光",
+            "火星",
+            "烛光",
+            "街灯",
+            "灯影",
+            "月光",
+            "雨水",
+            "雾气",
+            "薄雾",
+            "树影",
+            "暮色",
+            "反光",
+            "烟尘",
+            "湿亮",
+            "粗粝",
+            "硬光",
+            "灰云",
+            "灰褐",
+            "质感",
+            "材质感",
+            "阴影",
+            "明暗",
+            "木面",
+            "布面",
+            "空气",
+            "地表",
+            "颗粒感",
+        ],
+    )
 }
 
 fn project_reference_handle_candidates(
@@ -5689,7 +5996,9 @@ mod tests {
         build_writer_entry_snapshot_from_fixture, contains_any_story_term,
         contains_product_control_text, derive_character_action_from_story,
         derive_product_person, derive_shot_title, expand_script, generate_storyboard,
-        resolve_expand_script_target_duration_seconds, resolve_scene_taxonomy,
+        has_visual_concrete_element_signal, has_visual_environment_signal,
+        has_visual_light_tone_or_material_signal, resolve_expand_script_target_duration_seconds,
+        resolve_scene_taxonomy,
     };
     use crate::state::load_desktop_shared_fixture;
     use crate::{
@@ -6028,45 +6337,33 @@ mod tests {
     }
 
     fn assert_visual_description_is_enhanced(row: &GeneratedStoryboardRow) {
-        let visual = row.visual_description.as_str();
         assert!(
-            visual.contains(&row.scene_scale)
-                || contains_any_story_term(
-                    visual,
-                    &["正面", "侧视角", "对角构图", "前后层次", "画面中心", "主体区域中央"],
-                ),
-            "visual_description should include composition: {}",
-            visual
+            row.visual_description.contains("主体为"),
+            "visual_description should anchor subject: {}",
+            row.visual_description
         );
         assert!(
-            contains_any_story_term(
-                visual,
-                &[
-                    "断桥", "桥边", "桥面", "焦土", "裂痕", "残垣", "废墟", "城门", "林间",
-                    "营地", "雨夜", "战场",
-                ],
-            ),
-            "visual_description should include environment or space: {}",
-            visual
+            row.visual_description.contains(&row.scene_scale),
+            "visual_description should carry scene scale/composition context: {}",
+            row.visual_description
         );
         assert!(
-            contains_any_story_term(
-                visual,
-                &["火光", "火星", "银辉", "反光", "冷光", "烟尘", "湿亮", "钝暖色", "粗粝", "硬光"],
-            ),
-            "visual_description should include light, color, or atmosphere: {}",
-            visual
-        );
-        assert!(
-            visual.contains("当前视觉事件"),
+            row.visual_description.contains("当前视觉事件是"),
             "visual_description should describe the current visual event: {}",
-            visual
+            row.visual_description
         );
         assert!(
-            visual.contains("画面突出"),
-            "visual_description should include a focus clause: {}",
-            visual
+            row.visual_description.contains("画面突出"),
+            "visual_description should land on conflict focus: {}",
+            row.visual_description
         );
+        assert_ne!(row.visual_description, row.character_action);
+        assert_ne!(row.visual_description, row.shot_script);
+        assert!(has_visual_environment_signal(&row.visual_description));
+        assert!(has_visual_concrete_element_signal(&row.visual_description));
+        assert!(has_visual_light_tone_or_material_signal(
+            &row.visual_description
+        ));
     }
 
     #[test]
@@ -6176,6 +6473,209 @@ mod tests {
             assert!(!contains_product_control_text(&row[5]));
             assert!(!contains_product_control_text(&row[8]));
         }
+    }
+
+    #[test]
+    fn generate_storyboard_strengthens_ruin_light_and_material_clues() {
+        let state = test_state_with_golden_sample_runtime();
+        let shot_script = "断楼残墙之间，裸露钢筋斜刺进灰云，风卷着锈屑掠过破碎混凝土。主角被逼到退路尽头，只能顶住来袭。";
+
+        let storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "ruin-light-material-grounding".to_string(),
+                script_id: None,
+                shot_script: Some(shot_script.to_string()),
+                expanded_script_text: Some(
+                    "scene_type: daily_dialogue\nsynopsis: 断楼残墙间的危险逼近。".to_string(),
+                ),
+                primary_scene_type: Some("daily_dialogue".to_string()),
+                primary_scene_label: Some("断楼逼近".to_string()),
+                primary_scene_category: Some("action_dialogue".to_string()),
+                shot_scene_type: Some("action_beat".to_string()),
+                shot_scene_label: Some("断楼残墙对冲镜头".to_string()),
+                shot_intent: Some("action_beat".to_string()),
+                adaptation_reason: Some("ruin visual grounding".to_string()),
+                selected_total_duration_seconds: 10,
+                target_duration_mode: String::new(),
+                auto_segment_strategy: String::new(),
+                model_config_summary: None,
+                scene_type: None,
+                scene_label: None,
+                scene_category: None,
+            },
+        );
+
+        assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
+        for row in &storyboard.rows {
+            assert_visual_description_is_enhanced(row);
+            assert!(contains_any_story_term(
+                &row.visual_description,
+                &["灰云", "冷白光", "冷白", "反光"]
+            ));
+            assert!(contains_any_story_term(
+                &row.visual_description,
+                &["钢筋", "锈屑", "混凝土", "金属"]
+            ));
+            assert!(!contains_product_control_text(&row.visual_description));
+            assert!(
+                !row.prompt_text_compilation_warnings
+                    .iter()
+                    .any(|warning| warning.code == "visual_description_grounding_incomplete")
+            );
+        }
+    }
+
+    #[test]
+    fn generate_storyboard_keeps_indoor_visuals_out_of_ruin_template() {
+        let state = test_state_with_golden_sample_runtime();
+        let shot_script = "殿内烛光压低，桌案边的屏风投下长影。女主停在门窗之间压住呼吸，抬手示意同伴噤声。";
+
+        let storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "indoor-visual-grounding".to_string(),
+                script_id: None,
+                shot_script: Some(shot_script.to_string()),
+                expanded_script_text: Some(
+                    "scene_type: daily_dialogue\nsynopsis: 宫殿密谈前的静压时刻。".to_string(),
+                ),
+                primary_scene_type: Some("daily_dialogue".to_string()),
+                primary_scene_label: Some("宫殿密谈".to_string()),
+                primary_scene_category: Some("dialogue".to_string()),
+                shot_scene_type: Some("daily_dialogue".to_string()),
+                shot_scene_label: Some("殿内停顿镜头".to_string()),
+                shot_intent: Some("dialogue".to_string()),
+                adaptation_reason: Some("indoor visual grounding".to_string()),
+                selected_total_duration_seconds: 10,
+                target_duration_mode: String::new(),
+                auto_segment_strategy: String::new(),
+                model_config_summary: None,
+                scene_type: None,
+                scene_label: None,
+                scene_category: None,
+            },
+        );
+
+        assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
+        for row in &storyboard.rows {
+            assert_visual_description_is_enhanced(row);
+            assert!(contains_any_story_term(
+                &row.visual_description,
+                &["殿内", "桌案", "屏风", "门窗", "室内"]
+            ));
+            assert!(contains_any_story_term(
+                &row.visual_description,
+                &["烛光", "阴影", "明暗"]
+            ));
+            assert!(!contains_any_story_term(
+                &row.visual_description,
+                &["断楼", "残墙", "钢筋", "焦土", "灰云", "碎石"]
+            ));
+            assert!(row.prompt_text.contains(&row.visual_description));
+        }
+    }
+
+    #[test]
+    fn generate_storyboard_distinguishes_forest_and_street_visual_contexts() {
+        let state = test_state_with_golden_sample_runtime();
+        let forest_storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "forest-visual-grounding".to_string(),
+                script_id: None,
+                shot_script: Some(
+                    "山林薄雾压在树影之间，主角贴着湿叶缓步逼近，远处风声把空地拉得更静。"
+                        .to_string(),
+                ),
+                expanded_script_text: Some(
+                    "scene_type: daily_dialogue\nsynopsis: 山林跟踪中的静压逼近。".to_string(),
+                ),
+                primary_scene_type: Some("daily_dialogue".to_string()),
+                primary_scene_label: Some("山林逼近".to_string()),
+                primary_scene_category: Some("action_dialogue".to_string()),
+                shot_scene_type: Some("daily_dialogue".to_string()),
+                shot_scene_label: Some("山林潜行镜头".to_string()),
+                shot_intent: Some("action_beat".to_string()),
+                adaptation_reason: Some("forest visual grounding".to_string()),
+                selected_total_duration_seconds: 10,
+                target_duration_mode: String::new(),
+                auto_segment_strategy: String::new(),
+                model_config_summary: None,
+                scene_type: None,
+                scene_label: None,
+                scene_category: None,
+            },
+        );
+        let street_storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "street-visual-grounding".to_string(),
+                script_id: None,
+                shot_script: Some(
+                    "夜街巷口的街灯照着雨水，人流在远处散开。主角隔着屋檐盯住来人，脚步声在近处压得更急。"
+                        .to_string(),
+                ),
+                expanded_script_text: Some(
+                    "scene_type: daily_dialogue\nsynopsis: 夜街盯防中的压力停顿。".to_string(),
+                ),
+                primary_scene_type: Some("daily_dialogue".to_string()),
+                primary_scene_label: Some("夜街盯防".to_string()),
+                primary_scene_category: Some("dialogue".to_string()),
+                shot_scene_type: Some("daily_dialogue".to_string()),
+                shot_scene_label: Some("街巷盯防镜头".to_string()),
+                shot_intent: Some("dialogue".to_string()),
+                adaptation_reason: Some("street visual grounding".to_string()),
+                selected_total_duration_seconds: 10,
+                target_duration_mode: String::new(),
+                auto_segment_strategy: String::new(),
+                model_config_summary: None,
+                scene_type: None,
+                scene_label: None,
+                scene_category: None,
+            },
+        );
+
+        assert_ne!(
+            forest_storyboard.export_status.status,
+            BridgeCallStatus::Blocked
+        );
+        assert_ne!(
+            street_storyboard.export_status.status,
+            BridgeCallStatus::Blocked
+        );
+        let forest_row = forest_storyboard
+            .rows
+            .first()
+            .expect("forest storyboard should produce at least one row");
+        let street_row = street_storyboard
+            .rows
+            .first()
+            .expect("street storyboard should produce at least one row");
+
+        assert_visual_description_is_enhanced(forest_row);
+        assert_visual_description_is_enhanced(street_row);
+        assert!(contains_any_story_term(
+            &forest_row.visual_description,
+            &["山林", "树影", "雾气", "薄雾", "枝叶"]
+        ));
+        assert!(!contains_any_story_term(
+            &forest_row.visual_description,
+            &["街灯", "人流", "街巷", "雨水"]
+        ));
+        assert!(contains_any_story_term(
+            &street_row.visual_description,
+            &["街巷", "街灯", "雨水", "人流"]
+        ));
+        assert!(!contains_any_story_term(
+            &street_row.visual_description,
+            &["山林", "树影", "雾气", "薄雾"]
+        ));
+        assert_ne!(
+            forest_row.visual_description,
+            street_row.visual_description,
+            "different scene inputs should not collapse into one visual template"
+        );
     }
 
     #[test]

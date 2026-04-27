@@ -574,6 +574,7 @@ export function App() {
     : hasTaskScript
     ? "待生成"
     : "未导入";
+  const currentShotStatusTone = currentShotConfirmed ? "confirmed" : "pending";
   const pageTokens = useMemo(() => buildPageTokens(pageCount, currentPage), [pageCount, currentPage]);
   const sceneOptionGroups = useMemo(() => groupSceneOptions(SCENE_OPTIONS), []);
   const selectedModelLabel = useMemo(() => resolveModelLabel(modelConfig.provider), [modelConfig.provider]);
@@ -591,6 +592,15 @@ export function App() {
         : "pending",
     [confirmedSceneTaskIds, taskDraft?.editingTaskRecordId],
   );
+  const currentTaskDraftQueueStatusLabel = useMemo(() => {
+    const selectedTask = taskDraft?.editingTaskRecordId
+      ? sceneTasks.find((task) => task.id === taskDraft.editingTaskRecordId)
+      : null;
+    if (taskDraft?.editingTaskRecordId && confirmedSceneTaskIds.has(taskDraft.editingTaskRecordId)) {
+      return "已确认 / 已定稿";
+    }
+    return selectedTask?.status === "generated" ? "待确认" : "待生成";
+  }, [confirmedSceneTaskIds, sceneTasks, taskDraft?.editingTaskRecordId]);
   const modelRuntimeLabel = useMemo(
     () => formatModelProviderStatus(modelConfig, modelProviderStatus),
     [modelConfig, modelProviderStatus],
@@ -2603,11 +2613,7 @@ export function App() {
                 {bridgeBusy === "save_rows" ? "保存中" : "保存修改"}
               </button>
               <div
-                className={
-                  currentShotConfirmed
-                    ? "current-shot-status current-shot-status--confirmed"
-                    : "current-shot-status"
-                }
+                className={`current-shot-status current-shot-status--${currentShotStatusTone}`}
               >
                 <strong>当前镜头</strong>
                 <span>{currentShotStatusLabel}</span>
@@ -3004,47 +3010,54 @@ export function App() {
                   <div className="task-queue-select">
                     <div className="task-draft-label">镜头任务队列（将用于生成）</div>
                     {sceneTasks.length ? (
-                      <select
-                        className={
-                          currentTaskDraftQueueTone === "confirmed"
-                            ? "task-queue-select__control task-queue-select__control--confirmed"
-                            : "task-queue-select__control task-queue-select__control--pending"
-                        }
-                        value={taskDraft.editingTaskRecordId ?? ""}
-                        onChange={(event) => {
-                          const task = sceneTasks.find((item) => item.id === event.target.value);
-                          if (task) {
-                            handleTaskQueueDraftSelect(task);
+                      <div className="task-queue-select__field">
+                        <select
+                          className={
+                            currentTaskDraftQueueTone === "confirmed"
+                              ? "task-queue-select__control task-queue-select__control--confirmed"
+                              : "task-queue-select__control task-queue-select__control--pending"
                           }
-                        }}
-                      >
-                        <option value="" disabled className="task-queue-select__placeholder">
-                          选择镜头任务
-                        </option>
-                        {sceneTasks.map((task, index) => {
-                          const queueTone = confirmedSceneTaskIds.has(task.id) ? "confirmed" : "pending";
-                          return (
-                            <option
-                              key={task.id}
-                              value={task.id}
-                              className={
-                                queueTone === "confirmed"
-                                  ? "task-queue-select__option task-queue-select__option--confirmed"
-                                  : "task-queue-select__option task-queue-select__option--pending"
-                              }
-                              style={{ color: queueTone === "confirmed" ? "var(--danger)" : "var(--navy)" }}
-                            >
-                              {formatTaskDraftQueueOption(
-                                task,
-                                index,
-                                taskDraft,
-                                durationSeconds,
-                                confirmedSceneTaskIds,
-                              )}
-                            </option>
-                          );
-                        })}
-                      </select>
+                          value={taskDraft.editingTaskRecordId ?? ""}
+                          onChange={(event) => {
+                            const task = sceneTasks.find((item) => item.id === event.target.value);
+                            if (task) {
+                              handleTaskQueueDraftSelect(task);
+                            }
+                          }}
+                        >
+                          <option value="" disabled className="task-queue-select__placeholder">
+                            选择镜头任务
+                          </option>
+                          {sceneTasks.map((task, index) => {
+                            const queueTone = confirmedSceneTaskIds.has(task.id) ? "confirmed" : "pending";
+                            return (
+                              <option
+                                key={task.id}
+                                value={task.id}
+                                className={
+                                  queueTone === "confirmed"
+                                    ? "task-queue-select__option task-queue-select__option--confirmed"
+                                    : "task-queue-select__option task-queue-select__option--pending"
+                                }
+                                style={{ color: queueTone === "confirmed" ? "var(--danger)" : "var(--navy)" }}
+                              >
+                                {formatTaskDraftQueueOption(
+                                  task,
+                                  index,
+                                  taskDraft,
+                                  durationSeconds,
+                                  confirmedSceneTaskIds,
+                                )}
+                              </option>
+                            );
+                          })}
+                        </select>
+                        <span
+                          className={`task-queue-select__status task-queue-select__status--${currentTaskDraftQueueTone}`}
+                        >
+                          {currentTaskDraftQueueStatusLabel}
+                        </span>
+                      </div>
                     ) : (
                       <div className="task-queue__empty">还没有镜头任务，确认创建后会出现在这里。</div>
                     )}
