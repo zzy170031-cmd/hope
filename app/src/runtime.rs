@@ -179,8 +179,30 @@ struct StoryboardGroundingContext {
     adaptation_reason: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DesktopDurationPlan {
+    target_duration_mode: String,
+    story_length_profile: String,
+    source_material_length_chars: u32,
+    auto_segment_strategy: String,
+    estimated_total_story_duration_seconds: u16,
+    generated_shot_task_count: u32,
+    duration_plan_summary: String,
+    warnings: Vec<ProductWarning>,
+}
+
 const STORYBOARD_DURATION_SOURCE: &str = "storyboard_duration_plan.allocated_row_duration_seconds";
 const DEFAULT_EXPAND_SCRIPT_DURATION_SECONDS: u16 = 30;
+const TARGET_DURATION_MODE_FIXED_SECONDS: &str = "fixed_seconds";
+const TARGET_DURATION_MODE_LONG_TEXT_AUTO: &str = "long_text_auto";
+const AUTO_SEGMENT_STRATEGY_FIXED_SECONDS: &str = "fixed_seconds_user_selected";
+const AUTO_SEGMENT_STRATEGY_LONG_TEXT: &str = "long_text_auto_story_fact_segments";
+const STORY_LENGTH_PROFILE_SHORT_CLIP: &str = "short_clip";
+const STORY_LENGTH_PROFILE_STANDARD_CLIP: &str = "standard_clip";
+const STORY_LENGTH_PROFILE_LONG_STORY: &str = "long_story";
+const STORY_LENGTH_PROFILE_LONG_STORY_AUTO: &str = "long_story_auto";
+const STORY_LENGTH_PROFILE_SHORT_STORY: &str = "short_story_2000_2500";
+const STORY_LENGTH_PROFILE_TWO_MINUTE_STORY: &str = "two_minute_story_2500_3500";
 const SEEDANCE_STANDARD_SEGMENT_SECONDS: u16 = 10;
 const SEEDANCE_REMAINDER_SEGMENT_SECONDS: u16 = 5;
 const SEEDANCE_MAX_SEGMENT_SECONDS: u16 = 15;
@@ -251,8 +273,9 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
     let scene_label = request.scene_label.as_deref().unwrap_or_default().trim();
     let scene_category = request.scene_category.as_deref().unwrap_or_default().trim();
     let normalized_scene_type = normalize_scene_type(&request.scene_type);
-    let target_duration_seconds = resolve_expand_script_target_duration_seconds(&request);
     let source_analysis = analyze_desktop_source_input(&request.synopsis_text, &request);
+    let duration_plan = plan_desktop_duration(&request, &source_analysis);
+    let target_duration_seconds = duration_plan.estimated_total_story_duration_seconds;
     let is_story_expansion = is_story_expansion_request(&request, &source_analysis);
     let router_request = KbRouterRuntimeRequest {
         scene_type: normalized_scene_type.clone(),
@@ -264,14 +287,16 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
         shot_scene_type: None,
         shot_scene_label: None,
         shot_intent: None,
-        structure_type: None,
+        structure_type: Some(duration_plan.story_length_profile.clone()),
     };
     let script_hash = stable_hash_hex(&format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         request.scene_type.trim(),
         scene_label,
         scene_category,
         target_duration_seconds,
+        duration_plan.target_duration_mode,
+        duration_plan.auto_segment_strategy,
         source_analysis.source_input_type.as_str(),
         source_analysis.authoring_mode.as_str(),
         model_config_hash_input(request.model_config_summary.as_ref()),
@@ -313,6 +338,7 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
     let generated_script =
         run_text_generation(&provider, session_api_key.as_deref(), &generation_request);
     let mut warnings = generated_script.warnings.clone();
+    warnings.extend(duration_plan.warnings.clone());
     warnings.extend(model_config_warnings(request.model_config_summary.as_ref()));
     if v120_package_not_confirmed {
         warnings.push(ProductWarning {
@@ -378,6 +404,13 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
         changed_for_screenplay_summary: source_analysis.changed_for_screenplay_summary.clone(),
         omitted_detail_summary: source_analysis.omitted_detail_summary.clone(),
         continuity_warnings: source_analysis.continuity_warnings.clone(),
+        target_duration_mode: duration_plan.target_duration_mode,
+        story_length_profile: duration_plan.story_length_profile,
+        source_material_length_chars: duration_plan.source_material_length_chars,
+        auto_segment_strategy: duration_plan.auto_segment_strategy,
+        estimated_total_story_duration_seconds: duration_plan.estimated_total_story_duration_seconds,
+        generated_shot_task_count: duration_plan.generated_shot_task_count,
+        duration_plan_summary: duration_plan.duration_plan_summary,
         kb_router_result,
     };
     state.remember_script(response.clone());
@@ -710,6 +743,17 @@ pub fn generate_storyboard(
         result_id,
         rows,
         selected_total_duration_seconds: request.selected_total_duration_seconds,
+        target_duration_mode: TARGET_DURATION_MODE_FIXED_SECONDS.to_string(),
+        story_length_profile: String::new(),
+        source_material_length_chars: stable_source_material_length_chars(&grounding.grounding_text),
+        auto_segment_strategy: AUTO_SEGMENT_STRATEGY_FIXED_SECONDS.to_string(),
+        estimated_total_story_duration_seconds: request.selected_total_duration_seconds,
+        generated_shot_task_count: 1,
+        duration_plan_summary: format!(
+            "mode={}; total={}s; generated_shot_tasks=1",
+            TARGET_DURATION_MODE_FIXED_SECONDS,
+            request.selected_total_duration_seconds
+        ),
         duration_plan: build_storyboard_duration_plan(
             request.selected_total_duration_seconds,
             &row_durations,
@@ -2042,12 +2086,245 @@ fn provider_kind_display_name(kind: TextModelProviderKind) -> &'static str {
 }
 
 fn resolve_expand_script_target_duration_seconds(request: &ExpandScriptRequest) -> u16 {
+    if normalize_target_duration_mode(&request.target_duration_mode)
+        == Some(TARGET_DURATION_MODE_LONG_TEXT_AUTO)
+    {
+        return estimate_long_text_auto_duration_seconds(
+            stable_source_material_length_chars(&request.synopsis_text),
+            request.source_input_type.trim(),
+            &request.source_story_facts,
+        );
+    }
+
     request
         .target_duration_seconds
         .or(request.selected_total_duration_seconds)
         .or_else(|| infer_duration_seconds_from_text(&request.synopsis_text))
         .filter(|duration| is_supported_storyboard_duration(*duration))
         .unwrap_or(DEFAULT_EXPAND_SCRIPT_DURATION_SECONDS)
+}
+
+fn plan_desktop_duration(
+    request: &ExpandScriptRequest,
+    source_analysis: &DesktopSourceInputAnalysis,
+) -> DesktopDurationPlan {
+    let source_material_length_chars = if request.source_material_length_chars > 0 {
+        request.source_material_length_chars
+    } else {
+        stable_source_material_length_chars(&request.synopsis_text)
+    };
+    let requested_mode = request.target_duration_mode.trim();
+    let normalized_mode = normalize_target_duration_mode(requested_mode);
+    let target_duration_mode = normalized_mode
+        .unwrap_or(TARGET_DURATION_MODE_FIXED_SECONDS)
+        .to_string();
+    let mut warnings = Vec::new();
+
+    if normalized_mode.is_none() && !requested_mode.is_empty() {
+        warnings.push(duration_plan_warning(
+            "target_duration_mode_invalid",
+            "target_duration_mode must be fixed_seconds or long_text_auto.",
+        ));
+    }
+
+    if target_duration_mode == TARGET_DURATION_MODE_LONG_TEXT_AUTO {
+        let estimated_total_story_duration_seconds = estimate_long_text_auto_duration_seconds(
+            source_material_length_chars,
+            &source_analysis.source_input_type,
+            &source_analysis.source_story_facts,
+        );
+        let story_length_profile = non_blank_string(&request.story_length_profile)
+            .unwrap_or_else(|| {
+                derive_auto_story_length_profile(
+                    source_material_length_chars,
+                    estimated_total_story_duration_seconds,
+                )
+            });
+        let auto_segment_strategy = non_blank_string(&request.auto_segment_strategy)
+            .unwrap_or_else(|| AUTO_SEGMENT_STRATEGY_LONG_TEXT.to_string());
+        if request.auto_segment_strategy.trim().is_empty() {
+            warnings.push(duration_plan_warning(
+                "auto_segment_strategy_missing",
+                "long_text_auto used the deterministic story-fact segment strategy.",
+            ));
+        }
+        let shot_task_durations =
+            allocate_long_text_auto_shot_task_durations(estimated_total_story_duration_seconds);
+        if shot_task_durations.is_empty() {
+            warnings.push(duration_plan_warning(
+                "long_text_auto_duration_plan_missing",
+                "long_text_auto could not produce a duration plan.",
+            ));
+        }
+        if shot_task_durations.len() <= 1 {
+            warnings.push(duration_plan_warning(
+                "long_text_auto_compressed_to_single_clip_blocked",
+                "long_text_auto must split source material into multiple shot tasks.",
+            ));
+        }
+
+        return DesktopDurationPlan {
+            target_duration_mode,
+            story_length_profile,
+            source_material_length_chars,
+            auto_segment_strategy,
+            estimated_total_story_duration_seconds,
+            generated_shot_task_count: shot_task_durations.len() as u32,
+            duration_plan_summary: format!(
+                "mode={}; story_length_profile={}; source_chars={}; estimated_total={}s; generated_shot_tasks={}; shot_task_durations={}",
+                TARGET_DURATION_MODE_LONG_TEXT_AUTO,
+                derive_auto_story_length_profile(
+                    source_material_length_chars,
+                    estimated_total_story_duration_seconds,
+                ),
+                source_material_length_chars,
+                estimated_total_story_duration_seconds,
+                shot_task_durations.len(),
+                join_durations(&shot_task_durations)
+            ),
+            warnings,
+        };
+    }
+
+    let fixed_duration = resolve_expand_script_target_duration_seconds(request);
+    let row_durations =
+        allocate_storyboard_row_durations(fixed_duration, 0).unwrap_or_else(|| vec![fixed_duration]);
+    let story_length_profile = non_blank_string(&request.story_length_profile).unwrap_or_else(|| {
+        derive_auto_story_length_profile(source_material_length_chars, fixed_duration)
+    });
+    let auto_segment_strategy = non_blank_string(&request.auto_segment_strategy)
+        .unwrap_or_else(|| AUTO_SEGMENT_STRATEGY_FIXED_SECONDS.to_string());
+
+    DesktopDurationPlan {
+        target_duration_mode: TARGET_DURATION_MODE_FIXED_SECONDS.to_string(),
+        story_length_profile: story_length_profile.clone(),
+        source_material_length_chars,
+        auto_segment_strategy,
+        estimated_total_story_duration_seconds: fixed_duration,
+        generated_shot_task_count: row_durations.len() as u32,
+        duration_plan_summary: format!(
+            "mode={}; story_length_profile={}; source_chars={}; total={}s; generated_shot_tasks={}; shot_task_durations={}",
+            TARGET_DURATION_MODE_FIXED_SECONDS,
+            story_length_profile,
+            source_material_length_chars,
+            fixed_duration,
+            row_durations.len(),
+            join_durations(&row_durations)
+        ),
+        warnings,
+    }
+}
+
+fn normalize_target_duration_mode(value: &str) -> Option<&'static str> {
+    match value.trim() {
+        "" | TARGET_DURATION_MODE_FIXED_SECONDS => Some(TARGET_DURATION_MODE_FIXED_SECONDS),
+        TARGET_DURATION_MODE_LONG_TEXT_AUTO => Some(TARGET_DURATION_MODE_LONG_TEXT_AUTO),
+        _ => None,
+    }
+}
+
+fn stable_source_material_length_chars(source_text: &str) -> u32 {
+    source_text.trim().chars().count().min(u32::MAX as usize) as u32
+}
+
+fn estimate_long_text_auto_duration_seconds(
+    source_material_length_chars: u32,
+    source_input_type: &str,
+    facts: &SourceStoryFacts,
+) -> u16 {
+    let length_based = match source_material_length_chars {
+        0..=220 => 30,
+        221..=800 => 75,
+        801..=2_000 => 90,
+        2_001..=2_500 => 105,
+        2_501..=3_500 => 120,
+        3_501..=6_000 => 180,
+        _ => {
+            let extra_blocks = ((source_material_length_chars - 6_000) / 1_500).min(6) as u16;
+            180 + extra_blocks * 30
+        }
+    };
+    let source_type_floor = match source_input_type {
+        "screenplay_text" => 75,
+        "novel_chapter" | "mixed_material" => 90,
+        "full_story" => 120,
+        _ => 30,
+    };
+    let event_count = facts.event_order.len().max(facts.core_events.len()) as u16;
+    let fact_based = if event_count == 0 {
+        0
+    } else {
+        event_count.min(18) * SEEDANCE_STANDARD_SEGMENT_SECONDS
+    };
+    let mut total = length_based.max(source_type_floor).max(fact_based);
+    if total == 60 {
+        total = 75;
+    }
+    round_duration_to_five(total.clamp(30, 360))
+}
+
+fn derive_auto_story_length_profile(
+    source_material_length_chars: u32,
+    estimated_total_story_duration_seconds: u16,
+) -> String {
+    if source_material_length_chars >= 3_500 || estimated_total_story_duration_seconds >= 180 {
+        STORY_LENGTH_PROFILE_LONG_STORY_AUTO
+    } else if source_material_length_chars >= 2_500
+        || estimated_total_story_duration_seconds >= 120
+    {
+        STORY_LENGTH_PROFILE_TWO_MINUTE_STORY
+    } else if source_material_length_chars >= 2_000
+        || estimated_total_story_duration_seconds >= 105
+    {
+        STORY_LENGTH_PROFILE_SHORT_STORY
+    } else if estimated_total_story_duration_seconds >= 75 {
+        STORY_LENGTH_PROFILE_LONG_STORY
+    } else if estimated_total_story_duration_seconds >= 45 {
+        STORY_LENGTH_PROFILE_STANDARD_CLIP
+    } else {
+        STORY_LENGTH_PROFILE_SHORT_CLIP
+    }
+    .to_string()
+}
+
+fn round_duration_to_five(duration_seconds: u16) -> u16 {
+    ((duration_seconds + SEEDANCE_REMAINDER_SEGMENT_SECONDS - 1)
+        / SEEDANCE_REMAINDER_SEGMENT_SECONDS)
+        * SEEDANCE_REMAINDER_SEGMENT_SECONDS
+}
+
+fn allocate_long_text_auto_shot_task_durations(total_duration_seconds: u16) -> Vec<u16> {
+    if total_duration_seconds < SEEDANCE_STANDARD_SEGMENT_SECONDS
+        || total_duration_seconds % SEEDANCE_REMAINDER_SEGMENT_SECONDS != 0
+    {
+        return vec![];
+    }
+    let mut remaining = total_duration_seconds;
+    let mut durations = Vec::new();
+    while remaining >= SEEDANCE_STANDARD_SEGMENT_SECONDS {
+        durations.push(SEEDANCE_STANDARD_SEGMENT_SECONDS);
+        remaining -= SEEDANCE_STANDARD_SEGMENT_SECONDS;
+    }
+    if remaining == SEEDANCE_REMAINDER_SEGMENT_SECONDS {
+        durations.push(SEEDANCE_REMAINDER_SEGMENT_SECONDS);
+    }
+    durations
+}
+
+fn join_durations(durations: &[u16]) -> String {
+    durations
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn duration_plan_warning(code: &str, message: &str) -> ProductWarning {
+    ProductWarning {
+        code: code.to_string(),
+        message: message.to_string(),
+        related_sample_id: None,
+    }
 }
 
 fn infer_duration_seconds_from_text(text: &str) -> Option<u16> {
@@ -2229,6 +2506,8 @@ fn is_story_expansion_request(
 ) -> bool {
     analysis.source_input_type == "synopsis"
         && analysis.authoring_mode == "expand_from_synopsis"
+        && normalize_target_duration_mode(&request.target_duration_mode)
+            != Some(TARGET_DURATION_MODE_LONG_TEXT_AUTO)
         && request.target_duration_seconds.is_none()
         && request.selected_total_duration_seconds.is_none()
 }
@@ -4222,6 +4501,16 @@ fn blocked_storyboard_response_with_kb(
         result_id: String::new(),
         rows: vec![],
         selected_total_duration_seconds,
+        target_duration_mode: TARGET_DURATION_MODE_FIXED_SECONDS.to_string(),
+        story_length_profile: String::new(),
+        source_material_length_chars: 0,
+        auto_segment_strategy: AUTO_SEGMENT_STRATEGY_FIXED_SECONDS.to_string(),
+        estimated_total_story_duration_seconds: selected_total_duration_seconds,
+        generated_shot_task_count: 0,
+        duration_plan_summary: format!(
+            "mode={}; total={}s; generated_shot_tasks=0",
+            TARGET_DURATION_MODE_FIXED_SECONDS, selected_total_duration_seconds
+        ),
         duration_plan: StoryboardDurationPlan {
             total_duration_seconds: selected_total_duration_seconds,
             row_count: 0,
@@ -4964,6 +5253,10 @@ mod tests {
             model_config_summary: None,
             selected_total_duration_seconds: Some(15),
             target_duration_seconds: Some(60),
+            target_duration_mode: "fixed_seconds".to_string(),
+            story_length_profile: String::new(),
+            source_material_length_chars: 0,
+            auto_segment_strategy: String::new(),
             source_input_type: String::new(),
             authoring_mode: String::new(),
             source_material_summary: String::new(),

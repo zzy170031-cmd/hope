@@ -94,6 +94,8 @@ export interface SourceStoryFacts {
   endingState?: string;
 }
 
+export type TargetDurationMode = "fixed_seconds" | "long_text_auto";
+
 export interface ExpandScriptRequest {
   scene_type: string;
   scene_label?: string;
@@ -101,6 +103,10 @@ export interface ExpandScriptRequest {
   model_config_summary?: ModelConfigSummary;
   target_duration_seconds?: number;
   selected_total_duration_seconds?: number;
+  target_duration_mode?: TargetDurationMode;
+  story_length_profile?: string;
+  source_material_length_chars?: number;
+  auto_segment_strategy?: string;
   source_input_type?: string;
   authoring_mode?: string;
   source_material_summary?: string;
@@ -162,6 +168,20 @@ export interface ExpandScriptResponse {
   changed_for_screenplay_summary?: string;
   omitted_detail_summary?: string;
   continuity_warnings?: ProductWarning[];
+  target_duration_mode?: TargetDurationMode;
+  targetDurationMode?: TargetDurationMode;
+  story_length_profile?: string;
+  storyLengthProfile?: string;
+  source_material_length_chars?: number;
+  sourceMaterialLengthChars?: number;
+  auto_segment_strategy?: string;
+  autoSegmentStrategy?: string;
+  estimated_total_story_duration_seconds?: number;
+  estimatedTotalStoryDurationSeconds?: number;
+  generated_shot_task_count?: number;
+  generatedShotTaskCount?: number;
+  duration_plan_summary?: string;
+  durationPlanSummary?: string;
   kb_router_result?: KbRouterRuntimeResponse | null;
 }
 
@@ -201,6 +221,8 @@ export interface GenerateStoryboardRequest {
   adaptation_reason?: string | null;
   expanded_script_text?: string | null;
   selected_total_duration_seconds: number;
+  target_duration_mode?: TargetDurationMode;
+  auto_segment_strategy?: string;
   model_config_summary?: ModelConfigSummary;
 }
 
@@ -264,6 +286,20 @@ export interface GenerateStoryboardResponse {
   result_id: string;
   rows: GeneratedStoryboardRow[];
   selected_total_duration_seconds?: number;
+  target_duration_mode?: TargetDurationMode;
+  targetDurationMode?: TargetDurationMode;
+  story_length_profile?: string;
+  storyLengthProfile?: string;
+  source_material_length_chars?: number;
+  sourceMaterialLengthChars?: number;
+  auto_segment_strategy?: string;
+  autoSegmentStrategy?: string;
+  estimated_total_story_duration_seconds?: number;
+  estimatedTotalStoryDurationSeconds?: number;
+  generated_shot_task_count?: number;
+  generatedShotTaskCount?: number;
+  duration_plan_summary?: string;
+  durationPlanSummary?: string;
   duration_plan: StoryboardDurationPlan;
   export_status: StoryboardExportStatus;
   busy?: boolean;

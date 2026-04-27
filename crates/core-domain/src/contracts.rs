@@ -177,6 +177,10 @@ pub struct SourceStoryFacts {
     pub ending_state: String,
 }
 
+fn default_target_duration_mode() -> String {
+    "fixed_seconds".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SequenceGrouping {
     pub structure_mode: StructureMode,
@@ -261,6 +265,14 @@ pub struct ExpandScriptRequest {
     pub target_duration_seconds: Option<u16>,
     #[serde(default)]
     pub selected_total_duration_seconds: Option<u16>,
+    #[serde(default = "default_target_duration_mode")]
+    pub target_duration_mode: String,
+    #[serde(default)]
+    pub story_length_profile: String,
+    #[serde(default)]
+    pub source_material_length_chars: u32,
+    #[serde(default)]
+    pub auto_segment_strategy: String,
     #[serde(default)]
     pub source_input_type: String,
     #[serde(default)]
@@ -401,6 +413,20 @@ pub struct ExpandScriptResponse {
     pub omitted_detail_summary: String,
     #[serde(default)]
     pub continuity_warnings: Vec<ProductWarning>,
+    #[serde(default = "default_target_duration_mode")]
+    pub target_duration_mode: String,
+    #[serde(default)]
+    pub story_length_profile: String,
+    #[serde(default)]
+    pub source_material_length_chars: u32,
+    #[serde(default)]
+    pub auto_segment_strategy: String,
+    #[serde(default)]
+    pub estimated_total_story_duration_seconds: u16,
+    #[serde(default)]
+    pub generated_shot_task_count: u32,
+    #[serde(default)]
+    pub duration_plan_summary: String,
     pub kb_router_result: KbRouterRuntimeResponse,
 }
 
@@ -432,6 +458,10 @@ pub struct GenerateStoryboardRequest {
     pub adaptation_reason: Option<String>,
     pub expanded_script_text: Option<String>,
     pub selected_total_duration_seconds: u16,
+    #[serde(default = "default_target_duration_mode")]
+    pub target_duration_mode: String,
+    #[serde(default)]
+    pub auto_segment_strategy: String,
     #[serde(default)]
     pub model_config_summary: Option<ModelConfigSummary>,
 }
@@ -499,6 +529,20 @@ pub struct GenerateStoryboardResponse {
     pub rows: Vec<GeneratedStoryboardRow>,
     #[serde(default)]
     pub selected_total_duration_seconds: u16,
+    #[serde(default = "default_target_duration_mode")]
+    pub target_duration_mode: String,
+    #[serde(default)]
+    pub story_length_profile: String,
+    #[serde(default)]
+    pub source_material_length_chars: u32,
+    #[serde(default)]
+    pub auto_segment_strategy: String,
+    #[serde(default)]
+    pub estimated_total_story_duration_seconds: u16,
+    #[serde(default)]
+    pub generated_shot_task_count: u32,
+    #[serde(default)]
+    pub duration_plan_summary: String,
     pub duration_plan: StoryboardDurationPlan,
     pub export_status: StoryboardExportStatus,
     #[serde(default)]

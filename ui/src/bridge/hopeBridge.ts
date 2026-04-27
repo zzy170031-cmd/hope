@@ -514,6 +514,10 @@ function normalizeWarningList(raw: unknown): ProductWarning[] {
   return Array.isArray(raw) ? raw.map((item) => normalizeProductWarning(item)) : [];
 }
 
+function normalizeTargetDurationMode(raw: unknown) {
+  return raw === "long_text_auto" ? "long_text_auto" : "fixed_seconds";
+}
+
 function stringArrayFrom(raw: Record<string, unknown>, snakeKey: string, camelKey: string): string[] {
   const value = raw[snakeKey] ?? raw[camelKey];
   return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
@@ -656,6 +660,36 @@ function normalizeExpandScriptResponse(raw: unknown): ExpandScriptResponse {
     continuity_warnings: normalizeWarningList(
       response.continuity_warnings ?? response.continuityWarnings,
     ),
+    target_duration_mode: normalizeTargetDurationMode(
+      response.target_duration_mode ?? response.targetDurationMode,
+    ),
+    targetDurationMode: normalizeTargetDurationMode(
+      response.targetDurationMode ?? response.target_duration_mode,
+    ),
+    story_length_profile: String(response.story_length_profile ?? response.storyLengthProfile ?? ""),
+    storyLengthProfile: String(response.storyLengthProfile ?? response.story_length_profile ?? ""),
+    source_material_length_chars: Number(
+      response.source_material_length_chars ?? response.sourceMaterialLengthChars ?? 0,
+    ),
+    sourceMaterialLengthChars: Number(
+      response.sourceMaterialLengthChars ?? response.source_material_length_chars ?? 0,
+    ),
+    auto_segment_strategy: String(response.auto_segment_strategy ?? response.autoSegmentStrategy ?? ""),
+    autoSegmentStrategy: String(response.autoSegmentStrategy ?? response.auto_segment_strategy ?? ""),
+    estimated_total_story_duration_seconds: Number(
+      response.estimated_total_story_duration_seconds ?? response.estimatedTotalStoryDurationSeconds ?? 0,
+    ),
+    estimatedTotalStoryDurationSeconds: Number(
+      response.estimatedTotalStoryDurationSeconds ?? response.estimated_total_story_duration_seconds ?? 0,
+    ),
+    generated_shot_task_count: Number(
+      response.generated_shot_task_count ?? response.generatedShotTaskCount ?? 0,
+    ),
+    generatedShotTaskCount: Number(
+      response.generatedShotTaskCount ?? response.generated_shot_task_count ?? 0,
+    ),
+    duration_plan_summary: String(response.duration_plan_summary ?? response.durationPlanSummary ?? ""),
+    durationPlanSummary: String(response.durationPlanSummary ?? response.duration_plan_summary ?? ""),
     kb_router_result: normalizeKbRouterResult(
       response.kb_router_result ?? response.kbRouterResult ?? response,
     ),
@@ -740,6 +774,36 @@ function normalizeGenerateStoryboardResponse(raw: unknown): GenerateStoryboardRe
     selected_total_duration_seconds: Number(
       response.selected_total_duration_seconds ?? response.selectedTotalDurationSeconds ?? 0,
     ),
+    target_duration_mode: normalizeTargetDurationMode(
+      response.target_duration_mode ?? response.targetDurationMode,
+    ),
+    targetDurationMode: normalizeTargetDurationMode(
+      response.targetDurationMode ?? response.target_duration_mode,
+    ),
+    story_length_profile: String(response.story_length_profile ?? response.storyLengthProfile ?? ""),
+    storyLengthProfile: String(response.storyLengthProfile ?? response.story_length_profile ?? ""),
+    source_material_length_chars: Number(
+      response.source_material_length_chars ?? response.sourceMaterialLengthChars ?? 0,
+    ),
+    sourceMaterialLengthChars: Number(
+      response.sourceMaterialLengthChars ?? response.source_material_length_chars ?? 0,
+    ),
+    auto_segment_strategy: String(response.auto_segment_strategy ?? response.autoSegmentStrategy ?? ""),
+    autoSegmentStrategy: String(response.autoSegmentStrategy ?? response.auto_segment_strategy ?? ""),
+    estimated_total_story_duration_seconds: Number(
+      response.estimated_total_story_duration_seconds ?? response.estimatedTotalStoryDurationSeconds ?? 0,
+    ),
+    estimatedTotalStoryDurationSeconds: Number(
+      response.estimatedTotalStoryDurationSeconds ?? response.estimated_total_story_duration_seconds ?? 0,
+    ),
+    generated_shot_task_count: Number(
+      response.generated_shot_task_count ?? response.generatedShotTaskCount ?? 0,
+    ),
+    generatedShotTaskCount: Number(
+      response.generatedShotTaskCount ?? response.generated_shot_task_count ?? 0,
+    ),
+    duration_plan_summary: String(response.duration_plan_summary ?? response.durationPlanSummary ?? ""),
+    durationPlanSummary: String(response.durationPlanSummary ?? response.duration_plan_summary ?? ""),
     duration_plan: {
       total_duration_seconds: Number(
         durationPlan.total_duration_seconds ?? durationPlan.totalDurationSeconds ?? 0,

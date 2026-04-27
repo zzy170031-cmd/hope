@@ -30,6 +30,7 @@ import type {
   SourceStoryFacts,
   StoryboardExportStatus,
   StoryboardWorkbenchRow,
+  TargetDurationMode,
   TextModelProviderStatus,
   ViewId,
   WorkbenchModelId,
@@ -113,6 +114,7 @@ interface SceneTaskRecord {
   sourceSceneLabel?: string | null;
   sourceSceneCategory?: string | null;
   sourceDurationSeconds?: number | null;
+  sourceDurationMode?: TargetDurationMode;
   status: "draft" | "generated";
   taskId?: string | null;
   resultId?: string;
@@ -129,6 +131,8 @@ interface SceneTaskRecord {
   hadRowEdits?: boolean;
   exportArtifactPath?: string;
   exportStatus?: string;
+  durationPlanSummary?: string;
+  generatedShotTaskCount?: number;
 }
 
 type SourceInputType =
@@ -148,10 +152,17 @@ interface SourceInputAnalysis {
   omittedDetailSummary: string;
   statusMessage: string;
   actionLabel: string;
+  sourceMaterialLengthChars: number;
+  recommendsLongTextMode: boolean;
 }
 
 const PAGE_SIZE = 5;
 const DURATION_OPTIONS = [5, 10, 15, 30, 45, 60];
+const FIXED_DURATION_MODE: TargetDurationMode = "fixed_seconds";
+const LONG_TEXT_DURATION_MODE: TargetDurationMode = "long_text_auto";
+const AUTO_SEGMENT_STRATEGY_LONG_TEXT = "long_text_auto_story_fact_segments";
+const AUTO_SEGMENT_STRATEGY_FIXED_SECONDS = "fixed_seconds_user_selected";
+const LONG_TEXT_RECOMMENDATION_MESSAGE = "已识别为长文本，将按剧情自动分段；单镜头分镜保持 Seedance 友好时长。";
 const DEFAULT_SYNOPSIS = "主角在废墟城市中与敌人激烈战斗，最终觉醒新力量，击败敌人。";
 const DEFAULT_SCENE: SceneFusionOption = "hot_blood_battle";
 const DEFAULT_TASK_NAME = "第一集分镜生成";
@@ -339,6 +350,8 @@ export function App() {
   const [taskScriptId, setTaskScriptId] = useState<string | null>(null);
   const [taskSegmentTitle, setTaskSegmentTitle] = useState("");
   const [durationSeconds, setDurationSeconds] = useState(15);
+  const [targetDurationMode, setTargetDurationMode] = useState<TargetDurationMode>(FIXED_DURATION_MODE);
+  const [durationModeUserSelected, setDurationModeUserSelected] = useState(false);
   const [rows, setRows] = useState<StoryboardWorkbenchRow[]>([]);
   const [rowsDirty, setRowsDirty] = useState(false);
   const [storyboardResult, setStoryboardResult] = useState<GenerateStoryboardResponse | null>(null);
@@ -402,13 +415,48 @@ export function App() {
   );
   const selectedSceneOption = useMemo(() => resolveSceneOption(selectedScene), [selectedScene]);
   const sourceInputAnalysis = useMemo(() => analyzeSourceInputForUi(synopsis), [synopsis]);
+  const isLongTextDurationMode = targetDurationMode === LONG_TEXT_DURATION_MODE;
+  const durationSelectValue = isLongTextDurationMode ? LONG_TEXT_DURATION_MODE : String(durationSeconds);
+  const activeScriptDurationSeconds = isLongTextDurationMode
+    ? estimateLongTextAutoDurationSeconds(sourceInputAnalysis)
+    : durationSeconds;
+  const durationModeStatus = isLongTextDurationMode
+    ? formatDurationPlanProductMessage(expandedScriptResult) || LONG_TEXT_RECOMMENDATION_MESSAGE
+    : "";
+  const sourceInputStatusText = durationModeStatus
+    ? `${sourceInputAnalysis.statusMessage} ${durationModeStatus}`
+    : sourceInputAnalysis.statusMessage;
+  const contentBridgeItems = useMemo(
+    () =>
+      buildContentBridgeItems(
+        sourceInputAnalysis,
+        targetDurationMode,
+        expandedScriptResult,
+        sceneTasks.length,
+      ),
+    [expandedScriptResult, sceneTasks.length, sourceInputAnalysis, targetDurationMode],
+  );
+
+  useEffect(() => {
+    if (durationModeUserSelected) {
+      return;
+    }
+
+    setTargetDurationMode(
+      sourceInputAnalysis.recommendsLongTextMode ? LONG_TEXT_DURATION_MODE : FIXED_DURATION_MODE,
+    );
+  }, [durationModeUserSelected, sourceInputAnalysis.recommendsLongTextMode]);
+
   const canImportScript = acceptedScript.trim().length > 0;
   const hasTaskScript = taskSourceScript.trim().length > 0;
   const canGenerate = taskName.trim().length > 0 && hasTaskScript;
   const expandedScriptAccepted = Boolean(
     expandedScriptResult?.script_id && acceptedScriptId === expandedScriptResult.script_id,
   );
-  const shotCandidateBaseDuration = normalizeDurationOption(acceptedScriptDurationSeconds ?? durationSeconds, durationSeconds);
+  const shotCandidateBaseDuration = normalizeScriptDurationOption(
+    acceptedScriptDurationSeconds ?? activeScriptDurationSeconds,
+    activeScriptDurationSeconds,
+  );
   const currentTaskDuration = normalizeDurationOption(
     currentSceneTask?.sourceDurationSeconds ?? durationSeconds,
     durationSeconds,
@@ -426,8 +474,8 @@ export function App() {
     ? "扩写剧本已生成，请先点击“确定使用”再拆解镜头。"
     : "先在剧本区完成扩写，再拆解镜头。";
   const shotCandidates = useMemo(
-    () => buildShotCandidates(acceptedScript, shotCandidateBaseDuration),
-    [acceptedScript, shotCandidateBaseDuration],
+    () => buildShotCandidates(acceptedScript, shotCandidateBaseDuration, targetDurationMode),
+    [acceptedScript, shotCandidateBaseDuration, targetDurationMode],
   );
   const usedCandidateIds = useMemo(
     () => new Set(sceneTasks.filter((task) => task.candidateId !== "custom").map((task) => task.candidateId)),
@@ -871,7 +919,13 @@ export function App() {
       const analysis = analyzeSourceInputForUi(text);
       setSynopsis(text);
       resetScriptAndStoryboardState();
-      setExportMessage(`已导入 ${formatImportedDocumentType(document.file_type)} 文档。${analysis.statusMessage}`);
+      setDurationModeUserSelected(false);
+      setTargetDurationMode(analysis.recommendsLongTextMode ? LONG_TEXT_DURATION_MODE : FIXED_DURATION_MODE);
+      setExportMessage(
+        `已导入 ${formatImportedDocumentType(document.file_type)} 文档。${analysis.statusMessage}${
+          analysis.recommendsLongTextMode ? ` ${LONG_TEXT_RECOMMENDATION_MESSAGE}` : ""
+        }`,
+      );
     } catch (error) {
       setExportMessage(`导入失败：${formatProductError(error)}`);
     } finally {
@@ -914,8 +968,11 @@ export function App() {
         synopsis_text: storyInput,
       });
       const storyBody = response.expanded_script_text.trim();
+      const storyAnalysis = analyzeSourceInputForUi(storyBody || storyInput);
       setSynopsis(storyBody || storyInput);
       resetScriptAndStoryboardState();
+      setDurationModeUserSelected(false);
+      setTargetDurationMode(storyAnalysis.recommendsLongTextMode ? LONG_TEXT_DURATION_MODE : FIXED_DURATION_MODE);
       syncModelProviderStatusFromWarnings(response.warnings);
       setExportMessage("扩写故事完成。故事正文已回到剧本区，可继续放大编辑或改写为剧本。");
     } catch (error) {
@@ -941,13 +998,19 @@ export function App() {
 
     setBridgeBusy("expand");
     try {
+      const requestDurationMode = targetDurationMode;
+      const requestIsLongText = requestDurationMode === LONG_TEXT_DURATION_MODE;
       const response = await invokeExpandScript({
         scene_type: selectedSceneOption.value,
         scene_label: selectedSceneOption.label,
         scene_category: selectedSceneOption.group,
         model_config_summary: modelConfigSummary,
-        target_duration_seconds: durationSeconds,
-        selected_total_duration_seconds: durationSeconds,
+        target_duration_mode: requestDurationMode,
+        target_duration_seconds: requestIsLongText ? undefined : durationSeconds,
+        selected_total_duration_seconds: requestIsLongText ? undefined : durationSeconds,
+        story_length_profile: requestIsLongText ? "long_story_auto" : storyLengthProfileForUi(sourceInputAnalysis, durationSeconds),
+        source_material_length_chars: sourceInputAnalysis.sourceMaterialLengthChars,
+        auto_segment_strategy: requestIsLongText ? AUTO_SEGMENT_STRATEGY_LONG_TEXT : AUTO_SEGMENT_STRATEGY_FIXED_SECONDS,
         source_input_type: sourceInputAnalysis.sourceInputType,
         authoring_mode: sourceInputAnalysis.authoringMode,
         source_material_summary: sourceInputAnalysis.sourceMaterialSummary,
@@ -962,32 +1025,45 @@ export function App() {
       );
       const responseMessage = statusMessageForSourceInputType(responseSourceType);
       const scriptBody = extractScriptBody(response.expanded_script_text) || response.expanded_script_text.trim();
+      const responseDurationMode = normalizeTargetDurationModeForUi(
+        response.target_duration_mode ?? response.targetDurationMode ?? requestDurationMode,
+      );
+      const responseDurationSeconds = resolveResponseStoryDurationSeconds(response, durationSeconds);
+      const autoSceneTasks = responseDurationMode === LONG_TEXT_DURATION_MODE
+        ? createSceneTasksFromCandidates(
+            buildShotCandidates(scriptBody, responseDurationSeconds, responseDurationMode),
+            response.script_id,
+            selectedSceneOption,
+          )
+        : [];
+      const firstAutoTask = autoSceneTasks[0];
       setExpandedScriptResult(response);
       setExpandedScript(scriptBody);
       setSynopsis(scriptBody);
-      setExpandedScriptDurationSeconds(durationSeconds);
+      setExpandedScriptDurationSeconds(responseDurationSeconds);
       setExpandedScriptScene(selectedSceneOption);
       setShowExpandedScriptStatus(false);
       setAcceptedScript(scriptBody);
       setAcceptedScriptId(response.script_id);
-      setAcceptedScriptDurationSeconds(durationSeconds);
+      setAcceptedScriptDurationSeconds(responseDurationSeconds);
       setAcceptedScriptScene(selectedSceneOption);
-      setTaskSourceScript("");
-      setTaskScriptId(null);
-      setTaskSegmentTitle("");
+      setTaskSourceScript(firstAutoTask?.scriptText ?? "");
+      setTaskScriptId(firstAutoTask?.scriptId ?? null);
+      setTaskSegmentTitle(firstAutoTask?.segmentTitle ?? "");
+      setTaskName(firstAutoTask?.name ?? DEFAULT_TASK_NAME);
       setStoryboardResult(null);
       setLastExportResult(null);
       setGeneratedSceneTasks([]);
-      setSceneTasks([]);
-      setCurrentTaskId(null);
+      setSceneTasks(autoSceneTasks);
+      setCurrentTaskId(firstAutoTask?.id ?? null);
       setIsTaskPickerOpen(false);
-      setTaskSerial(0);
+      setTaskSerial(autoSceneTasks.length);
       setRows([]);
       setRowsDirty(false);
       setCurrentPage(1);
       syncModelProviderStatusFromWarnings(response.warnings);
       setExportMessage(
-        `${responseMessage} 已生成可拆分镜的剧本：${response.script_id}；目标时长 ${durationSeconds} 秒。${formatTextModelRunMessage(response.warnings)}`,
+        `${responseMessage} 已生成可拆分镜的剧本：${response.script_id}；${formatDurationPlanProductMessage(response) || `目标时长 ${durationSeconds} 秒。`}${formatTextModelRunMessage(response.warnings)}`,
       );
     } catch (error) {
       setExportMessage(`${sourceInputAnalysis.actionLabel}失败：${formatProductError(error)}`);
@@ -1105,6 +1181,7 @@ export function App() {
         sourceSceneLabel: taskScene.label,
         sourceSceneCategory: taskScene.group,
         sourceDurationSeconds: taskDurationSeconds,
+        sourceDurationMode: FIXED_DURATION_MODE,
         status: "draft",
         dirty: false,
         hadRowEdits: false,
@@ -1263,6 +1340,8 @@ export function App() {
             : null,
         expanded_script_text: source,
         selected_total_duration_seconds: taskDurationSeconds,
+        target_duration_mode: FIXED_DURATION_MODE,
+        auto_segment_strategy: AUTO_SEGMENT_STRATEGY_FIXED_SECONDS,
         model_config_summary: modelConfigSummary,
       });
       const nextRows = response.rows.map(mapGeneratedStoryboardRow);
@@ -1315,6 +1394,9 @@ export function App() {
                   promptTextWarnings: collectPromptWarningCodes(response.rows),
                   selectedTotalDurationSeconds: response.selected_total_duration_seconds,
                   sourceDurationSeconds: response.selected_total_duration_seconds,
+                  sourceDurationMode: FIXED_DURATION_MODE,
+                  durationPlanSummary: response.duration_plan_summary ?? response.durationPlanSummary,
+                  generatedShotTaskCount: response.generated_shot_task_count ?? response.generatedShotTaskCount,
                   rowsHash: response.rows_hash,
                   updatedAtMs: response.updated_at_ms,
                   baseRevision: response.revision,
@@ -2084,14 +2166,24 @@ qwen_request: {
                 <label className="duration-select duration-select--script">
                   <span>目标时长</span>
                   <select
-                    value={durationSeconds}
-                    onChange={(event) => setDurationSeconds(Number(event.target.value))}
+                    value={durationSelectValue}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setDurationModeUserSelected(true);
+                      if (value === LONG_TEXT_DURATION_MODE) {
+                        setTargetDurationMode(LONG_TEXT_DURATION_MODE);
+                        return;
+                      }
+                      setTargetDurationMode(FIXED_DURATION_MODE);
+                      setDurationSeconds(Number(value));
+                    }}
                   >
                     {DURATION_OPTIONS.map((option) => (
                       <option key={option} value={option}>
                         {option} 秒
                       </option>
                     ))}
+                    <option value={LONG_TEXT_DURATION_MODE}>长文本模式</option>
                   </select>
                 </label>
               </div>
@@ -2100,7 +2192,7 @@ qwen_request: {
                   <span className="synopsis-preview__text">
                     {synopsis.trim() ? truncatePreview(synopsis, 120) : "请输入或导入故事材料"}
                   </span>
-                  <small className="source-input-status">{sourceInputAnalysis.statusMessage}</small>
+                  <small className="source-input-status">{sourceInputStatusText}</small>
                 </div>
                 <button type="button" className="text-control__expand" onClick={openSynopsisDialog}>
                   放大编辑
@@ -2138,6 +2230,12 @@ qwen_request: {
               </div>
             </div>
           </section>
+
+          <div className="content-bridge-row" aria-label="内容承接状态">
+            {contentBridgeItems.map((item) => (
+              <span key={item}>{item}</span>
+            ))}
+          </div>
 
           <section className="panel-section panel-section--task">
             <div className="section-name section-name--inline">
@@ -2944,6 +3042,15 @@ function analyzeSourceInputForUi(text: string): SourceInputAnalysis {
   const sourceInputType = detectSourceInputTypeForUi(cleanText);
   const sourceStoryFacts = buildSourceStoryFactsForUi(cleanText);
   const authoringMode = authoringModeForSourceInputType(sourceInputType);
+  const sourceMaterialLengthChars = Array.from(cleanText).length;
+  const paragraphs = cleanText.split(/\n+/).map((item) => item.trim()).filter(Boolean);
+  const recommendsLongTextMode =
+    Boolean(cleanText) &&
+    (sourceInputType === "full_story" ||
+      sourceInputType === "novel_chapter" ||
+      sourceInputType === "mixed_material" ||
+      sourceMaterialLengthChars >= 900 ||
+      paragraphs.length >= 6);
   const sourceMaterialSummary = cleanText
     ? truncatePreview(cleanText, 260)
     : "等待输入或导入故事材料。";
@@ -2958,6 +3065,8 @@ function analyzeSourceInputForUi(text: string): SourceInputAnalysis {
     omittedDetailSummary: omittedDetailSummaryForUi(sourceInputType, sourceStoryFacts),
     statusMessage: statusMessageForSourceInputType(cleanText ? sourceInputType : "synopsis", cleanText.length === 0),
     actionLabel: actionLabelForSourceInputType(sourceInputType),
+    sourceMaterialLengthChars,
+    recommendsLongTextMode,
   };
 }
 
@@ -3063,6 +3172,71 @@ function statusMessageForSourceInputType(sourceInputType: SourceInputType, empty
     default:
       return "已识别为故事梗概，将扩写后生成剧本。";
   }
+}
+
+function sourceInputTypeProductLabel(sourceInputType: SourceInputType) {
+  switch (sourceInputType) {
+    case "full_story":
+      return "完整故事";
+    case "novel_chapter":
+      return "小说章节";
+    case "screenplay_text":
+      return "已有剧本";
+    case "mixed_material":
+      return "混合材料";
+    case "synopsis":
+    default:
+      return "故事梗概";
+  }
+}
+
+function buildContentBridgeItems(
+  analysis: SourceInputAnalysis,
+  targetDurationMode: TargetDurationMode,
+  response: ExpandScriptResponse | null,
+  sceneTaskCount: number,
+) {
+  const items = [
+    `当前输入：${sourceInputTypeProductLabel(analysis.sourceInputType)}`,
+    `当前模式：${targetDurationMode === LONG_TEXT_DURATION_MODE ? "长文本模式" : "固定时长"}`,
+  ];
+  const responseShotTaskCount = Number(
+    response?.generated_shot_task_count ?? response?.generatedShotTaskCount ?? 0,
+  );
+  const plannedTaskCount = responseShotTaskCount || sceneTaskCount;
+
+  if (targetDurationMode === LONG_TEXT_DURATION_MODE || analysis.recommendsLongTextMode) {
+    items.push("分段策略：当前按剧情自动分段，单镜头分镜保持 Seedance 友好时长");
+    if (plannedTaskCount > 1) {
+      items.push(`预计拆分为 ${plannedTaskCount} 个镜头任务`);
+    }
+  }
+
+  const continuityHints = analysis.sourceMaterialLengthChars > 0
+    ? buildContinuityHintItems(analysis.sourceStoryFacts)
+    : [];
+  if (continuityHints.length) {
+    items.push(`连续性保留：${continuityHints.join(" / ")}`);
+  }
+
+  return items;
+}
+
+function buildContinuityHintItems(facts: SourceStoryFacts) {
+  const hints: string[] = [];
+  if ((facts.character_relationships?.length ?? facts.characterRelationships?.length ?? 0) > 0) {
+    hints.push("保留人物关系");
+  }
+  if ((facts.event_order?.length ?? facts.eventOrder?.length ?? 0) > 0) {
+    hints.push("保留事件顺序");
+  }
+  if ((facts.prop_state?.length ?? facts.propState?.length ?? 0) > 0) {
+    hints.push("保留道具状态");
+  }
+  if ((facts.emotional_progression?.length ?? facts.emotionalProgression?.length ?? 0) > 0) {
+    hints.push("保留情绪推进");
+  }
+  return hints.length ? hints : ["保留事件顺序"];
 }
 
 function buildSourceStoryFactsForUi(text: string): SourceStoryFacts {
@@ -3193,6 +3367,92 @@ function normalizeDurationOption(value: number | null | undefined, fallback = 15
   return DURATION_OPTIONS.includes(duration) ? duration : fallbackDuration;
 }
 
+function normalizeScriptDurationOption(value: number | null | undefined, fallback = 15) {
+  const fallbackDuration = Number.isFinite(Number(fallback)) && Number(fallback) > 0 ? Number(fallback) : 15;
+  const duration = Number(value);
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return fallbackDuration;
+  }
+  return Math.min(360, Math.max(5, Math.round(duration / 5) * 5));
+}
+
+function normalizeTargetDurationModeForUi(value: unknown): TargetDurationMode {
+  return value === LONG_TEXT_DURATION_MODE ? LONG_TEXT_DURATION_MODE : FIXED_DURATION_MODE;
+}
+
+function estimateLongTextAutoDurationSeconds(analysis: SourceInputAnalysis) {
+  const sourceChars = analysis.sourceMaterialLengthChars;
+  const lengthBased =
+    sourceChars <= 220 ? 30 :
+    sourceChars <= 800 ? 75 :
+    sourceChars <= 2000 ? 90 :
+    sourceChars <= 2500 ? 105 :
+    sourceChars <= 3500 ? 120 :
+    sourceChars <= 6000 ? 180 :
+    180 + Math.min(6, Math.floor((sourceChars - 6000) / 1500)) * 30;
+  const typeFloor =
+    analysis.sourceInputType === "full_story" ? 120 :
+    analysis.sourceInputType === "novel_chapter" || analysis.sourceInputType === "mixed_material" ? 90 :
+    analysis.sourceInputType === "screenplay_text" ? 75 :
+    30;
+  const factEvents = Math.max(
+    analysis.sourceStoryFacts.core_events?.length ?? 0,
+    analysis.sourceStoryFacts.coreEvents?.length ?? 0,
+    analysis.sourceStoryFacts.event_order?.length ?? 0,
+    analysis.sourceStoryFacts.eventOrder?.length ?? 0,
+  );
+  const factBased = factEvents ? Math.min(18, factEvents) * 10 : 0;
+  const total = Math.max(lengthBased, typeFloor, factBased);
+  return normalizeScriptDurationOption(total === 60 ? 75 : total, 30);
+}
+
+function storyLengthProfileForUi(analysis: SourceInputAnalysis, durationSeconds: number) {
+  const sourceChars = analysis.sourceMaterialLengthChars;
+  const duration = normalizeScriptDurationOption(durationSeconds, 30);
+  if (sourceChars >= 3500 || duration >= 180) {
+    return "long_story_auto";
+  }
+  if (sourceChars >= 2500 || duration >= 120) {
+    return "two_minute_story_2500_3500";
+  }
+  if (sourceChars >= 2000 || duration >= 105) {
+    return "short_story_2000_2500";
+  }
+  if (duration >= 75) {
+    return "long_story";
+  }
+  if (duration >= 45) {
+    return "standard_clip";
+  }
+  return "short_clip";
+}
+
+function resolveResponseStoryDurationSeconds(response: ExpandScriptResponse, fallback: number) {
+  return normalizeScriptDurationOption(
+    response.estimated_total_story_duration_seconds ??
+      response.estimatedTotalStoryDurationSeconds ??
+      fallback,
+    fallback,
+  );
+}
+
+function formatDurationPlanProductMessage(response: ExpandScriptResponse | GenerateStoryboardResponse | null) {
+  if (!response) {
+    return "";
+  }
+  const mode = normalizeTargetDurationModeForUi(response.target_duration_mode ?? response.targetDurationMode);
+  const estimatedSeconds = Number(
+    response.estimated_total_story_duration_seconds ?? response.estimatedTotalStoryDurationSeconds ?? 0,
+  );
+  const shotTaskCount = Number(response.generated_shot_task_count ?? response.generatedShotTaskCount ?? 0);
+  if (mode === LONG_TEXT_DURATION_MODE) {
+    const taskText = shotTaskCount > 1 ? `预计拆分为 ${shotTaskCount} 个镜头任务。` : "";
+    const durationText = estimatedSeconds > 0 ? `预计剧情总时长约 ${estimatedSeconds} 秒。` : "";
+    return `已识别为长文本，将按剧情自动分段；${taskText}${durationText}单镜头分镜保持 Seedance 友好时长。`;
+  }
+  return estimatedSeconds > 0 ? `目标时长 ${estimatedSeconds} 秒。` : "";
+}
+
 function nearestDurationOption(value: number, fallback = 15) {
   const fallbackDuration = normalizeDurationOption(fallback, 15);
   const target = Number.isFinite(value) ? value : fallbackDuration;
@@ -3205,12 +3465,16 @@ function nearestDurationOption(value: number, fallback = 15) {
 }
 
 function estimateShotDuration(totalDurationSeconds: number, segmentCount: number) {
-  const totalDuration = normalizeDurationOption(totalDurationSeconds, 15);
+  const totalDuration = normalizeScriptDurationOption(totalDurationSeconds, 15);
   const count = Math.max(1, segmentCount);
-  return nearestDurationOption(Math.max(5, totalDuration / count), totalDuration);
+  return nearestDurationOption(Math.max(5, totalDuration / count), 15);
 }
 
-function buildShotCandidates(expandedScript: string, totalDurationSeconds: number): ShotCandidate[] {
+function buildShotCandidates(
+  expandedScript: string,
+  totalDurationSeconds: number,
+  targetDurationMode: TargetDurationMode = FIXED_DURATION_MODE,
+): ShotCandidate[] {
   const scriptBody = extractScriptBody(expandedScript);
   if (!scriptBody) {
     return [];
@@ -3218,8 +3482,26 @@ function buildShotCandidates(expandedScript: string, totalDurationSeconds: numbe
 
   const sentences = splitScriptBody(scriptBody);
   const segments = mergeScriptSegments(sentences.length ? sentences : [scriptBody]);
+  const fullDuration = normalizeScriptDurationOption(totalDurationSeconds, 15);
+  if (targetDurationMode === LONG_TEXT_DURATION_MODE) {
+    const plannedDurations = allocateLongTextAutoShotTaskDurations(fullDuration);
+    const durations = plannedDurations.length > 1
+      ? plannedDurations
+      : Array.from({ length: Math.max(2, segments.length || 2) }, () => 10);
+    return durations.map((durationSeconds, index) => {
+      const segment = storySegmentForPlannedTask(segments, index, durations.length, scriptBody);
+      return {
+        id: `auto-segment-${index + 1}`,
+        title: `自动分段 ${index + 1}`,
+        text: segment,
+        preview: truncatePreview(segment),
+        durationSeconds,
+      };
+    });
+  }
+
   const segmentDuration = estimateShotDuration(totalDurationSeconds, segments.length);
-  const fullDuration = normalizeDurationOption(totalDurationSeconds, 15);
+  const fixedFullDuration = normalizeDurationOption(totalDurationSeconds, 15);
   const candidates = segments.slice(0, 8).map((segment, index) => ({
     id: `candidate-${index + 1}`,
     title: `场景候选 ${index + 1}`,
@@ -3234,7 +3516,7 @@ function buildShotCandidates(expandedScript: string, totalDurationSeconds: numbe
       title: "完整扩写剧本",
       text: scriptBody,
       preview: truncatePreview(scriptBody),
-      durationSeconds: fullDuration,
+      durationSeconds: fixedFullDuration,
     });
   }
 
@@ -3246,9 +3528,55 @@ function buildShotCandidates(expandedScript: string, totalDurationSeconds: numbe
           title: "自定义镜头片段",
           text: scriptBody,
           preview: truncatePreview(scriptBody),
-          durationSeconds: fullDuration,
+          durationSeconds: fixedFullDuration,
         },
       ];
+}
+
+function allocateLongTextAutoShotTaskDurations(totalDurationSeconds: number) {
+  const total = normalizeScriptDurationOption(totalDurationSeconds, 30);
+  const durations: number[] = [];
+  let remaining = total;
+  while (remaining >= 10) {
+    durations.push(10);
+    remaining -= 10;
+  }
+  if (remaining === 5) {
+    durations.push(5);
+  }
+  return durations;
+}
+
+function storySegmentForPlannedTask(segments: string[], index: number, count: number, fallback: string) {
+  if (!segments.length) {
+    return fallback;
+  }
+  const start = Math.floor((index * segments.length) / count);
+  const end = Math.max(start + 1, Math.ceil(((index + 1) * segments.length) / count));
+  return segments.slice(start, end).join("").trim() || segments[index % segments.length] || fallback;
+}
+
+function createSceneTasksFromCandidates(
+  candidates: ShotCandidate[],
+  scriptId: string | null | undefined,
+  scene: SceneOption,
+): SceneTaskRecord[] {
+  return candidates.map((candidate, index) => ({
+    id: createTaskRecordId(),
+    name: `第 ${index + 1} 个镜头任务`,
+    candidateId: candidate.id,
+    segmentTitle: candidate.title,
+    scriptText: candidate.text,
+    scriptId,
+    sourceSceneType: scene.value,
+    sourceSceneLabel: scene.label,
+    sourceSceneCategory: scene.group,
+    sourceDurationSeconds: normalizeDurationOption(candidate.durationSeconds, 10),
+    sourceDurationMode: FIXED_DURATION_MODE,
+    status: "draft",
+    dirty: false,
+    hadRowEdits: false,
+  }));
 }
 
 function extractScriptBody(source: string) {
@@ -3602,6 +3930,18 @@ function formatWarningCode(code: string) {
   }
   if (code === "source_document_too_long_for_single_pass") {
     return "源文档较长，本轮优先保留人物、事件顺序和结尾状态";
+  }
+  if (code === "target_duration_mode_invalid") {
+    return "目标时长模式无效，已按固定时长保守处理";
+  }
+  if (code === "long_text_auto_duration_plan_missing") {
+    return "长文本自动分段计划未生成，请改用固定时长或缩短材料";
+  }
+  if (code === "long_text_auto_compressed_to_single_clip_blocked") {
+    return "长文本不能压成单个短片，已阻止本次压缩";
+  }
+  if (code === "auto_segment_strategy_missing") {
+    return "已使用系统默认剧情分段策略";
   }
   return code;
 }

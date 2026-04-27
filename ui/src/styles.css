@@ -19,7 +19,7 @@
   --radius-md: 10px;
   --radius-sm: 8px;
   --control-height: 46px;
-  --script-settings-column: clamp(202px, 16vw, 248px);
+  --script-settings-column: clamp(224px, 17vw, 276px);
   --task-index-column: clamp(128px, 10vw, 154px);
   --task-name-column: clamp(190px, 16vw, 300px);
   --workflow-action-column: clamp(188px, 12vw, 230px);
@@ -492,25 +492,60 @@ textarea {
   padding: 10px;
 }
 
+.content-bridge-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  margin: 8px clamp(18px, 1.5vw, 28px) 0;
+  padding: 8px 12px;
+  border: 1px solid rgba(214, 194, 160, 0.92);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, #fff9eb 0%, #fffdf8 100%);
+  box-shadow: 0 6px 18px rgba(17, 28, 51, 0.04);
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.content-bridge-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.content-bridge-row span:not(:last-child)::after {
+  content: "|";
+  margin-left: 10px;
+  color: rgba(17, 28, 51, 0.28);
+  font-weight: 600;
+}
+
 .script-settings {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: repeat(2, minmax(34px, 1fr));
+  grid-template-rows: repeat(2, minmax(36px, 1fr));
   gap: 6px;
   align-items: stretch;
-  min-height: 76px;
+  min-height: 78px;
 }
 
 .scene-select {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
+  grid-template-columns: 72px minmax(132px, 1fr);
   gap: 8px;
   align-items: center;
-  min-height: 34px;
+  min-height: 36px;
 }
 
 .scene-select span,
 .duration-select span {
+  display: flex;
+  align-items: center;
+  height: 36px;
   font-size: 13px;
   font-weight: 600;
   color: var(--navy);
@@ -544,9 +579,11 @@ textarea {
 }
 
 .script-settings select {
-  height: 34px;
-  padding: 0 10px;
-  line-height: 1.2;
+  height: 36px;
+  padding: 0 12px;
+  line-height: 36px;
+  text-align: center;
+  text-align-last: center;
 }
 
 .synopsis-input {
@@ -1069,16 +1106,16 @@ textarea {
 }
 
 .duration-select--script {
-  grid-template-columns: 64px minmax(0, 1fr);
+  grid-template-columns: 72px minmax(132px, 1fr);
   gap: 8px;
-  min-height: 34px;
+  min-height: 36px;
   justify-content: stretch;
 }
 
 .duration-select--script select {
   width: 100%;
   min-width: 0;
-  padding: 0 28px 0 24px;
+  padding: 0 30px 0 16px;
   text-align: center;
   text-align-last: center;
 }
@@ -2047,7 +2084,7 @@ textarea {
 
 @media (max-width: 1320px) {
   :root {
-    --script-settings-column: clamp(190px, 15vw, 220px);
+    --script-settings-column: clamp(216px, 17vw, 246px);
     --task-index-column: clamp(122px, 9vw, 136px);
     --task-name-column: clamp(168px, 15vw, 220px);
     --workflow-action-column: clamp(148px, 12vw, 168px);
@@ -2078,12 +2115,12 @@ textarea {
     grid-column: 1;
     grid-row: 1;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: repeat(2, minmax(34px, 1fr));
-    min-height: 76px;
+    grid-template-rows: repeat(2, minmax(36px, 1fr));
+    min-height: 78px;
   }
 
   .script-settings select {
-    height: 34px;
+    height: 36px;
   }
 
   .text-control {
