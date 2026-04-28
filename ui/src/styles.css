@@ -1910,7 +1910,7 @@ textarea {
   grid-template-columns: minmax(280px, 0.46fr) minmax(0, 1fr);
   gap: 16px;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
   padding: 18px 22px 22px;
 }
 
@@ -1986,12 +1986,26 @@ textarea {
   gap: 8px;
 }
 
-.shot-candidate__head em {
+.shot-candidate__badges {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.shot-candidate__status {
   flex: 0 0 auto;
   color: #7a5b14;
   font-size: 11px;
   font-style: normal;
   font-weight: 800;
+}
+
+.shot-candidate__status--current {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 950;
 }
 
 .shot-candidate > span:not(.shot-candidate__head) {
@@ -2052,9 +2066,43 @@ textarea {
 
 .task-queue-select__field {
   display: grid;
-  grid-template-rows: auto auto;
+  grid-template-rows: auto auto auto;
+  gap: 6px;
+  min-width: 0;
+}
+
+.task-queue-select__current {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(120px, 0.4fr);
+  align-items: center;
   gap: 8px;
   min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid rgba(17, 28, 51, 0.16);
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+
+.task-queue-select__current span,
+.task-queue-select__current small {
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.task-queue-select__current strong,
+.task-queue-select__current small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-queue-select__current strong {
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
 }
 
 .task-queue-select__status {
@@ -2086,19 +2134,23 @@ textarea {
 }
 
 .task-queue-card-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  display: flex;
+  gap: 6px;
   min-width: 0;
+  max-height: 72px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
 }
 
 .task-queue-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: auto auto auto;
-  gap: 3px 8px;
-  min-height: 78px;
-  padding: 8px 9px;
+  grid-template-rows: auto auto;
+  flex: 0 0 min(224px, 76vw);
+  gap: 2px 8px;
+  min-height: 48px;
+  padding: 7px 9px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: #fff;
@@ -2131,7 +2183,7 @@ textarea {
 }
 
 .task-queue-card__title {
-  grid-column: 1 / -1;
+  grid-column: 1;
   color: inherit;
   font-size: 11px;
   font-weight: 900;
@@ -2144,6 +2196,7 @@ textarea {
 }
 
 .task-queue-card small {
+  grid-column: 1;
   color: var(--text-soft);
   font-size: 11px;
   font-weight: 700;
@@ -2151,7 +2204,7 @@ textarea {
 
 .task-queue-card em {
   grid-column: 2;
-  grid-row: 2 / span 2;
+  grid-row: 1 / span 2;
   align-self: center;
   justify-self: end;
   min-width: 54px;
@@ -2213,7 +2266,7 @@ textarea {
 
 .task-draft-editor {
   display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(240px, 1fr) auto;
   gap: 12px;
   min-height: 0;
   min-width: 0;
@@ -2238,11 +2291,19 @@ textarea {
   line-height: 1.35;
 }
 
+.task-draft-editor__fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 240px);
+  align-items: start;
+  gap: 12px;
+  min-width: 0;
+}
+
 .task-draft-editor__text {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 8px;
-  min-height: 0;
+  min-height: 240px;
   padding: 10px 10px 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
@@ -2253,7 +2314,7 @@ textarea {
 .task-draft-editor__text textarea {
   width: 100%;
   height: 100%;
-  min-height: 220px;
+  min-height: 190px;
   padding: 18px;
   line-height: 1.72;
   overflow: auto;
@@ -2653,6 +2714,17 @@ textarea {
 
   .task-draft-grid {
     grid-template-columns: 1fr;
+  }
+
+  .task-draft-editor__fields,
+  .task-queue-select__current {
+    grid-template-columns: 1fr;
+  }
+
+  .task-queue-select__current span,
+  .task-queue-select__current small,
+  .task-queue-select__current strong {
+    white-space: normal;
   }
 
   .task-draft-actions {

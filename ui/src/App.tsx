@@ -87,6 +87,7 @@ interface ScriptDialogBlock {
 
 interface ShotCandidate {
   id: string;
+  sceneIndex: number;
   title: string;
   text: string;
   preview: string;
@@ -107,6 +108,8 @@ interface TaskDraftState {
   editingTaskRecordId: string | null;
   taskName: string;
   selectedCandidateId: string;
+  sceneIndex: number;
+  shotIndexWithinScene: number;
   segmentTitle: string;
   scriptText: string;
   durationSeconds: number;
@@ -130,8 +133,11 @@ interface SceneTaskRecord {
   id: string;
   name: string;
   candidateId: string;
+  sceneIndex: number;
+  shotIndexWithinScene: number;
   segmentTitle: string;
   scriptText: string;
+  baseSceneText: string;
   scriptId?: string | null;
   sourceSceneType?: SceneFusionOption | string | null;
   sourceSceneLabel?: string | null;
@@ -506,8 +512,11 @@ export function App() {
   const sourceInputStatusText = storyBridgeView.previewStatus;
 
   const canImportScript = acceptedScript.trim().length > 0 && storyPlanIsCurrent;
-  const hasTaskScript = taskSourceScript.trim().length > 0;
-  const canGenerate = Boolean(currentSceneTask) && taskName.trim().length > 0 && hasTaskScript && storyPlanIsCurrent;
+  const hasTaskScript = currentSceneTask?.scriptText.trim().length ? true : taskSourceScript.trim().length > 0;
+  const canGenerate =
+    Boolean(currentSceneTask?.scriptText.trim()) &&
+    Boolean(currentSceneTask?.name.trim()) &&
+    storyPlanIsCurrent;
   const expandedScriptAccepted = Boolean(
     expandedScriptResult?.script_id &&
       expandedScriptSnapshotIsCurrent &&
@@ -540,10 +549,6 @@ export function App() {
         ? buildShotCandidates(acceptedScript, shotCandidateBaseDuration, acceptedPlanMode)
         : [],
     [acceptedPlanMode, acceptedScript, shotCandidateBaseDuration, storyPlanIsCurrent],
-  );
-  const usedCandidateIds = useMemo(
-    () => new Set(sceneTasks.filter((task) => task.candidateId !== "custom").map((task) => task.candidateId)),
-    [sceneTasks],
   );
   const confirmedSceneTaskIds = useMemo(
     () =>
@@ -604,21 +609,21 @@ export function App() {
     () => buildModelConfigSummary(modelConfig, modelProviderStatus),
     [modelConfig, modelProviderStatus],
   );
-  const currentTaskDraftQueueTone = useMemo(
-    () => {
-      const selectedTask = taskDraft?.editingTaskRecordId
-        ? sceneTasks.find((task) => task.id === taskDraft.editingTaskRecordId)
-        : null;
-      return selectedTask ? getSceneTaskStatus(selectedTask, confirmedSceneTaskIds).tone : "pending";
-    },
-    [confirmedSceneTaskIds, sceneTasks, taskDraft?.editingTaskRecordId],
+  const currentTaskDraftQueueTask = useMemo(
+    () =>
+      taskDraft?.editingTaskRecordId
+        ? sceneTasks.find((task) => task.id === taskDraft.editingTaskRecordId) ?? null
+        : null,
+    [sceneTasks, taskDraft?.editingTaskRecordId],
   );
-  const currentTaskDraftQueueStatusLabel = useMemo(() => {
-    const selectedTask = taskDraft?.editingTaskRecordId
-      ? sceneTasks.find((task) => task.id === taskDraft.editingTaskRecordId)
-      : null;
-    return selectedTask ? getSceneTaskStatus(selectedTask, confirmedSceneTaskIds).label : "待生成";
-  }, [confirmedSceneTaskIds, sceneTasks, taskDraft?.editingTaskRecordId]);
+  const currentTaskDraftQueueStatus = useMemo(
+    () => (currentTaskDraftQueueTask ? getSceneTaskStatus(currentTaskDraftQueueTask, confirmedSceneTaskIds) : null),
+    [confirmedSceneTaskIds, currentTaskDraftQueueTask],
+  );
+  const currentTaskDraftQueueTone = currentTaskDraftQueueStatus?.tone ?? "pending";
+  const currentTaskDraftQueueStatusLabel = currentTaskDraftQueueStatus?.label ?? "候选草稿";
+  const resolveNextShotIndexForCandidate = (candidateId: string, excludedTaskId: string | null = null) =>
+    sceneTasks.filter((task) => task.candidateId === candidateId && task.id !== excludedTaskId).length + 1;
   const modelRuntimeLabel = useMemo(
     () => formatModelProviderStatus(modelConfig, modelProviderStatus),
     [modelConfig, modelProviderStatus],
@@ -1061,9 +1066,7 @@ export function App() {
         normalizeScriptText(expandedScript || synopsis) === normalizeScriptText(nextText),
     );
     const scriptId = shouldCarryExpandedScriptId ? expandedScriptResult?.script_id ?? null : null;
-    const candidates = buildShotCandidates(nextText, scriptDuration, targetDurationMode);
-    const nextSceneTasks = createSceneTasksFromCandidates(candidates, scriptId, scriptScene, targetDurationMode);
-    const firstTask = nextSceneTasks[0];
+    const nextSceneTasks: SceneTaskRecord[] = [];
 
     setSynopsis(nextText);
     setExpandedScript(nextText);
@@ -1072,24 +1075,24 @@ export function App() {
     setAcceptedScriptDurationSeconds(scriptDuration);
     setAcceptedScriptTargetDurationMode(targetDurationMode);
     setAcceptedScriptScene(scriptScene);
-    setTaskSourceScript(firstTask?.scriptText ?? "");
-    setTaskScriptId(firstTask?.scriptId ?? null);
-    setTaskSegmentTitle(firstTask?.segmentTitle ?? "");
-    setTaskName(firstTask?.name ?? DEFAULT_TASK_NAME);
+    setTaskSourceScript("");
+    setTaskScriptId(null);
+    setTaskSegmentTitle("");
+    setTaskName(DEFAULT_TASK_NAME);
     setStoryboardResult(null);
     setLastExportResult(null);
     setGeneratedSceneTasks([]);
     setSceneTasks(nextSceneTasks);
-    setCurrentTaskId(firstTask?.id ?? null);
+    setCurrentTaskId(null);
     setIsTaskPickerOpen(false);
-    setTaskSerial(nextSceneTasks.length);
+    setTaskSerial(0);
     setRows([]);
     setRowsDirty(false);
     setCurrentPage(1);
     setExportMessage(
       nextSceneTasks.length
         ? `已确认使用当前文案，已准备 ${nextSceneTasks.length} 个镜头任务。下一步可直接开始生成。`
-        : "已确认使用当前文案，可继续新建镜头任务。",
+        : "已确认使用当前文案，系统候选将在新建镜头任务时动态显示；请先保存任务队列后再开始生成。",
     );
     return true;
   };
@@ -1329,6 +1332,8 @@ export function App() {
     editingTaskRecordId: task.id,
     taskName: task.name,
     selectedCandidateId: task.candidateId,
+    sceneIndex: task.sceneIndex,
+    shotIndexWithinScene: task.shotIndexWithinScene,
     segmentTitle: task.segmentTitle,
     scriptText: task.scriptText,
     durationSeconds: normalizeDurationOption(
@@ -1336,7 +1341,7 @@ export function App() {
       shotCandidateBaseDuration,
     ),
     baseSegmentTitle: task.segmentTitle,
-    baseScriptText: task.scriptText,
+    baseScriptText: task.baseSceneText || task.scriptText,
     baseDurationSeconds: normalizeDurationOption(
       task.sourceDurationSeconds ?? task.selectedTotalDurationSeconds,
       shotCandidateBaseDuration,
@@ -1372,24 +1377,21 @@ export function App() {
       return;
     }
 
-    const nextSerial = Math.max(taskSerial + 1, sceneTasks.length + 1);
-    const currentName = taskName.trim();
-    const defaultTaskName =
-      currentName && currentName !== DEFAULT_TASK_NAME && !hasTaskScript
-        ? currentName
-        : `第 ${nextSerial} 个镜头任务`;
+    const fallbackSceneIndex = shotCandidates.length + 1;
     const nextUnusedCandidate =
-      shotCandidates.find((candidate) => !usedCandidateIds.has(candidate.id) && candidate.id !== "full-script") ??
-      shotCandidates.find((candidate) => !usedCandidateIds.has(candidate.id));
+      shotCandidates[0];
     const firstCandidate = nextUnusedCandidate ?? {
       id: "custom",
+      sceneIndex: fallbackSceneIndex,
       title: "自定义镜头片段",
       text: acceptedScript.trim(),
       preview: acceptedScript.trim(),
       durationSeconds: shotCandidateBaseDuration,
     };
+    const nextShotIndex = resolveNextShotIndexForCandidate(firstCandidate.id);
+    const defaultTaskName = formatDefaultShotTaskName(firstCandidate.sceneIndex, nextShotIndex);
 
-    setTaskDraft(createTaskDraftFromCandidate(firstCandidate, defaultTaskName, shotCandidateBaseDuration));
+    setTaskDraft(createTaskDraftFromCandidate(firstCandidate, defaultTaskName, shotCandidateBaseDuration, nextShotIndex));
   };
 
   const handleTaskCandidateSelect = (candidateId: string) => {
@@ -1402,8 +1404,15 @@ export function App() {
       return;
     }
 
-    const nextSerial = Math.max(taskSerial + 1, sceneTasks.length + 1);
-    setTaskDraft(createTaskDraftFromCandidate(candidate, `第 ${nextSerial} 个镜头任务`, shotCandidateBaseDuration));
+    const nextShotIndex = resolveNextShotIndexForCandidate(candidate.id);
+    setTaskDraft(
+      createTaskDraftFromCandidate(
+        candidate,
+        formatDefaultShotTaskName(candidate.sceneIndex, nextShotIndex),
+        shotCandidateBaseDuration,
+        nextShotIndex,
+      ),
+    );
     setExportMessage(`已选择系统候选“${candidate.title}”，右侧正在编辑候选草稿；只有加入任务队列后才会成为可生成任务。`);
   };
 
@@ -1434,7 +1443,9 @@ export function App() {
     }
 
     const candidate = shotCandidates.find((item) => item.id === taskDraft.selectedCandidateId);
-    const nextTaskName = taskDraft.taskName.trim() || `第 ${taskSerial + 1} 个镜头任务`;
+    const nextTaskName =
+      taskDraft.taskName.trim() ||
+      formatDefaultShotTaskName(taskDraft.sceneIndex, taskDraft.shotIndexWithinScene);
     const editingTask = taskDraft.editingTaskRecordId
       ? sceneTasks.find((task) => task.id === taskDraft.editingTaskRecordId)
       : null;
@@ -1467,8 +1478,11 @@ export function App() {
         id: nextTaskId,
         name: nextTaskName,
         candidateId: taskDraft.selectedCandidateId,
+        sceneIndex: taskDraft.sceneIndex,
+        shotIndexWithinScene: taskDraft.shotIndexWithinScene,
         segmentTitle: nextSegmentTitle,
         scriptText: selectedText,
+        baseSceneText: taskDraft.baseScriptText,
         scriptId: acceptedScriptId,
         sourceSceneType: taskScene.value,
         sourceSceneLabel: taskScene.label,
@@ -1516,32 +1530,26 @@ export function App() {
     closeStoryboardEditDialog();
 
     if (continueCreating && isCreatingNewRecord) {
-      const nextUsedCandidateIds = new Set(usedCandidateIds);
-      if (taskDraft.selectedCandidateId !== "custom") {
-        nextUsedCandidateIds.add(taskDraft.selectedCandidateId);
-      }
-      const nextCandidate =
-        shotCandidates.find((item) => !nextUsedCandidateIds.has(item.id) && item.id !== "full-script") ??
-        shotCandidates.find((item) => !nextUsedCandidateIds.has(item.id));
-      const nextQueueIndex = sceneTasks.length + 2;
+      const currentCandidate = candidate ?? {
+        id: taskDraft.selectedCandidateId,
+        sceneIndex: taskDraft.sceneIndex,
+        title: taskDraft.baseSegmentTitle,
+        text: taskDraft.baseScriptText,
+        preview: truncatePreview(taskDraft.baseScriptText),
+        durationSeconds: taskDraft.baseDurationSeconds,
+      };
+      const nextShotIndex = resolveNextShotIndexForCandidate(currentCandidate.id) + 1;
 
       setTaskDraft(
         createTaskDraftFromCandidate(
-          nextCandidate ?? {
-            id: "custom",
-            title: "自定义镜头片段",
-            text: "",
-            preview: "",
-            durationSeconds: shotCandidateBaseDuration,
-          },
-          `第 ${nextQueueIndex} 个镜头任务`,
+          currentCandidate,
+          formatDefaultShotTaskName(currentCandidate.sceneIndex, nextShotIndex),
           shotCandidateBaseDuration,
+          nextShotIndex,
         ),
       );
       setExportMessage(
-        nextCandidate
-          ? `已创建镜头任务“${nextTaskName}”，继续选择“${nextCandidate.title}”创建下一个任务。`
-          : `已创建镜头任务“${nextTaskName}”。系统候选已用完，可手动输入下一段镜头任务。`,
+        `已创建镜头任务“${nextTaskName}”，可继续在“${currentCandidate.title}”下创建第 ${nextShotIndex} 个镜头，或改选左侧其他候选。`,
       );
       return;
     }
@@ -1603,17 +1611,24 @@ export function App() {
       return;
     }
 
-    const source = taskSourceScript.trim();
+    const source = currentSceneTask.scriptText.trim();
+    const sourceTaskName = currentSceneTask.name.trim() || "未命名镜头任务";
+    const sourceSegmentTitle = currentSceneTask.segmentTitle || sourceTaskName;
+    const sourceScriptId = currentSceneTask.scriptId ?? acceptedScriptId ?? taskScriptId;
     const taskDurationSeconds = normalizeDurationOption(
-      currentSceneTask?.sourceDurationSeconds ?? durationSeconds,
+      currentSceneTask.sourceDurationSeconds ?? durationSeconds,
       durationSeconds,
     );
-    const taskSceneOption = findSceneOption(currentSceneTask?.sourceSceneType ?? null) ?? acceptedScriptScene ?? selectedSceneOption;
+    const taskSceneOption = findSceneOption(currentSceneTask.sourceSceneType ?? null) ?? acceptedScriptScene ?? selectedSceneOption;
+    setTaskName(sourceTaskName);
+    setTaskSourceScript(source);
+    setTaskScriptId(sourceScriptId);
+    setTaskSegmentTitle(sourceSegmentTitle);
     setBridgeBusy("generate");
     try {
       const response = await invokeGenerateStoryboard({
-        task_name: taskName,
-        script_id: taskScriptId,
+        task_name: sourceTaskName,
+        script_id: sourceScriptId,
         scene_type: taskSceneOption.value,
         scene_label: currentSceneTask?.sourceSceneLabel ?? taskSceneOption.label,
         scene_category: currentSceneTask?.sourceSceneCategory ?? taskSceneOption.group,
@@ -1623,7 +1638,7 @@ export function App() {
         primary_scene_category: currentSceneTask?.sourceSceneCategory ?? taskSceneOption.group,
         shot_scene_type: currentSceneTask?.sourceSceneType ?? taskSceneOption.value,
         shot_scene_label: currentSceneTask?.sourceSceneLabel ?? taskSceneOption.label,
-        shot_intent: taskSegmentTitle || taskName,
+        shot_intent: sourceSegmentTitle || sourceTaskName,
         adaptation_reason:
           currentSceneTask?.sourceSceneType && currentSceneTask.sourceSceneType !== taskSceneOption.value
             ? "镜头任务使用用户选择的局部场景方向。"
@@ -1653,8 +1668,8 @@ export function App() {
         const nextTask: GeneratedSceneTask = {
           resultId: response.result_id,
           taskId: response.task_id,
-          taskName: taskName.trim() || "未命名镜头任务",
-          segmentTitle: taskSegmentTitle || "自定义镜头片段",
+          taskName: sourceTaskName,
+          segmentTitle: sourceSegmentTitle || "自定义镜头片段",
           rowCount: nextRows.length,
         };
         return [
@@ -1672,8 +1687,8 @@ export function App() {
             task.id === currentTaskId
               ? {
                   ...task,
-                  name: taskName.trim() || task.name,
-                  segmentTitle: taskSegmentTitle || task.segmentTitle,
+                  name: sourceTaskName || task.name,
+                  segmentTitle: sourceSegmentTitle || task.segmentTitle,
                   scriptText: source,
                   status: "generated",
                   taskId: response.task_id,
@@ -1808,13 +1823,7 @@ export function App() {
     const scriptDuration = responseMode === LONG_TEXT_DURATION_MODE
       ? expandedScriptDurationSeconds ?? estimateLongTextAutoDurationSeconds(analyzeSourceInputForUi(scriptText))
       : durationSeconds;
-    const nextSceneTasks = createSceneTasksFromCandidates(
-      buildShotCandidates(scriptText, scriptDuration, responseMode),
-      expandedScriptResult.script_id,
-      scriptScene,
-      responseMode,
-    );
-    const firstTask = nextSceneTasks[0];
+    const nextSceneTasks: SceneTaskRecord[] = [];
     setAcceptedScript(scriptText);
     setAcceptedScriptId(expandedScriptResult.script_id);
     setAcceptedScriptDurationSeconds(scriptDuration);
@@ -1822,13 +1831,13 @@ export function App() {
     setAcceptedScriptScene(scriptScene);
     setExpandedScript(scriptText);
     setSynopsis(scriptText);
-    setTaskSourceScript(firstTask?.scriptText ?? "");
-    setTaskScriptId(firstTask?.scriptId ?? null);
-    setTaskSegmentTitle(firstTask?.segmentTitle ?? "");
-    setTaskName(firstTask?.name ?? DEFAULT_TASK_NAME);
+    setTaskSourceScript("");
+    setTaskScriptId(null);
+    setTaskSegmentTitle("");
+    setTaskName(DEFAULT_TASK_NAME);
     setSceneTasks(nextSceneTasks);
-    setCurrentTaskId(firstTask?.id ?? null);
-    setTaskSerial(nextSceneTasks.length);
+    setCurrentTaskId(null);
+    setTaskSerial(0);
     setTaskDraft(null);
     setIsTaskPickerOpen(false);
     setStoryboardResult(null);
@@ -1839,7 +1848,7 @@ export function App() {
     setCurrentPage(1);
     setShowExpandedScriptStatus(false);
     setExportMessage(
-      `已确认使用扩写剧本 ${expandedScriptResult.script_id}，已准备 ${nextSceneTasks.length} 个镜头任务。下一步可直接开始生成。`,
+      `已确认使用扩写剧本 ${expandedScriptResult.script_id}，系统候选将在新建镜头任务时动态显示；请先保存任务队列后再开始生成。`,
     );
     return true;
   };
@@ -2994,20 +3003,16 @@ export function App() {
                     <div className="task-draft-label">系统建议（未应用）</div>
                     {shotCandidates.length ? shotCandidates.map((candidate) => {
                       const matchedTask = sceneTasks.find((task) => task.candidateId === candidate.id);
-                      const candidateStatus = currentTaskId && matchedTask?.id === currentTaskId
-                        ? "当前"
-                        : matchedTask?.status === "generated"
-                        ? "已生成"
-                        : matchedTask
-                        ? "已加入队列"
-                        : "未使用";
+                      const isCurrentCandidateDraft =
+                        taskDraft.sourceKind === "candidate" && taskDraft.selectedCandidateId === candidate.id;
+                      const candidateQueueStatus = matchedTask ? "已加入队列" : "空";
 
                       return (
                         <button
                           key={candidate.id}
                           type="button"
                           className={
-                            taskDraft.selectedCandidateId === candidate.id && taskDraft.sourceKind === "candidate"
+                            isCurrentCandidateDraft
                               ? "shot-candidate shot-candidate--active"
                               : "shot-candidate"
                           }
@@ -3015,7 +3020,14 @@ export function App() {
                         >
                           <span className="shot-candidate__head">
                             <strong>{candidate.title}</strong>
-                            <em>{candidateStatus}</em>
+                            <span className="shot-candidate__badges">
+                              {isCurrentCandidateDraft ? (
+                                <em className="shot-candidate__status shot-candidate__status--current">当前</em>
+                              ) : null}
+                              {!isCurrentCandidateDraft ? (
+                                <em className="shot-candidate__status">{candidateQueueStatus}</em>
+                              ) : null}
+                            </span>
                           </span>
                           <span>{candidate.preview}</span>
                           <small>预计 {candidate.durationSeconds} 秒</small>
@@ -3034,6 +3046,19 @@ export function App() {
                     <div className="task-draft-label">镜头任务队列（将用于生成）</div>
                     {sceneTasks.length ? (
                       <div className="task-queue-select__field">
+                        <div className="task-queue-select__current">
+                          <span>当前选择</span>
+                          <strong>
+                            {currentTaskDraftQueueTask
+                              ? currentTaskDraftQueueTask.name
+                              : taskDraft.segmentTitle || "系统候选草稿"}
+                          </strong>
+                          <small>
+                            {currentTaskDraftQueueTask
+                              ? currentTaskDraftQueueTask.segmentTitle
+                              : "未选中队列任务"}
+                          </small>
+                        </div>
                         <div className="task-queue-card-list">
                           {pagedSceneTasks.map((task, offset) => {
                             const taskIndex = taskQueuePageStart + offset;
@@ -3101,52 +3126,54 @@ export function App() {
                         : "当前是系统候选草稿，确认后才会加入任务队列。"}
                     </small>
                   </div>
-                  <label>
-                    <span>镜头任务名称</span>
-                    <input
-                      value={taskDraft.taskName}
-                      onChange={(event) =>
-                        setTaskDraft((current) =>
-                          current
-                            ? {
-                                ...current,
-                                taskName: event.target.value,
-                                manualEditedFields: {
-                                  ...current.manualEditedFields,
-                                  name: true,
-                                },
-                              }
-                            : current,
-                        )
-                      }
-                    />
-                  </label>
-                  <label className="task-draft-editor__duration">
-                    <span>预计镜头时长</span>
-                    <select
-                      value={taskDraft.durationSeconds}
-                      onChange={(event) =>
-                        setTaskDraft((current) =>
-                          current
-                            ? updateTaskDraftDurationFromSystemCandidates(
-                                current,
-                                Number(event.target.value),
-                                shotCandidates,
-                              )
-                            : current,
-                        )
-                      }
-                    >
-                      {DURATION_OPTIONS.map((option) => (
-                        <option key={option} value={option}>
-                          {option} 秒
-                        </option>
-                      ))}
-                    </select>
-                    <small className="task-draft-editor__duration-note">
-                      {taskDraft.durationHint}
-                    </small>
-                  </label>
+                  <div className="task-draft-editor__fields">
+                    <label className="task-draft-editor__name">
+                      <span>镜头任务名称</span>
+                      <input
+                        value={taskDraft.taskName}
+                        onChange={(event) =>
+                          setTaskDraft((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  taskName: event.target.value,
+                                  manualEditedFields: {
+                                    ...current.manualEditedFields,
+                                    name: true,
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                    </label>
+                    <label className="task-draft-editor__duration">
+                      <span>预计镜头时长</span>
+                      <select
+                        value={taskDraft.durationSeconds}
+                        onChange={(event) =>
+                          setTaskDraft((current) =>
+                            current
+                              ? updateTaskDraftDurationFromSystemCandidates(
+                                  current,
+                                  Number(event.target.value),
+                                  shotCandidates,
+                                )
+                              : current,
+                          )
+                        }
+                      >
+                        {DURATION_OPTIONS.map((option) => (
+                          <option key={option} value={option}>
+                            {option} 秒
+                          </option>
+                        ))}
+                      </select>
+                      <small className="task-draft-editor__duration-note">
+                        {taskDraft.durationHint}
+                      </small>
+                    </label>
+                  </div>
                   <div className="task-draft-editor__text">
                     <div className="task-draft-editor__text-meta">
                       <span>本次镜头任务使用的剧本片段</span>
@@ -3236,23 +3263,26 @@ export function App() {
                 </button>
               </div>
               <div className="task-picker-list">
-                {sceneTasks.map((task, index) => (
-                  <button
-                    key={task.id}
-                    type="button"
-                    className={task.id === currentTaskId ? "task-picker-card task-picker-card--active" : "task-picker-card"}
-                    onClick={() => handleImportSceneTask(task)}
-                  >
-                    <div>
-                      <strong>{index + 1}. {task.name}</strong>
-                      <span>
-                        {task.segmentTitle} · 预计 {normalizeDurationOption(task.sourceDurationSeconds ?? task.selectedTotalDurationSeconds, durationSeconds)} 秒
-                      </span>
-                    </div>
-                    <em>{task.status === "generated" ? `${task.rowCount ?? 0} 行已生成，可重新导入` : "待生成"}</em>
-                    <p>{truncatePreview(task.scriptText, 140)}</p>
-                  </button>
-                ))}
+                {sceneTasks.map((task, index) => {
+                  const taskStatus = getSceneTaskStatus(task, confirmedSceneTaskIds);
+                  return (
+                    <button
+                      key={task.id}
+                      type="button"
+                      className={task.id === currentTaskId ? "task-picker-card task-picker-card--active" : "task-picker-card"}
+                      onClick={() => handleImportSceneTask(task)}
+                    >
+                      <div>
+                        <strong>{formatTaskQueueCardTitle(task, index, taskStatus.label)}</strong>
+                        <span>
+                          {task.segmentTitle} · 预计 {normalizeDurationOption(task.sourceDurationSeconds ?? task.selectedTotalDurationSeconds, durationSeconds)} 秒
+                        </span>
+                      </div>
+                      <em>{task.status === "generated" ? `${task.rowCount ?? 0} 行已生成，可重新导入` : taskStatus.label}</em>
+                      <p>{truncatePreview(task.scriptText, 140)}</p>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -4255,6 +4285,8 @@ function buildShotCandidates(
     return [];
   }
 
+  return buildDynamicShotCandidatesFromBody(scriptBody, totalDurationSeconds, targetDurationMode);
+
   const sentences = splitScriptBody(scriptBody);
   const segments = mergeScriptSegments(sentences.length ? sentences : [scriptBody]);
   const fullDuration = normalizeScriptDurationOption(totalDurationSeconds, 15);
@@ -4267,6 +4299,7 @@ function buildShotCandidates(
       const segment = storySegmentForPlannedTask(segments, index, durations.length, scriptBody);
       return {
         id: `auto-segment-${index + 1}`,
+        sceneIndex: index + 1,
         title: `自动分段 ${index + 1}`,
         text: segment,
         preview: truncatePreview(segment),
@@ -4278,33 +4311,211 @@ function buildShotCandidates(
   const fixedFullDuration = normalizeDurationOption(totalDurationSeconds, 15);
   const candidates = segments.slice(0, 8).map((segment, index) => ({
     id: `candidate-${index + 1}`,
+    sceneIndex: index + 1,
     title: `场景候选 ${index + 1}`,
     text: segment,
     preview: truncatePreview(segment),
     durationSeconds: fixedFullDuration,
   }));
 
-  if (candidates.length > 1) {
-    candidates.push({
-      id: "full-script",
-      title: "完整扩写剧本",
-      text: scriptBody,
-      preview: truncatePreview(scriptBody),
-      durationSeconds: fixedFullDuration,
-    });
-  }
-
   return candidates.length
     ? candidates
     : [
         {
           id: "custom",
+          sceneIndex: 1,
           title: "自定义镜头片段",
           text: scriptBody,
           preview: truncatePreview(scriptBody),
           durationSeconds: fixedFullDuration,
         },
       ];
+}
+
+function buildDynamicShotCandidatesFromBody(
+  scriptBody: string,
+  totalDurationSeconds: number,
+  targetDurationMode: TargetDurationMode,
+): ShotCandidate[] {
+  const cleanBody = normalizeScriptText(scriptBody);
+  if (!cleanBody) {
+    return [];
+  }
+
+  if (targetDurationMode === LONG_TEXT_DURATION_MODE) {
+    const plannedDurations = allocateLongTextAutoShotTaskDurations(totalDurationSeconds);
+    const targetCount = plannedDurations.length || Math.max(1, Math.min(8, Math.ceil(cleanBody.length / 320)));
+    const segments = rebalanceCandidateSegments(buildCandidateSourceSegments(cleanBody), targetCount);
+    const durations = allocateCandidateDurations(totalDurationSeconds, segments);
+    return segments.map((segment, index) => ({
+      id: `auto-segment-${index + 1}`,
+      sceneIndex: index + 1,
+      title: `自动分段 ${index + 1}`,
+      text: segment,
+      preview: truncatePreview(segment),
+      durationSeconds: durations[index] ?? 10,
+    }));
+  }
+
+  const fixedFullDuration = normalizeDurationOption(totalDurationSeconds, 15);
+  const sourceSegments = buildCandidateSourceSegments(cleanBody);
+  const sentenceCount = splitScriptBody(cleanBody).length || 1;
+  const desiredCount = resolveDynamicCandidateCount(cleanBody, sentenceCount, sourceSegments.length, fixedFullDuration);
+  const segments = rebalanceCandidateSegments(sourceSegments, desiredCount);
+  const durations = allocateCandidateDurations(fixedFullDuration, segments);
+
+  return segments.length
+    ? segments.map((segment, index) => ({
+        id: `candidate-${index + 1}`,
+        sceneIndex: index + 1,
+        title: `场景候选 ${index + 1}`,
+        text: segment,
+        preview: truncatePreview(segment),
+        durationSeconds: durations[index] ?? fixedFullDuration,
+      }))
+    : [
+        {
+          id: "custom",
+          sceneIndex: 1,
+          title: "自定义镜头片段",
+          text: cleanBody,
+          preview: truncatePreview(cleanBody),
+          durationSeconds: fixedFullDuration,
+        },
+      ];
+}
+
+function buildCandidateSourceSegments(scriptBody: string) {
+  const paragraphSegments = scriptBody
+    .split(/\n+/g)
+    .map((item) => normalizeScriptText(item))
+    .filter(Boolean);
+  const source = paragraphSegments.length > 1 ? paragraphSegments : splitScriptBody(scriptBody);
+  const sentences = source.length ? source : [scriptBody];
+  const grouped: string[] = [];
+  let buffer = "";
+
+  sentences.forEach((sentence, index) => {
+    const cleanSentence = normalizeScriptText(sentence);
+    if (!cleanSentence) {
+      return;
+    }
+    const shouldBreak =
+      Boolean(buffer) &&
+      (hasSceneTransitionCue(cleanSentence) ||
+        hasSceneTransitionCue(sentences[index - 1] ?? "") ||
+        buffer.length >= 180 ||
+        (buffer.length >= 90 && cleanSentence.length >= 42));
+
+    if (shouldBreak) {
+      grouped.push(buffer);
+      buffer = cleanSentence;
+      return;
+    }
+
+    buffer = buffer ? `${buffer}${cleanSentence}` : cleanSentence;
+  });
+
+  if (buffer) {
+    grouped.push(buffer);
+  }
+
+  return uniqueCandidateSegments(grouped.length ? grouped : [scriptBody]);
+}
+
+function hasSceneTransitionCue(text: string) {
+  return /(随后|接着|与此同时|这时|突然|片刻后|转眼|清晨|黄昏|深夜|室内|室外|街道|巷|楼|桥|公交|残骸|废墟|城|广场|车厢|追逐|打斗|冲进|逃离|来到|离开|出现|转身|回头|最终|最后)/.test(text);
+}
+
+function uniqueCandidateSegments(segments: string[]) {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const segment of segments) {
+    const cleanSegment = normalizeScriptText(segment);
+    const key = cleanSegment.replace(/\s+/g, "");
+    if (!cleanSegment || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(cleanSegment);
+  }
+  return unique;
+}
+
+function resolveDynamicCandidateCount(
+  scriptBody: string,
+  sentenceCount: number,
+  sourceSegmentCount: number,
+  totalDurationSeconds: number,
+) {
+  const durationUnits = Math.max(1, Math.round(totalDurationSeconds / 5));
+  const durationCap =
+    totalDurationSeconds <= 15 ? 2 :
+    totalDurationSeconds <= 30 ? 3 :
+    totalDurationSeconds <= 60 ? 5 :
+    8;
+  const maxCount = Math.max(1, Math.min(durationUnits, durationCap, sentenceCount || 1));
+  const lengthCount =
+    scriptBody.length <= 180 ? 1 :
+    scriptBody.length <= 420 ? 2 :
+    scriptBody.length <= 800 ? 3 :
+    Math.min(8, Math.ceil(scriptBody.length / 320));
+  const sceneCount = Math.max(1, sourceSegmentCount);
+  return Math.max(1, Math.min(maxCount, Math.max(lengthCount, sceneCount)));
+}
+
+function rebalanceCandidateSegments(sourceSegments: string[], desiredCount: number) {
+  const segments = uniqueCandidateSegments(sourceSegments);
+  const targetCount = Math.max(1, Math.min(desiredCount, segments.length));
+  if (segments.length <= targetCount) {
+    return segments;
+  }
+
+  const balanced: string[] = [];
+  for (let index = 0; index < targetCount; index += 1) {
+    const start = Math.floor((index * segments.length) / targetCount);
+    const end = Math.max(start + 1, Math.ceil(((index + 1) * segments.length) / targetCount));
+    balanced.push(segments.slice(start, end).join("").trim());
+  }
+  return uniqueCandidateSegments(balanced);
+}
+
+function allocateCandidateDurations(totalDurationSeconds: number, segments: string[]) {
+  const count = Math.max(1, segments.length);
+  const totalUnits = Math.max(count, Math.round(normalizeScriptDurationOption(totalDurationSeconds, 15) / 5));
+  if (count === 1) {
+    return [totalUnits * 5];
+  }
+
+  const weights = segments.map((segment) => Math.max(1, segment.length));
+  const weightTotal = weights.reduce((sum, weight) => sum + weight, 0) || count;
+  const rawUnits = weights.map((weight) => (weight / weightTotal) * totalUnits);
+  const units = rawUnits.map((value) => Math.max(1, Math.floor(value)));
+  let diff = totalUnits - units.reduce((sum, value) => sum + value, 0);
+  const rankedIndexes = rawUnits
+    .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
+    .sort((left, right) => right.remainder - left.remainder);
+
+  while (diff > 0) {
+    for (const item of rankedIndexes) {
+      if (diff <= 0) {
+        break;
+      }
+      units[item.index] += 1;
+      diff -= 1;
+    }
+  }
+
+  while (diff < 0) {
+    const candidateIndex = units.findIndex((value) => value > 1);
+    if (candidateIndex < 0) {
+      break;
+    }
+    units[candidateIndex] -= 1;
+    diff += 1;
+  }
+
+  return units.map((value) => value * 5);
 }
 
 function allocateLongTextAutoShotTaskDurations(totalDurationSeconds: number) {
@@ -4338,10 +4549,13 @@ function createSceneTasksFromCandidates(
 ): SceneTaskRecord[] {
   return candidates.map((candidate, index) => ({
     id: createTaskRecordId(),
-    name: `第 ${index + 1} 个镜头任务`,
+    name: formatDefaultShotTaskName(candidate.sceneIndex || index + 1, 1),
     candidateId: candidate.id,
+    sceneIndex: candidate.sceneIndex || index + 1,
+    shotIndexWithinScene: 1,
     segmentTitle: candidate.title,
     scriptText: candidate.text,
+    baseSceneText: candidate.text,
     scriptId,
     sourceSceneType: scene.value,
     sourceSceneLabel: scene.label,
@@ -4354,6 +4568,10 @@ function createSceneTasksFromCandidates(
     scriptTextSource: "candidate",
     userEditedFields: createTaskDraftEditFlags(),
   }));
+}
+
+function formatDefaultShotTaskName(sceneIndex: number, shotIndexWithinScene: number) {
+  return `第 ${Math.max(1, sceneIndex)} 个场景 - 第 ${Math.max(1, shotIndexWithinScene)} 个镜头`;
 }
 
 function createTaskDraftEditFlags(
@@ -4371,6 +4589,7 @@ function createTaskDraftFromCandidate(
   candidate: ShotCandidate,
   taskName: string,
   fallbackDurationSeconds: number,
+  shotIndexWithinScene = 1,
 ): TaskDraftState {
   const durationSeconds = normalizeDurationOption(candidate.durationSeconds, fallbackDurationSeconds);
   return {
@@ -4379,6 +4598,8 @@ function createTaskDraftFromCandidate(
     editingTaskRecordId: null,
     taskName,
     selectedCandidateId: candidate.id,
+    sceneIndex: candidate.sceneIndex,
+    shotIndexWithinScene,
     segmentTitle: candidate.title,
     scriptText: candidate.text,
     durationSeconds,
@@ -4399,7 +4620,7 @@ function adaptSystemCandidateForTaskDuration(
 ): { title: string; text: string; source: TaskDraftScriptTextSource; hint: string } {
   const candidateIndex = candidates.findIndex((candidate) => candidate.id === candidateId);
   const candidate = candidateIndex >= 0 ? candidates[candidateIndex] : null;
-  if (!candidate || candidate.id === "custom" || candidate.id === "full-script") {
+  if (!candidate || candidate.id === "custom") {
     return {
       title: candidate?.title ?? "自定义镜头片段",
       text: fallbackText,
@@ -4422,9 +4643,9 @@ function adaptSystemCandidateForTaskDuration(
   if (targetDuration > baseDuration) {
     return {
       title: candidate.title,
-      text: candidate.text,
-      source: "candidate",
-      hint: "当前 V0 不自动拼接相邻候选来扩写时长；已保留当前系统场景原文，可手工扩写后保存。",
+      text: expandSceneTextWithinCandidate(candidate.text, targetDuration, baseDuration),
+      source: "duration_suggestion",
+      hint: "已按当前系统场景文本扩写为更长镜头任务；不会拼接相邻候选。",
     };
   }
 
@@ -4444,6 +4665,17 @@ function adaptSystemCandidateForTaskDuration(
     source: "duration_suggestion",
     hint: buildTaskDraftDurationHint(targetDuration, baseDuration, "duration_suggestion"),
   };
+}
+
+function expandSceneTextWithinCandidate(text: string, targetDuration: number, baseDuration: number) {
+  const cleanText = normalizeScriptText(text);
+  const sentences = splitScriptBody(cleanText);
+  const beats = sentences.length ? sentences : [cleanText];
+  const multiplier = Math.max(1, Math.min(3, Math.round(targetDuration / Math.max(5, baseDuration)) - 1));
+  const expansions = beats
+    .slice(0, Math.max(1, Math.min(beats.length, multiplier + 1)))
+    .map((beat) => `同一场景内继续表现：${beat}`);
+  return uniqueCandidateSegments([cleanText, ...expansions]).join("\n");
 }
 
 function updateTaskDraftDurationFromSystemCandidates(
@@ -4470,22 +4702,29 @@ function applyTaskDraftDurationSuggestion(
   draft: TaskDraftState,
   candidates: ShotCandidate[],
 ): TaskDraftState {
-  if (draft.sourceKind !== "candidate") {
-    return {
-      ...draft,
-      durationHint: "当前正在编辑已保存任务，正文以任务记录为准；按时长更新不会反写任务文本。",
-    };
-  }
   if (draft.manualEditedFields.scriptText) {
     return {
       ...draft,
       durationHint: "你已手动编辑文本，按时长更新不会覆盖正文；如需恢复系统原文，请点击恢复原文。",
     };
   }
+  const scopedCandidates =
+    draft.sourceKind === "candidate"
+      ? candidates
+      : [
+          {
+            id: draft.selectedCandidateId,
+            sceneIndex: draft.sceneIndex,
+            title: draft.baseSegmentTitle,
+            text: draft.baseScriptText,
+            preview: truncatePreview(draft.baseScriptText),
+            durationSeconds: draft.baseDurationSeconds,
+          },
+        ];
   const adapted = adaptSystemCandidateForTaskDuration(
     draft.selectedCandidateId,
     draft.durationSeconds,
-    candidates,
+    scopedCandidates,
     draft.scriptText,
   );
   return {
@@ -4518,7 +4757,7 @@ function restoreTaskDraftBaseScript(draft: TaskDraftState): TaskDraftState {
 
 function getSceneTaskStatus(task: SceneTaskRecord, confirmedTaskIds: Set<string>) {
   if (task.status === "generated" && !task.dirty && confirmedTaskIds.has(task.id)) {
-    return { label: "已确认 / 已定稿", tone: "confirmed" as const };
+    return { label: "已确定 / 已定稿", tone: "confirmed" as const };
   }
   if (task.status === "generated" && !task.dirty) {
     return { label: "待确认", tone: "pending" as const };
@@ -4527,8 +4766,9 @@ function getSceneTaskStatus(task: SceneTaskRecord, confirmedTaskIds: Set<string>
 }
 
 function formatTaskQueueCardTitle(task: SceneTaskRecord, index: number, statusText: string) {
-  const sceneLabel = task.candidateId === "custom" ? "自定义系统场景" : `第 ${index + 1} 个系统场景`;
-  return `${sceneLabel} - 场景镜头 ${index + 1} - ${statusText}`;
+  const sceneIndex = task.sceneIndex || index + 1;
+  const shotIndex = task.shotIndexWithinScene || 1;
+  return `第 ${sceneIndex} 个场景 - 第 ${shotIndex} 个镜头 - ${statusText}`;
 }
 
 function isTaskDraftDirty(draft: TaskDraftState) {
@@ -4544,7 +4784,7 @@ function buildTaskDraftDurationHint(
     return "当前文本以右侧编辑区为准，时长只影响生成拆分，不会反写全局配置。";
   }
   if (durationSeconds > baseDurationSeconds) {
-    return "已按更长时长合并相邻连续候选；请检查是否仍属于同一镜头任务。";
+    return "已按更长时长扩写当前场景；不会合并相邻候选。";
   }
   if (durationSeconds < baseDurationSeconds) {
     return "已按更短时长保留核心片段；请检查是否遗漏必要上下文。";
