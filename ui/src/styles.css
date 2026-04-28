@@ -1575,11 +1575,16 @@ textarea {
   gap: 10px;
 }
 
-.page-size-control span,
+.page-size-control label,
 .total-count,
 .jump-form span {
   font-size: 13px;
   color: var(--navy);
+}
+
+.page-size-control label {
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .page-size-control select {

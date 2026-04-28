@@ -190,6 +190,7 @@ interface SourceInputAnalysis {
 }
 
 const DEFAULT_STORYBOARD_PAGE_SIZE = 5;
+const STORYBOARD_PAGE_SIZE_OPTIONS = [3, 4, 5, 6, 10, 20];
 const DURATION_OPTIONS = [5, 10, 15, 30, 45, 60];
 const TASK_DRAFT_DURATION_HINT = "时长只用于当前任务的生成与导出标记，不会自动改写正文。";
 const FIXED_DURATION_MODE: TargetDurationMode = "fixed_seconds";
@@ -418,6 +419,7 @@ export function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [jumpPage, setJumpPage] = useState("1");
   const [storyboardPageSize, setStoryboardPageSize] = useState(() => resolveStoryboardPageSize());
+  const [storyboardPageSizeManual, setStoryboardPageSizeManual] = useState(false);
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const [editingDraft, setEditingDraft] = useState<StoryboardWorkbenchRow | null>(null);
   const [textDialog, setTextDialog] = useState<TextDialogState | null>(null);
@@ -443,11 +445,15 @@ export function App() {
   }, [currentPage]);
 
   useEffect(() => {
+    if (storyboardPageSizeManual) {
+      return;
+    }
+
     const handleResize = () => setStoryboardPageSize(resolveStoryboardPageSize());
     handleResize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, []);
+  }, [storyboardPageSizeManual]);
 
   const currentSceneTask = useMemo(
     () => sceneTasks.find((task) => task.id === currentTaskId) ?? null,
@@ -1951,6 +1957,17 @@ export function App() {
     setCurrentPage(clampPage(parsed, pageCount));
   };
 
+  const handleStoryboardPageSizeChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const nextPageSize = Number(event.target.value);
+    if (!Number.isFinite(nextPageSize) || nextPageSize < 1) {
+      return;
+    }
+
+    setStoryboardPageSizeManual(true);
+    setStoryboardPageSize(nextPageSize);
+    setCurrentPage(1);
+  };
+
   const handleSaveRows = async () => {
     if (bridgeBusy) {
       return;
@@ -2737,7 +2754,7 @@ export function App() {
           <section className="panel-section panel-section--storyboard">
             <div className="section-name">当前镜头结果</div>
 
-            <div className={rows.length > storyboardPageSize ? "table-wrapper" : "table-wrapper table-wrapper--single-page"}>
+            <div className={rows.length ? "table-wrapper" : "table-wrapper table-wrapper--single-page"}>
               <table className="storyboard-table">
                 <thead>
                   <tr>
@@ -2863,16 +2880,20 @@ export function App() {
               </table>
             </div>
 
-            {rows.length > storyboardPageSize ? (
+            {rows.length ? (
             <div className="pagination-row">
               <div className="page-size-control">
-                <span>每页显示：</span>
-                <select value={storyboardPageSize} disabled>
-                  <option value={storyboardPageSize}>{storyboardPageSize}</option>
+                <label htmlFor="storyboard-page-size">每页显示</label>
+                <select id="storyboard-page-size" value={storyboardPageSize} onChange={handleStoryboardPageSizeChange}>
+                  {STORYBOARD_PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={size}>
+                      {size} 条
+                    </option>
+                  ))}
                 </select>
               </div>
 
-              <div className="total-count">共 {rows.length} 条</div>
+              <div className="total-count">共 {rows.length} 条 · 第 {currentPage}/{pageCount} 页</div>
 
               <div className="page-switcher">
                 <button
