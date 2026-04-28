@@ -181,7 +181,8 @@ interface SourceInputAnalysis {
   recommendsLongTextMode: boolean;
 }
 
-const PAGE_SIZE = 5;
+const DEFAULT_STORYBOARD_PAGE_SIZE = 5;
+const TASK_QUEUE_PAGE_SIZE = 4;
 const DURATION_OPTIONS = [5, 10, 15, 30, 45, 60];
 const FIXED_DURATION_MODE: TargetDurationMode = "fixed_seconds";
 const LONG_TEXT_DURATION_MODE: TargetDurationMode = "long_text_auto";
@@ -405,21 +406,23 @@ export function App() {
     useState<ExportStoryboardBankResponse | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [jumpPage, setJumpPage] = useState("1");
+  const [storyboardPageSize, setStoryboardPageSize] = useState(() => resolveStoryboardPageSize());
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const [editingDraft, setEditingDraft] = useState<StoryboardWorkbenchRow | null>(null);
   const [textDialog, setTextDialog] = useState<TextDialogState | null>(null);
   const [taskDraft, setTaskDraft] = useState<TaskDraftState | null>(null);
+  const [taskQueuePage, setTaskQueuePage] = useState(1);
   const [isTaskPickerOpen, setIsTaskPickerOpen] = useState(false);
   const [taskSerial, setTaskSerial] = useState(0);
   const [exportMessage, setExportMessage] = useState("等待导出");
 
   const editingRow = editingDraft;
 
-  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(rows.length / storyboardPageSize));
   const pagedRows = useMemo(() => {
-    const start = (currentPage - 1) * PAGE_SIZE;
-    return rows.slice(start, start + PAGE_SIZE);
-  }, [currentPage, rows]);
+    const start = (currentPage - 1) * storyboardPageSize;
+    return rows.slice(start, start + storyboardPageSize);
+  }, [currentPage, rows, storyboardPageSize]);
 
   useEffect(() => {
     setCurrentPage((value) => Math.min(value, pageCount));
@@ -428,6 +431,13 @@ export function App() {
   useEffect(() => {
     setJumpPage(String(currentPage));
   }, [currentPage]);
+
+  useEffect(() => {
+    const handleResize = () => setStoryboardPageSize(resolveStoryboardPageSize());
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   const currentSceneTask = useMemo(
     () => sceneTasks.find((task) => task.id === currentTaskId) ?? null,
@@ -497,7 +507,7 @@ export function App() {
 
   const canImportScript = acceptedScript.trim().length > 0 && storyPlanIsCurrent;
   const hasTaskScript = taskSourceScript.trim().length > 0;
-  const canGenerate = taskName.trim().length > 0 && hasTaskScript && storyPlanIsCurrent;
+  const canGenerate = Boolean(currentSceneTask) && taskName.trim().length > 0 && hasTaskScript && storyPlanIsCurrent;
   const expandedScriptAccepted = Boolean(
     expandedScriptResult?.script_id &&
       expandedScriptSnapshotIsCurrent &&
@@ -544,6 +554,12 @@ export function App() {
       ),
     [finalizedShots],
   );
+  const taskQueuePageCount = Math.max(1, Math.ceil(sceneTasks.length / TASK_QUEUE_PAGE_SIZE));
+  const taskQueuePageStart = (taskQueuePage - 1) * TASK_QUEUE_PAGE_SIZE;
+  const pagedSceneTasks = useMemo(
+    () => sceneTasks.slice(taskQueuePageStart, taskQueuePageStart + TASK_QUEUE_PAGE_SIZE),
+    [sceneTasks, taskQueuePageStart],
+  );
   const generatedSceneTaskCount = useMemo(
     () => sceneTasks.filter((task) => task.status === "generated").length,
     [sceneTasks],
@@ -575,6 +591,9 @@ export function App() {
     ? "待生成"
     : "未导入";
   const currentShotStatusTone = currentShotConfirmed ? "confirmed" : "pending";
+  const currentSceneTaskStatus = currentSceneTask
+    ? getSceneTaskStatus(currentSceneTask, confirmedSceneTaskIds)
+    : null;
   const pageTokens = useMemo(() => buildPageTokens(pageCount, currentPage), [pageCount, currentPage]);
   const sceneOptionGroups = useMemo(() => groupSceneOptions(SCENE_OPTIONS), []);
   const selectedModelLabel = useMemo(() => resolveModelLabel(modelConfig.provider), [modelConfig.provider]);
@@ -586,25 +605,39 @@ export function App() {
     [modelConfig, modelProviderStatus],
   );
   const currentTaskDraftQueueTone = useMemo(
-    () =>
-      taskDraft?.editingTaskRecordId && confirmedSceneTaskIds.has(taskDraft.editingTaskRecordId)
-        ? "confirmed"
-        : "pending",
-    [confirmedSceneTaskIds, taskDraft?.editingTaskRecordId],
+    () => {
+      const selectedTask = taskDraft?.editingTaskRecordId
+        ? sceneTasks.find((task) => task.id === taskDraft.editingTaskRecordId)
+        : null;
+      return selectedTask ? getSceneTaskStatus(selectedTask, confirmedSceneTaskIds).tone : "pending";
+    },
+    [confirmedSceneTaskIds, sceneTasks, taskDraft?.editingTaskRecordId],
   );
   const currentTaskDraftQueueStatusLabel = useMemo(() => {
     const selectedTask = taskDraft?.editingTaskRecordId
       ? sceneTasks.find((task) => task.id === taskDraft.editingTaskRecordId)
       : null;
-    if (taskDraft?.editingTaskRecordId && confirmedSceneTaskIds.has(taskDraft.editingTaskRecordId)) {
-      return "已确认 / 已定稿";
-    }
-    return selectedTask?.status === "generated" ? "待确认" : "待生成";
+    return selectedTask ? getSceneTaskStatus(selectedTask, confirmedSceneTaskIds).label : "待生成";
   }, [confirmedSceneTaskIds, sceneTasks, taskDraft?.editingTaskRecordId]);
   const modelRuntimeLabel = useMemo(
     () => formatModelProviderStatus(modelConfig, modelProviderStatus),
     [modelConfig, modelProviderStatus],
   );
+
+  useEffect(() => {
+    setTaskQueuePage((value) => Math.min(value, taskQueuePageCount));
+  }, [taskQueuePageCount]);
+
+  useEffect(() => {
+    if (!taskDraft?.editingTaskRecordId) {
+      return;
+    }
+    const selectedIndex = sceneTasks.findIndex((task) => task.id === taskDraft.editingTaskRecordId);
+    if (selectedIndex >= 0) {
+      setTaskQueuePage(Math.floor(selectedIndex / TASK_QUEUE_PAGE_SIZE) + 1);
+    }
+  }, [sceneTasks, taskDraft?.editingTaskRecordId]);
+
   const refreshFinalizedShots = async (openDialog = false, scriptIdOverride?: string | null) => {
     setBridgeBusy("list_shots");
     try {
@@ -1365,22 +1398,13 @@ export function App() {
       return;
     }
 
-    const matchedTask = sceneTasks.find((task) => task.candidateId === candidateId);
-    if (matchedTask) {
-      if (!confirmTaskDraftSwitch(matchedTask.name)) {
-        return;
-      }
-      setTaskDraft(createDraftFromSceneTask(matchedTask));
-      setExportMessage(`候选“${candidate.title}”已建立任务，右侧已切换为任务编辑。`);
-      return;
-    }
-
     if (!confirmTaskDraftSwitch(candidate.title)) {
       return;
     }
 
     const nextSerial = Math.max(taskSerial + 1, sceneTasks.length + 1);
     setTaskDraft(createTaskDraftFromCandidate(candidate, `第 ${nextSerial} 个镜头任务`, shotCandidateBaseDuration));
+    setExportMessage(`已选择系统候选“${candidate.title}”，右侧正在编辑候选草稿；只有加入任务队列后才会成为可生成任务。`);
   };
 
   const handleTaskQueueDraftSelect = (task: SceneTaskRecord) => {
@@ -1389,6 +1413,13 @@ export function App() {
     }
 
     setTaskDraft(createDraftFromSceneTask(task));
+  };
+
+  const handleApplyTaskDraftDurationSuggestion = () => {
+    if (taskDraft?.manualEditedFields.scriptText) {
+      setExportMessage("当前正文已手工编辑，按时长更新不会覆盖文本；如需回到系统原文，请先点击恢复原文。");
+    }
+    setTaskDraft((current) => (current ? applyTaskDraftDurationSuggestion(current, shotCandidates) : current));
   };
 
   const handleConfirmTaskDraft = (continueCreating = false) => {
@@ -1404,14 +1435,14 @@ export function App() {
 
     const candidate = shotCandidates.find((item) => item.id === taskDraft.selectedCandidateId);
     const nextTaskName = taskDraft.taskName.trim() || `第 ${taskSerial + 1} 个镜头任务`;
-    const existingCandidateTask =
-      taskDraft.mode === "create" && taskDraft.selectedCandidateId !== "custom"
-        ? sceneTasks.find((task) => task.candidateId === taskDraft.selectedCandidateId)
-        : null;
     const editingTask = taskDraft.editingTaskRecordId
       ? sceneTasks.find((task) => task.id === taskDraft.editingTaskRecordId)
       : null;
-    const nextTaskId = editingTask?.id ?? existingCandidateTask?.id ?? createTaskRecordId();
+    if (taskDraft.mode === "update" && !editingTask) {
+      setExportMessage("当前编辑任务已不在队列中，请重新选择右侧任务后再保存。");
+      return;
+    }
+    const nextTaskId = editingTask?.id ?? createTaskRecordId();
     const isCreatingNewRecord = !sceneTasks.some((task) => task.id === nextTaskId);
     const nextSegmentTitle = taskDraft.segmentTitle || candidate?.title || "自定义镜头片段";
     const taskScene = acceptedScriptScene ?? selectedSceneOption;
@@ -1427,6 +1458,10 @@ export function App() {
     setTaskScriptId(acceptedScriptId);
     setTaskSegmentTitle(nextSegmentTitle);
     setCurrentTaskId(nextTaskId);
+    const nextTaskIndex = isCreatingNewRecord
+      ? sceneTasks.length
+      : Math.max(0, sceneTasks.findIndex((task) => task.id === nextTaskId));
+    setTaskQueuePage(Math.floor(nextTaskIndex / TASK_QUEUE_PAGE_SIZE) + 1);
     setSceneTasks((current) => {
       const nextRecord: SceneTaskRecord = {
         id: nextTaskId,
@@ -1552,25 +1587,16 @@ export function App() {
     );
   };
 
-  const handleSelectSceneTask = (taskId: string) => {
-    if (!taskId) {
-      return;
-    }
-    const task = sceneTasks.find((item) => item.id === taskId);
-    if (!task) {
-      setExportMessage("未找到该镜头任务，请先新建或导入已有镜头任务。");
-      return;
-    }
-
-    handleImportSceneTask(task);
-  };
-
   const handleGenerate = async () => {
     if (bridgeBusy) {
       return;
     }
     if (!canGenerate) {
       setExportMessage("请先点击“确定使用”，并选择一个镜头任务后再开始生成。");
+      return;
+    }
+    if (!currentSceneTask) {
+      setExportMessage("生成分镜只能使用已保存的镜头任务，请先从任务队列导入或保存一个任务。");
       return;
     }
     if (!confirmDiscardDirty("重新生成当前镜头任务")) {
@@ -2551,26 +2577,24 @@ export function App() {
                 </strong>
               </label>
               <label className="task-name-select">
-                <select
-                  value={currentTaskId ?? ""}
-                  onChange={(event) => handleSelectSceneTask(event.target.value)}
+                <button
+                  type="button"
+                  className={currentSceneTask ? "task-current-card" : "task-current-card task-current-card--empty"}
+                  onClick={handleImportScript}
                   disabled={!sceneTasks.length || bridgeBusy !== null}
                   aria-label="选择镜头任务"
                   title={
                     currentSceneTask
-                      ? `第 ${currentSceneTaskIndex} 个 · ${currentSceneTask.name}`
+                      ? `第 ${currentSceneTaskIndex} 个 · ${currentSceneTask.name} · ${currentSceneTaskStatus?.label ?? "待生成"}`
                       : taskName
                   }
                 >
-                  <option value="" disabled>
-                    {sceneTasks.length ? "选择镜头任务" : taskName || "暂无镜头任务"}
-                  </option>
-                  {sceneTasks.map((task, index) => (
-                    <option key={task.id} value={task.id}>
-                      {task.name.trim() || `第 ${index + 1} 个镜头任务`}
-                    </option>
-                  ))}
-                </select>
+                  <strong>{currentSceneTask ? currentSceneTask.name : taskName || "暂无镜头任务"}</strong>
+                  <span>{currentSceneTask ? currentSceneTask.segmentTitle : "请先创建或导入任务"}</span>
+                  <em className={`task-current-card__status task-current-card__status--${currentSceneTaskStatus?.tone ?? "pending"}`}>
+                    {currentSceneTaskStatus?.label ?? "待生成"}
+                  </em>
+                </button>
               </label>
               <button
                 type="button"
@@ -2632,7 +2656,7 @@ export function App() {
           <section className="panel-section panel-section--storyboard">
             <div className="section-name">当前镜头结果</div>
 
-            <div className={rows.length > PAGE_SIZE ? "table-wrapper" : "table-wrapper table-wrapper--single-page"}>
+            <div className={rows.length > storyboardPageSize ? "table-wrapper" : "table-wrapper table-wrapper--single-page"}>
               <table className="storyboard-table">
                 <thead>
                   <tr>
@@ -2758,12 +2782,12 @@ export function App() {
               </table>
             </div>
 
-            {rows.length > PAGE_SIZE ? (
+            {rows.length > storyboardPageSize ? (
             <div className="pagination-row">
               <div className="page-size-control">
                 <span>每页显示：</span>
-                <select value={PAGE_SIZE} disabled>
-                  <option value={PAGE_SIZE}>{PAGE_SIZE}</option>
+                <select value={storyboardPageSize} disabled>
+                  <option value={storyboardPageSize}>{storyboardPageSize}</option>
                 </select>
               </div>
 
@@ -2983,8 +3007,7 @@ export function App() {
                           key={candidate.id}
                           type="button"
                           className={
-                            taskDraft.selectedCandidateId === candidate.id &&
-                              (taskDraft.sourceKind === "candidate" || taskDraft.editingTaskRecordId === matchedTask?.id)
+                            taskDraft.selectedCandidateId === candidate.id && taskDraft.sourceKind === "candidate"
                               ? "shot-candidate shot-candidate--active"
                               : "shot-candidate"
                           }
@@ -3011,52 +3034,56 @@ export function App() {
                     <div className="task-draft-label">镜头任务队列（将用于生成）</div>
                     {sceneTasks.length ? (
                       <div className="task-queue-select__field">
-                        <select
-                          className={
-                            currentTaskDraftQueueTone === "confirmed"
-                              ? "task-queue-select__control task-queue-select__control--confirmed"
-                              : "task-queue-select__control task-queue-select__control--pending"
-                          }
-                          value={taskDraft.editingTaskRecordId ?? ""}
-                          onChange={(event) => {
-                            const task = sceneTasks.find((item) => item.id === event.target.value);
-                            if (task) {
-                              handleTaskQueueDraftSelect(task);
-                            }
-                          }}
-                        >
-                          <option value="" disabled className="task-queue-select__placeholder">
-                            选择镜头任务
-                          </option>
-                          {sceneTasks.map((task, index) => {
-                            const queueTone = confirmedSceneTaskIds.has(task.id) ? "confirmed" : "pending";
+                        <div className="task-queue-card-list">
+                          {pagedSceneTasks.map((task, offset) => {
+                            const taskIndex = taskQueuePageStart + offset;
+                            const queueStatus = getSceneTaskStatus(task, confirmedSceneTaskIds);
+                            const isActiveTask = task.id === taskDraft.editingTaskRecordId;
                             return (
-                              <option
+                              <button
                                 key={task.id}
-                                value={task.id}
-                                className={
-                                  queueTone === "confirmed"
-                                    ? "task-queue-select__option task-queue-select__option--confirmed"
-                                    : "task-queue-select__option task-queue-select__option--pending"
-                                }
-                                style={{ color: queueTone === "confirmed" ? "var(--danger)" : "var(--navy)" }}
+                                type="button"
+                                className={[
+                                  "task-queue-card",
+                                  `task-queue-card--${queueStatus.tone}`,
+                                  isActiveTask ? "task-queue-card--active" : "",
+                                ].filter(Boolean).join(" ")}
+                                onClick={() => handleTaskQueueDraftSelect(task)}
                               >
-                                {formatTaskDraftQueueOption(
-                                  task,
-                                  index,
-                                  taskDraft,
-                                  durationSeconds,
-                                  confirmedSceneTaskIds,
-                                )}
-                              </option>
+                                <span className="task-queue-card__title">
+                                  {formatTaskQueueCardTitle(task, taskIndex, queueStatus.label)}
+                                </span>
+                                <strong>{task.name}</strong>
+                                <small>{task.segmentTitle}</small>
+                                <em>{queueStatus.label}</em>
+                              </button>
                             );
                           })}
-                        </select>
-                        <span
-                          className={`task-queue-select__status task-queue-select__status--${currentTaskDraftQueueTone}`}
-                        >
-                          {currentTaskDraftQueueStatusLabel}
-                        </span>
+                        </div>
+                        <div className="task-queue-pager" aria-label="镜头任务队列分页">
+                          <button
+                            type="button"
+                            className="page-arrow"
+                            onClick={() => setTaskQueuePage((value) => clampPage(value - 1, taskQueuePageCount))}
+                            disabled={taskQueuePage === 1}
+                          >
+                            &lt;
+                          </button>
+                          <span>{taskQueuePage} / {taskQueuePageCount}</span>
+                          <button
+                            type="button"
+                            className="page-arrow"
+                            onClick={() => setTaskQueuePage((value) => clampPage(value + 1, taskQueuePageCount))}
+                            disabled={taskQueuePage === taskQueuePageCount}
+                          >
+                            &gt;
+                          </button>
+                          <em
+                            className={`task-queue-select__status task-queue-select__status--${currentTaskDraftQueueTone}`}
+                          >
+                            {currentTaskDraftQueueStatusLabel}
+                          </em>
+                        </div>
                       </div>
                     ) : (
                       <div className="task-queue__empty">还没有镜头任务，确认创建后会出现在这里。</div>
@@ -3158,11 +3185,7 @@ export function App() {
                       <button
                         type="button"
                         className="action-button action-button--light"
-                        onClick={() =>
-                          setTaskDraft((current) =>
-                            current ? applyTaskDraftDurationSuggestion(current, shotCandidates) : current,
-                          )
-                        }
+                        onClick={handleApplyTaskDraftDurationSuggestion}
                         disabled={taskDraft.selectedCandidateId === "custom"}
                       >
                         按时长更新
@@ -4397,24 +4420,11 @@ function adaptSystemCandidateForTaskDuration(
   }
 
   if (targetDuration > baseDuration) {
-    const selected: ShotCandidate[] = [];
-    let totalDuration = 0;
-    for (const item of candidates.slice(candidateIndex)) {
-      if (item.id === "custom" || item.id === "full-script") {
-        continue;
-      }
-      selected.push(item);
-      totalDuration += normalizeDurationOption(item.durationSeconds, baseDuration);
-      if (totalDuration >= targetDuration) {
-        break;
-      }
-    }
-    const mergedText = selected.map((item) => item.text.trim()).filter(Boolean).join("\n\n");
     return {
-      title: selected.length > 1 ? `${candidate.title} 起连续 ${selected.length} 段` : candidate.title,
-      text: mergedText || candidate.text,
-      source: "duration_suggestion",
-      hint: buildTaskDraftDurationHint(targetDuration, baseDuration, "duration_suggestion"),
+      title: candidate.title,
+      text: candidate.text,
+      source: "candidate",
+      hint: "当前 V0 不自动拼接相邻候选来扩写时长；已保留当前系统场景原文，可手工扩写后保存。",
     };
   }
 
@@ -4441,36 +4451,37 @@ function updateTaskDraftDurationFromSystemCandidates(
   durationSeconds: number,
   candidates: ShotCandidate[],
 ): TaskDraftState {
+  void candidates;
   const nextDurationSeconds = normalizeDurationOption(durationSeconds, draft.durationSeconds);
-  const nextDraft = {
+  return {
     ...draft,
     durationSeconds: nextDurationSeconds,
     manualEditedFields: {
       ...draft.manualEditedFields,
       duration: true,
     },
+    durationHint: draft.manualEditedFields.scriptText
+      ? "你已手动编辑文本，时长变化只影响生成拆分，不会自动覆盖正文。"
+      : "预计时长已更新；需要调整系统候选文本时，请点击“按时长更新”。",
   };
-
-  if (
-    draft.sourceKind !== "candidate" ||
-    draft.manualEditedFields.scriptText ||
-    draft.selectedCandidateId === "custom"
-  ) {
-    return {
-      ...nextDraft,
-      durationHint: draft.manualEditedFields.scriptText
-        ? "你已手动编辑文本，时长变化只影响生成拆分，不会自动覆盖正文。"
-        : buildTaskDraftDurationHint(nextDurationSeconds, draft.baseDurationSeconds, draft.scriptTextSource),
-    };
-  }
-
-  return applyTaskDraftDurationSuggestion(nextDraft, candidates);
 }
 
 function applyTaskDraftDurationSuggestion(
   draft: TaskDraftState,
   candidates: ShotCandidate[],
 ): TaskDraftState {
+  if (draft.sourceKind !== "candidate") {
+    return {
+      ...draft,
+      durationHint: "当前正在编辑已保存任务，正文以任务记录为准；按时长更新不会反写任务文本。",
+    };
+  }
+  if (draft.manualEditedFields.scriptText) {
+    return {
+      ...draft,
+      durationHint: "你已手动编辑文本，按时长更新不会覆盖正文；如需恢复系统原文，请点击恢复原文。",
+    };
+  }
   const adapted = adaptSystemCandidateForTaskDuration(
     draft.selectedCandidateId,
     draft.durationSeconds,
@@ -4505,23 +4516,19 @@ function restoreTaskDraftBaseScript(draft: TaskDraftState): TaskDraftState {
   };
 }
 
-function formatTaskDraftQueueOption(
-  task: SceneTaskRecord,
-  index: number,
-  draft: TaskDraftState,
-  fallbackDurationSeconds: number,
-  confirmedTaskIds: Set<string>,
-) {
-  void fallbackDurationSeconds;
-  const isEditingTask = task.id === draft.editingTaskRecordId;
-  const segmentTitle = isEditingTask ? draft.segmentTitle : task.segmentTitle;
-  const taskName = isEditingTask ? draft.taskName : task.name;
-  const statusText = confirmedTaskIds.has(task.id)
-    ? "已确认 / 已定稿"
-    : task.status === "generated"
-    ? "待确认"
-    : "待生成";
-  return `${index + 1}. ${taskName} · ${segmentTitle} · ${statusText}`;
+function getSceneTaskStatus(task: SceneTaskRecord, confirmedTaskIds: Set<string>) {
+  if (task.status === "generated" && !task.dirty && confirmedTaskIds.has(task.id)) {
+    return { label: "已确认 / 已定稿", tone: "confirmed" as const };
+  }
+  if (task.status === "generated" && !task.dirty) {
+    return { label: "待确认", tone: "pending" as const };
+  }
+  return { label: "待生成", tone: "pending" as const };
+}
+
+function formatTaskQueueCardTitle(task: SceneTaskRecord, index: number, statusText: string) {
+  const sceneLabel = task.candidateId === "custom" ? "自定义系统场景" : `第 ${index + 1} 个系统场景`;
+  return `${sceneLabel} - 场景镜头 ${index + 1} - ${statusText}`;
 }
 
 function isTaskDraftDirty(draft: TaskDraftState) {
@@ -5225,6 +5232,24 @@ function buildPageTokens(pageCount: number, currentPage: number) {
 
 function clampPage(page: number, pageCount: number) {
   return Math.min(Math.max(1, page), pageCount);
+}
+
+function resolveStoryboardPageSize() {
+  if (typeof window === "undefined") {
+    return DEFAULT_STORYBOARD_PAGE_SIZE;
+  }
+
+  const { innerHeight, innerWidth } = window;
+  if (innerHeight < 760 || innerWidth < 900) {
+    return 3;
+  }
+  if (innerHeight < 900) {
+    return 4;
+  }
+  if (innerHeight >= 1040 && innerWidth >= 1600) {
+    return 6;
+  }
+  return DEFAULT_STORYBOARD_PAGE_SIZE;
 }
 
 function renumberRows(rows: StoryboardWorkbenchRow[]) {
