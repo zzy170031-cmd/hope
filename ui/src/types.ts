@@ -126,6 +126,11 @@ export interface ModelConfigSummary {
 }
 
 export type TextModelProviderUiStatus =
+  | "not_desktop"
+  | "api_config_unsaved"
+  | "session_key_missing"
+  | "provider_disabled"
+  | "base_url_missing"
   | "unconfigured"
   | "configured_disabled"
   | "enabled"
@@ -144,6 +149,8 @@ export interface ConfigureTextModelProviderRequest {
 export interface TextModelProviderStatus {
   provider: WorkbenchModelId;
   model: string;
+  base_url?: string | null;
+  baseUrl?: string | null;
   enabled: boolean;
   base_url_present: boolean;
   api_key_present: boolean;

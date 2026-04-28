@@ -26,6 +26,7 @@ pub struct ConfigureTextModelProviderRequest {
 pub struct TextModelProviderStatus {
     pub provider: String,
     pub model: String,
+    pub base_url: Option<String>,
     pub enabled: bool,
     pub base_url_present: bool,
     pub api_key_present: bool,
@@ -73,6 +74,7 @@ pub const GENERATE_STORYBOARD_COMMAND: &str = "generate_storyboard";
 pub const UPDATE_STORYBOARD_ROWS_COMMAND: &str = "update_storyboard_rows";
 pub const EXPORT_BUNDLE_COMMAND: &str = "export_bundle";
 pub const CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND: &str = "configure_text_model_provider";
+pub const GET_TEXT_MODEL_PROVIDER_STATUS_COMMAND: &str = "get_text_model_provider_status";
 pub const SAVE_STORYBOARD_SHOT_RESULT_COMMAND: &str = "save_storyboard_shot_result";
 pub const LIST_STORYBOARD_SHOT_RESULTS_COMMAND: &str = "list_storyboard_shot_results";
 pub const UPDATE_STORYBOARD_SHOT_RESULT_COMMAND: &str = "update_storyboard_shot_result";
@@ -89,6 +91,7 @@ pub const IPC_COMMANDS: &[&str] = &[
     UPDATE_STORYBOARD_ROWS_COMMAND,
     EXPORT_BUNDLE_COMMAND,
     CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND,
+    GET_TEXT_MODEL_PROVIDER_STATUS_COMMAND,
     SAVE_STORYBOARD_SHOT_RESULT_COMMAND,
     LIST_STORYBOARD_SHOT_RESULTS_COMMAND,
     UPDATE_STORYBOARD_SHOT_RESULT_COMMAND,

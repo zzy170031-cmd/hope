@@ -62,6 +62,7 @@ export const HOPE_TAURI_COMMANDS = {
   removeStoryboardShotResult: "remove_storyboard_shot_result",
   exportStoryboardBank: "export_storyboard_bank",
   configureTextModelProvider: "configure_text_model_provider",
+  getTextModelProviderStatus: "get_text_model_provider_status",
   importStoryDocument: "import_story_document",
   selectExportSavePath: "select_export_save_path",
   copyExportArtifactToPath: "copy_export_artifact_to_path",
@@ -134,9 +135,16 @@ const PHASE1_REAL_COMMANDS = new Set<HopeCommandName>([
   HOPE_TAURI_COMMANDS.removeStoryboardShotResult,
   HOPE_TAURI_COMMANDS.exportStoryboardBank,
   HOPE_TAURI_COMMANDS.configureTextModelProvider,
+  HOPE_TAURI_COMMANDS.getTextModelProviderStatus,
   HOPE_TAURI_COMMANDS.importStoryDocument,
   HOPE_TAURI_COMMANDS.selectExportSavePath,
   HOPE_TAURI_COMMANDS.copyExportArtifactToPath,
+]);
+const BROWSER_MOCK_COMMANDS = new Set<HopeCommandName>([
+  HOPE_TAURI_COMMANDS.projectCreateOrSwitch,
+  HOPE_TAURI_COMMANDS.writerEntrySnapshot,
+  HOPE_TAURI_COMMANDS.storyboardRenderSegmentCutPreviewSnapshot,
+  HOPE_TAURI_COMMANDS.validationExportPanelSnapshot,
 ]);
 
 function delay(ms: number) {
@@ -161,6 +169,10 @@ function resolveDesktopInvoke(): DesktopInvoke | null {
   }
 
   return null;
+}
+
+function desktopRequiredError(command: HopeCommandName) {
+  return new Error(`${command} requires real Tauri desktop IPC.`);
 }
 
 async function invokeDesktopCommand<T>(
@@ -1005,6 +1017,8 @@ function normalizeTextModelProviderStatus(raw: unknown): TextModelProviderStatus
   return {
     provider: String(status.provider ?? "qwen") as TextModelProviderStatus["provider"],
     model: String(status.model ?? "qwen-plus"),
+    base_url: (status.base_url ?? status.baseUrl ?? null) as string | null,
+    baseUrl: (status.baseUrl ?? status.base_url ?? null) as string | null,
     enabled: Boolean(status.enabled),
     base_url_present: Boolean(status.base_url_present ?? status.baseUrlPresent),
     api_key_present: Boolean(status.api_key_present ?? status.apiKeyPresent),
@@ -1039,35 +1053,10 @@ function fallbackForCommand<T>(command: HopeCommandName, payload?: HopeCommandPa
     case HOPE_TAURI_COMMANDS.updateStoryboardShotResult:
     case HOPE_TAURI_COMMANDS.removeStoryboardShotResult:
     case HOPE_TAURI_COMMANDS.exportStoryboardBank:
+    case HOPE_TAURI_COMMANDS.getTextModelProviderStatus:
     case HOPE_TAURI_COMMANDS.importStoryDocument:
-      throw new Error(`${command} requires the desktop bridge.`);
-    case HOPE_TAURI_COMMANDS.configureTextModelProvider: {
-      const request = payload as ConfigureTextModelProviderRequest | undefined;
-      const provider = request?.provider ?? "qwen";
-      const qwenEnabled = provider === "qwen" && Boolean(request?.enabled);
-      const apiKeyPresent =
-        Boolean(request?.api_key?.trim()) || Boolean(request?.api_key_ref?.trim());
-      const baseUrlPresent = Boolean(request?.base_url?.trim());
-      return {
-        provider,
-        model: request?.model || "qwen-plus",
-        enabled: qwenEnabled,
-        base_url_present: baseUrlPresent,
-        api_key_present: apiKeyPresent,
-        live_ready: qwenEnabled && apiKeyPresent && baseUrlPresent,
-        status:
-          provider !== "qwen"
-            ? "reserved"
-            : qwenEnabled && apiKeyPresent && baseUrlPresent
-              ? "enabled"
-              : "unconfigured",
-        message:
-          provider !== "qwen"
-            ? "该模型接口为预留状态，当前未启用真实调用。"
-            : "浏览器预览模式：配置仅在当前页面会话中模拟。",
-        storage: "session-only",
-      } as T;
-    }
+    case HOPE_TAURI_COMMANDS.configureTextModelProvider:
+      throw desktopRequiredError(command);
     default:
       throw new Error(`Unmapped Hope UI command: ${command}`);
   }
@@ -1084,8 +1073,9 @@ export function getHopeBridgeStatus(): HopeBridgeStatus {
 
   return {
     mode: "mock",
-    label: "Mock fallback active",
-    detail: "Running in browser mode, using fixture-backed fallback data.",
+    label: "Browser preview mock active",
+    detail:
+      "Read-only snapshots may use fixture data; runtime actions require real Tauri IPC.",
   };
 }
 
@@ -1099,11 +1089,18 @@ export async function invokeHopeCommand<T>(
     try {
       return await invokeDesktopCommand<T>(desktopInvoke, command, payload);
     } catch (error) {
+      if (!BROWSER_MOCK_COMMANDS.has(command)) {
+        throw error;
+      }
       console.warn(
-        `[hopeBridge] desktop invoke failed for ${command}, falling back to mock data`,
+        `[hopeBridge] desktop invoke failed for ${command}, using browser mock data`,
         error,
       );
     }
+  }
+
+  if (!BROWSER_MOCK_COMMANDS.has(command)) {
+    throw desktopRequiredError(command);
   }
 
   await delay(120);
@@ -1116,7 +1113,7 @@ async function invokeRequiredDesktopCommand<T>(
 ): Promise<T> {
   const desktopInvoke = resolveDesktopInvoke();
   if (!desktopInvoke) {
-    throw new Error("此操作需要在 Hope 桌面应用中使用。");
+    throw desktopRequiredError(command);
   }
 
   return invokeDesktopCommand<T>(desktopInvoke, command, payload);
@@ -1163,7 +1160,10 @@ export async function loadExportValidationSnapshot(project_id = DEFAULT_PROJECT_
 }
 
 export async function expandScript(request: ExpandScriptRequest) {
-  const raw = await invokeHopeCommand<unknown>(HOPE_TAURI_COMMANDS.expandScript, request);
+  const raw = await invokeRequiredDesktopCommand<unknown>(
+    HOPE_TAURI_COMMANDS.expandScript,
+    request,
+  );
   return normalizeExpandScriptResponse(raw);
 }
 
@@ -1188,7 +1188,7 @@ export async function importStoryDocument() {
 }
 
 export async function generateStoryboard(request: GenerateStoryboardRequest) {
-  const raw = await invokeHopeCommand<unknown>(
+  const raw = await invokeRequiredDesktopCommand<unknown>(
     HOPE_TAURI_COMMANDS.generateStoryboard,
     request,
   );
@@ -1196,7 +1196,7 @@ export async function generateStoryboard(request: GenerateStoryboardRequest) {
 }
 
 export async function updateStoryboardRows(request: UpdateStoryboardRowsRequest) {
-  const raw = await invokeHopeCommand<unknown>(
+  const raw = await invokeRequiredDesktopCommand<unknown>(
     HOPE_TAURI_COMMANDS.updateStoryboardRows,
     request,
   );
@@ -1204,12 +1204,15 @@ export async function updateStoryboardRows(request: UpdateStoryboardRowsRequest)
 }
 
 export async function exportBundle(request: ExportBundleRequest) {
-  const raw = await invokeHopeCommand<unknown>(HOPE_TAURI_COMMANDS.exportBundle, request);
+  const raw = await invokeRequiredDesktopCommand<unknown>(
+    HOPE_TAURI_COMMANDS.exportBundle,
+    request,
+  );
   return normalizeExportBundleResponse(raw);
 }
 
 export async function saveStoryboardShotResult(request: SaveStoryboardShotResultRequest) {
-  const raw = await invokeHopeCommand<unknown>(
+  const raw = await invokeRequiredDesktopCommand<unknown>(
     HOPE_TAURI_COMMANDS.saveStoryboardShotResult,
     request,
   );
@@ -1217,7 +1220,7 @@ export async function saveStoryboardShotResult(request: SaveStoryboardShotResult
 }
 
 export async function listStoryboardShotResults(request: ListStoryboardShotResultsRequest) {
-  const raw = await invokeHopeCommand<unknown>(
+  const raw = await invokeRequiredDesktopCommand<unknown>(
     HOPE_TAURI_COMMANDS.listStoryboardShotResults,
     request,
   );
@@ -1227,7 +1230,7 @@ export async function listStoryboardShotResults(request: ListStoryboardShotResul
 export async function updateStoryboardShotResult(
   request: UpdateStoryboardShotResultRequest,
 ) {
-  const raw = await invokeHopeCommand<unknown>(
+  const raw = await invokeRequiredDesktopCommand<unknown>(
     HOPE_TAURI_COMMANDS.updateStoryboardShotResult,
     request,
   );
@@ -1237,7 +1240,7 @@ export async function updateStoryboardShotResult(
 export async function removeStoryboardShotResult(
   request: RemoveStoryboardShotResultRequest,
 ) {
-  const raw = await invokeHopeCommand<unknown>(
+  const raw = await invokeRequiredDesktopCommand<unknown>(
     HOPE_TAURI_COMMANDS.removeStoryboardShotResult,
     request,
   );
@@ -1245,7 +1248,7 @@ export async function removeStoryboardShotResult(
 }
 
 export async function exportStoryboardBank(request: ExportStoryboardBankRequest) {
-  const raw = await invokeHopeCommand<unknown>(
+  const raw = await invokeRequiredDesktopCommand<unknown>(
     HOPE_TAURI_COMMANDS.exportStoryboardBank,
     request,
   );
@@ -1275,9 +1278,17 @@ export async function copyExportArtifactToPath(sourcePath: string, targetPath: s
 export async function configureTextModelProvider(
   request: ConfigureTextModelProviderRequest,
 ) {
-  const raw = await invokeHopeCommand<unknown>(
+  const raw = await invokeRequiredDesktopCommand<unknown>(
     HOPE_TAURI_COMMANDS.configureTextModelProvider,
     request,
+  );
+  return normalizeTextModelProviderStatus(raw);
+}
+
+export async function getTextModelProviderStatus() {
+  const raw = await invokeRequiredDesktopCommand<unknown>(
+    HOPE_TAURI_COMMANDS.getTextModelProviderStatus,
+    undefined,
   );
   return normalizeTextModelProviderStatus(raw);
 }

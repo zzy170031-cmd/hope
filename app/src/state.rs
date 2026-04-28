@@ -11,11 +11,11 @@ use core_domain::{
     KbGoldenSampleRuntimePackage,
 };
 use project_store::{
-    DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeError, KbRuntimeHandle, StoreSkeleton,
     load_kb_golden_sample_runtime_package, load_kb_knowledge_bundle, load_kb_runtime,
+    DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeError, KbRuntimeHandle, StoreSkeleton,
 };
 use serde::Serialize;
-use validators::{Week3SharedFixture, load_week3_shared_fixture};
+use validators::{load_week3_shared_fixture, Week3SharedFixture};
 
 pub const DEFAULT_HOPE_KB_SNAPSHOT_PATH: &str = "E:/codex/hope-kb/snapshots/hope-kb-v0.1.sqlite3";
 pub const DEFAULT_HOPE_DB_PATH: &str = "E:/codex/hope/data/hope.sqlite3";
@@ -222,15 +222,19 @@ impl TextModelProviderSessionConfig {
             && api_key_present;
         let (status, message) = if self.provider != "qwen" {
             ("reserved", "该模型接口为预留状态，当前未启用真实调用。")
-        } else if !model_present || !base_url_present || !api_key_present {
-            (
-                "unconfigured",
-                "千问：未配置，缺少 model/base_url/API Key 中的一项。",
-            )
+        } else if !model_present {
+            ("api_config_unsaved", "API 配置未保存：缺少 model。")
+        } else if !base_url_present {
+            ("base_url_missing", "API 配置未保存：base_url 缺失。")
         } else if !self.enabled {
             (
-                "configured_disabled",
-                "千问：已配置未启用，当前仍使用本地候选结果。",
+                "provider_disabled",
+                "provider 未启用，当前仍使用本地候选结果。",
+            )
+        } else if !api_key_present {
+            (
+                "session_key_missing",
+                "session-only key 已失效或缺失，请重新输入 API Key 后保存。",
             )
         } else {
             (
@@ -242,6 +246,7 @@ impl TextModelProviderSessionConfig {
         TextModelProviderStatus {
             provider: self.provider.clone(),
             model: self.model.clone(),
+            base_url: self.base_url.clone(),
             enabled: self.enabled,
             base_url_present,
             api_key_present,
@@ -495,7 +500,15 @@ impl AppState {
         &self,
         request: ConfigureTextModelProviderRequest,
     ) -> TextModelProviderStatus {
-        let config = TextModelProviderSessionConfig::from_request(request);
+        let mut config = TextModelProviderSessionConfig::from_request(request);
+        if config.api_key.is_none() && config.api_key_ref.is_none() {
+            if let Some(current) = self.text_model_provider_session_config() {
+                if current.provider == config.provider {
+                    config.api_key = current.api_key;
+                    config.api_key_ref = current.api_key_ref;
+                }
+            }
+        }
         let status = config.to_status();
         self.text_model_provider_session
             .lock()
@@ -509,6 +522,27 @@ impl AppState {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    pub fn text_model_provider_status(&self) -> TextModelProviderStatus {
+        self.text_model_provider_session_config()
+            .map(|config| config.to_status())
+            .unwrap_or_else(default_text_model_provider_status)
+    }
+}
+
+fn default_text_model_provider_status() -> TextModelProviderStatus {
+    TextModelProviderStatus {
+        provider: "qwen".to_string(),
+        model: "qwen-plus".to_string(),
+        base_url: Some("https://dashscope.aliyuncs.com/compatible-mode/v1".to_string()),
+        enabled: false,
+        base_url_present: true,
+        api_key_present: false,
+        live_ready: false,
+        status: "api_config_unsaved".to_string(),
+        message: "API 配置未保存，请在桌面壳内保存 session-only API 配置。".to_string(),
+        storage: "session-only".to_string(),
     }
 }
 
@@ -592,7 +626,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::{AppState, DEFAULT_DESKTOP_SHARED_FIXTURE_PATH, load_desktop_shared_fixture};
+    use super::{load_desktop_shared_fixture, AppState, DEFAULT_DESKTOP_SHARED_FIXTURE_PATH};
 
     #[test]
     fn load_from_paths_builds_app_state_from_kb_runtime_assets() {
@@ -712,11 +746,9 @@ mod tests {
             .expect_err("missing shared source should fail at panel load time");
 
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
-        assert!(
-            error
-                .to_string()
-                .contains(&missing_fixture_path.display().to_string())
-        );
+        assert!(error
+            .to_string()
+            .contains(&missing_fixture_path.display().to_string()));
 
         fs::remove_dir_all(repo_root).expect("temp repo root should be removable");
     }

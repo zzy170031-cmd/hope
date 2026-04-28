@@ -7,22 +7,21 @@ use core_domain::{
     UpdateStoryboardShotResultResponse,
 };
 use hope_app::{
-    desktop_bridge::{DesktopInvokeRequest, DesktopInvokeResponse, invoke_desktop_command},
+    desktop_bridge::{invoke_desktop_command, DesktopInvokeRequest, DesktopInvokeResponse},
     ipc::{
-        CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND, ConfigureTextModelProviderRequest,
-        EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, EXPORT_STORYBOARD_BANK_COMMAND,
-        ExpandScriptRequest, ExportBundleRequest, ExportStoryboardBankRequest,
-        GENERATE_STORYBOARD_COMMAND, GenerateStoryboardRequest,
-        LIST_STORYBOARD_SHOT_RESULTS_COMMAND, ListStoryboardShotResultsRequest,
-        PROJECT_CREATE_OR_SWITCH_COMMAND, ProjectCreateOrSwitchRequest,
-        REMOVE_STORYBOARD_SHOT_RESULT_COMMAND, RemoveStoryboardShotResultRequest,
-        SAVE_STORYBOARD_SHOT_RESULT_COMMAND, STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
+        ConfigureTextModelProviderRequest, ExpandScriptRequest, ExportBundleRequest,
+        ExportStoryboardBankRequest, GenerateStoryboardRequest, ListStoryboardShotResultsRequest,
+        ProjectCreateOrSwitchRequest, RemoveStoryboardShotResultRequest,
         SaveStoryboardShotResultRequest, StoryboardRenderSegmentCutPreviewSnapshotRequest,
-        TextModelProviderStatus, UPDATE_STORYBOARD_ROWS_COMMAND,
-        UPDATE_STORYBOARD_SHOT_RESULT_COMMAND, UpdateStoryboardRowsRequest,
-        UpdateStoryboardShotResultRequest, VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND,
-        ValidationExportPanelSnapshotRequest, WRITER_ENTRY_SNAPSHOT_COMMAND,
-        WriterEntrySnapshotRequest,
+        TextModelProviderStatus, UpdateStoryboardRowsRequest, UpdateStoryboardShotResultRequest,
+        ValidationExportPanelSnapshotRequest, WriterEntrySnapshotRequest,
+        CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND, EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND,
+        EXPORT_STORYBOARD_BANK_COMMAND, GENERATE_STORYBOARD_COMMAND,
+        GET_TEXT_MODEL_PROVIDER_STATUS_COMMAND, LIST_STORYBOARD_SHOT_RESULTS_COMMAND,
+        PROJECT_CREATE_OR_SWITCH_COMMAND, REMOVE_STORYBOARD_SHOT_RESULT_COMMAND,
+        SAVE_STORYBOARD_SHOT_RESULT_COMMAND, STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
+        UPDATE_STORYBOARD_ROWS_COMMAND, UPDATE_STORYBOARD_SHOT_RESULT_COMMAND,
+        VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND, WRITER_ENTRY_SNAPSHOT_COMMAND,
     },
     runtime::{
         ProjectCreateOrSwitchSnapshot, StoryboardRenderSegmentCutPreviewSnapshot,
@@ -90,6 +89,7 @@ fn run_native_host() {
             remove_storyboard_shot_result,
             export_storyboard_bank,
             configure_text_model_provider,
+            get_text_model_provider_status,
             import_story_document,
             select_export_save_path,
             copy_export_artifact_to_path
@@ -321,6 +321,21 @@ fn configure_text_model_provider(
 }
 
 #[tauri::command]
+fn get_text_model_provider_status() -> Result<TextModelProviderStatus, String> {
+    match invoke_desktop_command(
+        GET_TEXT_MODEL_PROVIDER_STATUS_COMMAND,
+        DesktopInvokeRequest::GetTextModelProviderStatus,
+    )
+    .map_err(|error| error.to_string())?
+    {
+        DesktopInvokeResponse::GetTextModelProviderStatus(response) => Ok(response),
+        _ => {
+            Err("desktop invoke returned an unexpected model provider status response".to_string())
+        }
+    }
+}
+
+#[tauri::command]
 fn import_story_document() -> Result<Option<ImportedStoryDocument>, String> {
     let script = r#"
 $ErrorActionPreference = 'Stop'
@@ -456,7 +471,9 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
 }
 
 #[tauri::command]
-fn copy_export_artifact_to_path(request: CopyExportArtifactToPathRequest) -> Result<String, String> {
+fn copy_export_artifact_to_path(
+    request: CopyExportArtifactToPathRequest,
+) -> Result<String, String> {
     let source = PathBuf::from(request.source_path);
     let target = ensure_xlsx_extension(PathBuf::from(request.target_path));
 
@@ -473,8 +490,7 @@ fn copy_export_artifact_to_path(request: CopyExportArtifactToPathRequest) -> Res
         return Ok(target.display().to_string());
     }
 
-    fs::copy(&source, &target)
-        .map_err(|error| format!("复制 Excel 到选择路径失败：{error}"))?;
+    fs::copy(&source, &target).map_err(|error| format!("复制 Excel 到选择路径失败：{error}"))?;
     Ok(target.display().to_string())
 }
 

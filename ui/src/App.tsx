@@ -8,6 +8,8 @@ import {
   exportBundle as invokeExportBundle,
   exportStoryboardBank as invokeExportStoryboardBank,
   generateStoryboard as invokeGenerateStoryboard,
+  getHopeBridgeStatus,
+  getTextModelProviderStatus,
   importStoryDocument as invokeImportStoryDocument,
   listStoryboardShotResults as invokeListStoryboardShotResults,
   removeStoryboardShotResult as invokeRemoveStoryboardShotResult,
@@ -272,12 +274,14 @@ const DEFAULT_MODEL_CONFIG: ModelConfigState = {
 const DEFAULT_MODEL_PROVIDER_STATUS: TextModelProviderStatus = {
   provider: "qwen",
   model: MODEL_DEFAULTS.qwen.model,
+  base_url: MODEL_DEFAULTS.qwen.baseUrl,
+  baseUrl: MODEL_DEFAULTS.qwen.baseUrl,
   enabled: false,
   base_url_present: true,
   api_key_present: false,
   live_ready: false,
-  status: "unconfigured",
-  message: "千问：未配置，请在 API 接口中输入 API Key 并保存。本次会话有效。",
+  status: "api_config_unsaved",
+  message: "API 配置未保存，请在 Tauri 桌面壳内保存 session-only API 配置。",
   storage: "session-only",
 };
 
@@ -366,6 +370,7 @@ export function App() {
   const [modelProviderStatus, setModelProviderStatus] = useState<TextModelProviderStatus>(
     DEFAULT_MODEL_PROVIDER_STATUS,
   );
+  const [bridgeStatus] = useState(() => getHopeBridgeStatus());
   const [selectedScene, setSelectedScene] = useState<SceneFusionOption>(DEFAULT_SCENE);
   const [synopsis, setSynopsis] = useState(DEFAULT_SYNOPSIS);
   const [expandedScript, setExpandedScript] = useState("");
@@ -602,6 +607,9 @@ export function App() {
   const pageTokens = useMemo(() => buildPageTokens(pageCount, currentPage), [pageCount, currentPage]);
   const sceneOptionGroups = useMemo(() => groupSceneOptions(SCENE_OPTIONS), []);
   const selectedModelLabel = useMemo(() => resolveModelLabel(modelConfig.provider), [modelConfig.provider]);
+  const desktopRuntimeAvailable = bridgeStatus.mode === "desktop";
+  const desktopRuntimeTone = desktopRuntimeAvailable ? "enabled" : "reserved";
+  const desktopRuntimeLabel = desktopRuntimeAvailable ? "Tauri 桌面壳" : "非桌面壳不可验收";
   const modelReservedWarning = modelConfig.provider === "qwen"
     ? ""
     : "该模型接口已配置为预留状态，当前仍使用本地文本生成桥接。";
@@ -628,6 +636,82 @@ export function App() {
     () => formatModelProviderStatus(modelConfig, modelProviderStatus),
     [modelConfig, modelProviderStatus],
   );
+  const modelRuntimeTone = useMemo(
+    () => formatModelProviderStatusTone(modelProviderStatus),
+    [modelProviderStatus],
+  );
+
+  const applyProviderStatusToUi = (status: TextModelProviderStatus) => {
+    const provider = normalizeWorkbenchModelId(status.provider);
+    const defaultModel = MODEL_DEFAULTS[provider].model;
+    const statusBaseUrl = (status.base_url ?? status.baseUrl ?? "").trim();
+    const nextConfig: ModelConfigState = {
+      provider,
+      model: status.model.trim() || defaultModel,
+      baseUrl: statusBaseUrl || (status.base_url_present ? MODEL_DEFAULTS[provider].baseUrl : ""),
+      apiKeyRef: provider === modelConfig.provider ? modelConfig.apiKeyRef : "",
+      enabled: provider === "qwen" && status.enabled,
+      apiKeyPresent: status.api_key_present,
+    };
+    setSelectedModel(provider);
+    setModelConfig(nextConfig);
+    setModelConfigDraft((current) => ({
+      ...nextConfig,
+      apiKeyRef: provider === current.provider ? current.apiKeyRef : nextConfig.apiKeyRef,
+      apiKeyInput: "",
+    }));
+    setModelProviderStatus({ ...status, provider });
+  };
+
+  const requireDesktopRuntime = (operation: string) => {
+    if (desktopRuntimeAvailable) {
+      return true;
+    }
+    setModelProviderStatus({
+      ...DEFAULT_MODEL_PROVIDER_STATUS,
+      status: "not_desktop",
+      live_ready: false,
+      message: "未在桌面壳内运行，非 Tauri 环境不可验收。",
+    });
+    setExportMessage(`${operation} 需要 Tauri 桌面壳真实 IPC；当前为非桌面壳不可验收。`);
+    return false;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!desktopRuntimeAvailable) {
+      setModelProviderStatus({
+        ...DEFAULT_MODEL_PROVIDER_STATUS,
+        status: "not_desktop",
+        live_ready: false,
+        message: "未在桌面壳内运行，非 Tauri 环境不可验收。",
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    getTextModelProviderStatus()
+      .then((status) => {
+        if (!cancelled) {
+          applyProviderStatusToUi(status);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setModelProviderStatus({
+            ...DEFAULT_MODEL_PROVIDER_STATUS,
+            status: "api_config_unsaved",
+            live_ready: false,
+            message: `API 配置未保存或状态读取失败：${formatProductError(error)}`,
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopRuntimeAvailable]);
 
   useEffect(() => {
     setTaskQueuePage((value) => Math.min(value, taskQueuePageCount));
@@ -856,10 +940,10 @@ export function App() {
       enabled: false,
       live_ready: false,
       api_key_present: provider === modelConfig.provider && modelProviderStatus.api_key_present,
-      status: provider === "qwen" ? "unconfigured" : "reserved",
+      status: provider === "qwen" ? "api_config_unsaved" : "reserved",
       message:
         provider === "qwen"
-          ? "千问：未配置，请在 API 接口中保存本次会话 Key。"
+          ? "API 配置未保存，请在 Tauri 桌面壳内保存 session-only API 配置。"
           : "该模型接口为预留状态，当前未启用真实调用。",
     });
     setExportMessage(
@@ -894,6 +978,9 @@ export function App() {
 
   const handleSaveModelConfig = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!requireDesktopRuntime("API 配置保存")) {
+      return;
+    }
     const provider = modelConfigDraft.provider;
     const apiKeyRef = normalizeApiKeyRef(modelConfigDraft.apiKeyRef);
     const hadRawValueInRef = modelConfigDraft.apiKeyRef.trim().length > 0 && !apiKeyRef;
@@ -913,10 +1000,11 @@ export function App() {
         api_key_ref: apiKeyRef || null,
         enabled: requestedEnabled,
       });
+      const statusBaseUrl = (status.base_url ?? status.baseUrl ?? "").trim();
       const nextConfig: ModelConfigState = {
         provider,
         model: status.model || requestedModel,
-        baseUrl: requestedBaseUrl,
+        baseUrl: statusBaseUrl || requestedBaseUrl,
         apiKeyRef,
         enabled: status.enabled,
         apiKeyPresent: status.api_key_present,
@@ -1175,6 +1263,9 @@ export function App() {
     if (bridgeBusy) {
       return;
     }
+    if (!requireDesktopRuntime("扩写故事")) {
+      return;
+    }
     if (!confirmDiscardDirty("扩写故事")) {
       return;
     }
@@ -1247,6 +1338,9 @@ export function App() {
 
   const handleExpandScript = async () => {
     if (bridgeBusy) {
+      return;
+    }
+    if (!requireDesktopRuntime(sourceInputAnalysis.actionLabel)) {
       return;
     }
     if (!confirmDiscardDirty(sourceInputAnalysis.actionLabel)) {
@@ -1597,6 +1691,9 @@ export function App() {
 
   const handleGenerate = async () => {
     if (bridgeBusy) {
+      return;
+    }
+    if (!requireDesktopRuntime("开始生成")) {
       return;
     }
     if (!canGenerate) {
@@ -2289,7 +2386,7 @@ export function App() {
     : {
         label: "开始生成",
         onClick: handleGenerate,
-        disabled: bridgeBusy !== null || !canGenerate,
+        disabled: !desktopRuntimeAvailable || bridgeBusy !== null || !canGenerate,
       };
 
   return (
@@ -2320,10 +2417,13 @@ export function App() {
                 <small className="top-select__meta">
                   {selectedModelLabel} · {modelConfig.model}
                 </small>
-                <small className={`top-select__status top-select__status--${modelProviderStatus.status}`}>
+                <small className={`top-select__status top-select__status--${modelRuntimeTone}`}>
                   {modelRuntimeLabel}
                 </small>
               </label>
+              <span className={`top-select__status top-select__status--${desktopRuntimeTone}`}>
+                {desktopRuntimeLabel}
+              </span>
               <button
                 type="button"
                 className={activePanel === "docs" ? "toolbar-button toolbar-button--active" : "toolbar-button"}
@@ -2375,7 +2475,7 @@ export function App() {
               ) : (
                 <form className="api-config" onSubmit={handleSaveModelConfig}>
                   <div className="api-config__notice">
-                    当前只启用千问文本生成配置；API Key 仅保存在本次桌面会话中。未配置或调用失败时会自动使用本地候选结果。
+                    当前只启用千问文本生成配置；API Key 仅保存在本次桌面会话中。关键验收必须在 Tauri 桌面壳内完成。
                   </div>
                   <div className="api-config__rows">
                     <div className="api-config__row api-config__row--primary">
@@ -2454,12 +2554,16 @@ export function App() {
                         />
                         <span>启用当前模型</span>
                       </label>
-                      <button type="submit" className="action-button action-button--dark">
+                      <button
+                        type="submit"
+                        className="action-button action-button--dark"
+                        disabled={!desktopRuntimeAvailable}
+                      >
                         保存配置
                       </button>
                     </div>
                     <div className="api-config__summary">
-                      当前状态：{modelRuntimeLabel}。API Key 不会显示明文；调用失败时会使用本地候选结果。
+                      当前状态：{desktopRuntimeLabel} · {modelRuntimeLabel}。API Key 不会显示明文；调用失败时会使用本地候选结果。
                       {modelConfigDraft.provider !== "qwen" ? (
                         <strong>该模型接口为预留状态，当前未启用真实调用。</strong>
                       ) : null}
@@ -2544,7 +2648,7 @@ export function App() {
                   type="button"
                   className="action-button action-button--dark"
                   onClick={handleExpandStory}
-                  disabled={bridgeBusy !== null || !synopsis.trim()}
+                  disabled={!desktopRuntimeAvailable || bridgeBusy !== null || !synopsis.trim()}
                 >
                   {bridgeBusy === "expand" ? "扩写中" : "扩写故事"}
                 </button>
@@ -2552,7 +2656,7 @@ export function App() {
                   type="button"
                   className="action-button action-button--dark"
                   onClick={handleExpandScript}
-                  disabled={bridgeBusy !== null || !synopsis.trim()}
+                  disabled={!desktopRuntimeAvailable || bridgeBusy !== null || !synopsis.trim()}
                 >
                   {bridgeBusy === "expand" ? "处理中" : sourceInputAnalysis.actionLabel}
                 </button>
@@ -2655,7 +2759,7 @@ export function App() {
                 type="button"
                 className="action-button action-button--danger"
                 onClick={handleGenerate}
-                disabled={!canGenerate || bridgeBusy !== null}
+                disabled={!desktopRuntimeAvailable || !canGenerate || bridgeBusy !== null}
               >
                 {bridgeBusy === "generate" ? "生成中" : "开始生成"}
               </button>
@@ -3540,6 +3644,10 @@ function resolveModelLabel(value: WorkbenchModelId) {
   return MODEL_OPTIONS.find((option) => option.value === value)?.label ?? value;
 }
 
+function normalizeWorkbenchModelId(value: string): WorkbenchModelId {
+  return value === "doubao" || value === "custom" ? value : "qwen";
+}
+
 function buildModelConfigSummary(
   config: ModelConfigState,
   status: TextModelProviderStatus,
@@ -4123,22 +4231,44 @@ function formatModelProviderStatus(
   config: ModelConfigState,
   status: TextModelProviderStatus,
 ) {
+  if (status.status === "not_desktop") {
+    return "非桌面壳不可验收";
+  }
   if (config.provider !== "qwen") {
     return "预留，当前未启用";
   }
   if (status.status === "fallback") {
-    return "千问：调用失败已回退";
+    return "live call 失败进入 fallback";
+  }
+  if (status.status === "api_config_unsaved" || status.status === "unconfigured") {
+    return "API 配置未保存";
+  }
+  if (status.status === "session_key_missing") {
+    return "session-only key 已失效或缺失";
+  }
+  if (status.status === "provider_disabled" || status.status === "configured_disabled") {
+    return "provider 未启用";
+  }
+  if (status.status === "base_url_missing") {
+    return "base_url 缺失";
   }
   if (status.live_ready) {
     return "千问：已启用";
-  }
-  if (status.enabled && !status.live_ready) {
-    return "千问：未配置";
   }
   if (status.api_key_present || status.base_url_present) {
     return "千问：已配置未启用";
   }
   return "千问：未配置";
+}
+
+function formatModelProviderStatusTone(status: TextModelProviderStatus) {
+  if (status.status === "enabled" && status.live_ready) {
+    return "enabled";
+  }
+  if (status.status === "reserved" || status.status === "not_desktop") {
+    return "reserved";
+  }
+  return "unconfigured";
 }
 
 function hasTextModelFallback(warnings: ProductWarning[]) {
