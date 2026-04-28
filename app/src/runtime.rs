@@ -150,6 +150,21 @@ struct ShotGroundedRowDraft {
     scene_performance_projection: ScenePerformanceProjection,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SceneEntryMapping {
+    desktop_entry: &'static str,
+    chinese_label: &'static str,
+    runtime_scene_family: &'static str,
+    canonical_bucket: &'static str,
+    aliases: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CurrentShotFactAnchor {
+    source: String,
+    subject: String,
+}
+
 const STORYBOARD_DURATION_SOURCE: &str = "storyboard_duration_plan.allocated_row_duration_seconds";
 const DEFAULT_EXPAND_SCRIPT_DURATION_SECONDS: u16 = 30;
 const SEEDANCE_STANDARD_SEGMENT_SECONDS: u16 = 10;
@@ -165,6 +180,157 @@ const TARGET_DURATION_MODE_FIXED_SECONDS: &str = "fixed_seconds";
 const TARGET_DURATION_MODE_LONG_TEXT_AUTO: &str = "long_text_auto";
 const AUTO_SEGMENT_STRATEGY_FIXED_SECONDS: &str = "fixed_seconds_seedance_grid";
 const AUTO_SEGMENT_STRATEGY_LONG_TEXT: &str = "long_text_auto_story_fact_segments";
+const MVP_SCENE_CANONICAL_BUCKET: &str = "daily_dialogue";
+
+const RUNTIME_SCENE_ENTRY_MAPPINGS: &[SceneEntryMapping] = &[
+    SceneEntryMapping {
+        desktop_entry: "hot_blood_battle",
+        chinese_label: "热血战斗",
+        runtime_scene_family: "action_beat",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &["action_beat"],
+    },
+    SceneEntryMapping {
+        desktop_entry: "ensemble_performance",
+        chinese_label: "群像表演",
+        runtime_scene_family: "group_performance",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &["group_performance"],
+    },
+    SceneEntryMapping {
+        desktop_entry: "emotional_dialogue",
+        chinese_label: "情绪对话",
+        runtime_scene_family: "dialogue_beat",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &["dialogue_beat"],
+    },
+    SceneEntryMapping {
+        desktop_entry: "encounter_performance",
+        chinese_label: "相遇表演",
+        runtime_scene_family: "encounter_performance",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &[],
+    },
+    SceneEntryMapping {
+        desktop_entry: "field_chase",
+        chinese_label: "场域追逐",
+        runtime_scene_family: "field_chase",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &[],
+    },
+    SceneEntryMapping {
+        desktop_entry: "spectacle_showcase",
+        chinese_label: "奇观展示",
+        runtime_scene_family: "spectacle_showcase",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &[],
+    },
+    SceneEntryMapping {
+        desktop_entry: "daily_healing",
+        chinese_label: "日常治愈",
+        runtime_scene_family: "healing_daily",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &["healing_daily"],
+    },
+    SceneEntryMapping {
+        desktop_entry: "guoman_hot_blood_combat",
+        chinese_label: "国漫热血打斗",
+        runtime_scene_family: "guoman_action",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &["guoman_action"],
+    },
+    SceneEntryMapping {
+        desktop_entry: "guoman_ensemble_performance",
+        chinese_label: "国漫群像表演",
+        runtime_scene_family: "guoman_group",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &["guoman_group"],
+    },
+    SceneEntryMapping {
+        desktop_entry: "ink_wuxia_combat",
+        chinese_label: "水墨武打",
+        runtime_scene_family: "ink_action",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &["ink_action"],
+    },
+    SceneEntryMapping {
+        desktop_entry: "eastern_spectacle",
+        chinese_label: "东方奇观",
+        runtime_scene_family: "eastern_spectacle",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &[],
+    },
+    SceneEntryMapping {
+        desktop_entry: "xianxia_action",
+        chinese_label: "仙侠动作",
+        runtime_scene_family: "xianxia_action",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &[],
+    },
+    SceneEntryMapping {
+        desktop_entry: "urban_fantasy",
+        chinese_label: "都市奇幻",
+        runtime_scene_family: "urban_fantasy",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &[],
+    },
+    SceneEntryMapping {
+        desktop_entry: "chinese_war_formation",
+        chinese_label: "国战军阵建立",
+        runtime_scene_family: "nation_war_establishing",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &["nation_war_establishing", "war_formation"],
+    },
+    SceneEntryMapping {
+        desktop_entry: "weapon_highlight",
+        chinese_label: "武将兵器高光",
+        runtime_scene_family: "weapon_highlight",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &[],
+    },
+    SceneEntryMapping {
+        desktop_entry: "council_strategy",
+        chinese_label: "朝堂军帐权谋",
+        runtime_scene_family: "court_strategy",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &["court_strategy"],
+    },
+    SceneEntryMapping {
+        desktop_entry: "siege_defense",
+        chinese_label: "多军团攻城",
+        runtime_scene_family: "siege_assault",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &["siege_assault", "multi_army_siege"],
+    },
+    SceneEntryMapping {
+        desktop_entry: "slg_sandbox_view",
+        chinese_label: "沙盘战略视口",
+        runtime_scene_family: "sandtable_overview",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &["sandtable_overview"],
+    },
+    SceneEntryMapping {
+        desktop_entry: "slg_march_encirclement",
+        chinese_label: "行军轨迹合围",
+        runtime_scene_family: "march_encirclement",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &["march_encirclement"],
+    },
+    SceneEntryMapping {
+        desktop_entry: "slg_city_growth",
+        chinese_label: "城建演进反馈",
+        runtime_scene_family: "city_build_feedback",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &["city_build_feedback"],
+    },
+    SceneEntryMapping {
+        desktop_entry: "slg_battle_report",
+        chinese_label: "战报 UI",
+        runtime_scene_family: "battle_report_ui",
+        canonical_bucket: MVP_SCENE_CANONICAL_BUCKET,
+        aliases: &["battle_report_ui"],
+    },
+];
 
 const FINALIZED_BANK_FORBIDDEN_TERMS: &[&str] = &[
     "raw prompt_body",
@@ -5325,8 +5491,20 @@ fn resolve_storyboard_grounding_context(
         ShotGroundingSource::PrimarySceneFields => primary_scene_type.clone(),
         ShotGroundingSource::KbRouterSummary => String::new(),
     };
+    let primary_scene_category = non_blank_string(
+        request
+            .primary_scene_category
+            .as_deref()
+            .unwrap_or_default(),
+    )
+    .unwrap_or_else(|| primary_scene_type.clone());
+    let scene_family_hint = runtime_scene_family_for_scene_type(&primary_scene_category)
+        .or_else(|| runtime_scene_family_for_scene_type(&primary_scene_type));
     let shot_scene_type = non_blank_string(request.shot_scene_type.as_deref().unwrap_or_default())
-        .unwrap_or_else(|| infer_shot_scene_type(&grounding_text, &primary_scene_type));
+        .unwrap_or_else(|| {
+            let scene_family_base = scene_family_hint.as_deref().unwrap_or(&primary_scene_type);
+            infer_shot_scene_type(&grounding_text, scene_family_base)
+        });
     let adaptation_reason = non_blank_string(
         request.adaptation_reason.as_deref().unwrap_or_default(),
     )
@@ -5348,14 +5526,12 @@ fn resolve_storyboard_grounding_context(
         primary_scene_label: non_blank_string(
             request.primary_scene_label.as_deref().unwrap_or_default(),
         )
-        .unwrap_or_else(|| derive_shot_scene_label(&primary_scene_type)),
-        primary_scene_category: non_blank_string(
-            request
-                .primary_scene_category
-                .as_deref()
-                .unwrap_or_default(),
-        )
-        .unwrap_or_else(|| primary_scene_type.clone()),
+        .unwrap_or_else(|| {
+            scene_label_for_scene_type(&primary_scene_type)
+                .or_else(|| scene_label_for_scene_type(&primary_scene_category))
+                .unwrap_or_else(|| derive_shot_scene_label(&primary_scene_type))
+        }),
+        primary_scene_category,
         shot_scene_label: non_blank_string(request.shot_scene_label.as_deref().unwrap_or_default())
             .unwrap_or_else(|| derive_shot_scene_label(&shot_scene_type)),
         shot_intent: non_blank_string(request.shot_intent.as_deref().unwrap_or_default())
@@ -5439,9 +5615,11 @@ fn build_shot_grounded_row_draft(
         ))[..12],
         index + 1
     );
-    let person = derive_product_person(&segment, &grounding.grounding_text);
+    let fact_anchor = derive_current_shot_fact_anchor(&segment, &grounding.grounding_text);
+    let person = fact_anchor.subject.clone();
     let scene_scale = derive_shot_scene_scale(&segment);
-    let character_action = derive_character_action_from_story(&segment, &grounding.grounding_text);
+    let character_action =
+        derive_character_action_from_anchor(&segment, &grounding.grounding_text, &fact_anchor);
     let shot_title = derive_shot_title(index, &segment, &person, &character_action);
     let dialogue = extract_dialogue_from_story(&segment);
     let visual_description = build_visual_description_from_story(
@@ -5456,7 +5634,7 @@ fn build_shot_grounded_row_draft(
         &segment,
         &scene_scale,
         &visual_description,
-        &character_action,
+        &fact_anchor.subject,
     );
     let sequence_grouping = SequenceGrouping {
         structure_mode: StructureMode::SingleShot,
@@ -5625,6 +5803,9 @@ fn derive_shot_scene_label(scene_type: &str) -> String {
         "dialogue_beat" => "对白反应镜头".to_string(),
         "daily_dialogue" => "日常对白".to_string(),
         value if value.trim().is_empty() => "未指定场景".to_string(),
+        value if scene_label_for_scene_type(value).is_some() => {
+            scene_label_for_scene_type(value).unwrap_or_else(|| value.to_string())
+        }
         value => value.to_string(),
     }
 }
@@ -5803,6 +5984,7 @@ fn detect_narrative_character_name_at(chars: &[char], start: usize) -> Option<(S
         if (!narrative_name_boundary_is_valid(before, after)
             && !candidate_followed_by_dialogue_attribution(chars, end))
             || looks_like_quoted_dialogue_fragment(before, after, &candidate)
+            || looks_like_name_noise_candidate(&candidate)
             || looks_like_non_character_phrase(&candidate)
         {
             continue;
@@ -6161,7 +6343,23 @@ fn subject_is_non_character_anchor(subject: &str) -> bool {
         || subject == "无"
 }
 
+fn derive_current_shot_fact_anchor(segment: &str, full_text: &str) -> CurrentShotFactAnchor {
+    let source = if segment.trim().is_empty() {
+        full_text.trim()
+    } else {
+        segment.trim()
+    };
+    CurrentShotFactAnchor {
+        source: source.to_string(),
+        subject: derive_fact_subject_label(segment, full_text),
+    }
+}
+
 fn derive_product_person(segment: &str, full_text: &str) -> String {
+    derive_fact_subject_label(segment, full_text)
+}
+
+fn derive_fact_subject_label(segment: &str, full_text: &str) -> String {
     let segment_registry = CharacterRegistry::from_story_text(segment, segment);
     if !segment_registry.is_empty() {
         let active_names = segment_registry.names_in_text(segment);
@@ -6600,6 +6798,16 @@ fn derive_visual_event_clause(source: &str, subject: &str) -> String {
         format!("当前视觉事件是{subject}把信号镜压进锈蚀护栏接缝，镜面反光被稳稳留在落点")
     } else if contains_any_story_term(source, &["重逢"]) {
         format!("当前视觉事件是{subject}在断裂边缘重新并肩，视线和站位同时重新对上")
+    } else if contains_any_story_term(source, &["单膝跪", "跪在", "跪下"]) {
+        if contains_any_story_term(source, &["脚步声", "步声"]) {
+            format!("当前视觉事件是{subject}在坍塌阴影下单膝跪住，脚步声从画外逼近并压住停顿")
+        } else {
+            format!("当前视觉事件是{subject}单膝跪下并把重心压稳，画面停在动作落点")
+        }
+    } else if contains_any_story_term(source, &["烟尘"])
+        && contains_any_story_term(source, &["踏出", "侧身", "疾避"])
+    {
+        format!("当前视觉事件是烟尘中有人踏出，主角侧身避开冲击线，双方位置在焦土边缘错开")
     } else if contains_any_story_term(source, &["护住", "护着", "回身"]) {
         format!("当前视觉事件是{subject}回身挡住来势，身体横切进对冲路线")
     } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
@@ -6645,17 +6853,17 @@ fn derive_visual_focus_clause(source: &str, shot_intent: &str) -> String {
     }
 }
 
-fn derive_character_action_from_story(segment: &str, full_text: &str) -> String {
-    let source = if segment.trim().is_empty() {
-        full_text
-    } else {
-        segment
-    };
+fn derive_character_action_from_anchor(
+    _segment: &str,
+    full_text: &str,
+    fact_anchor: &CurrentShotFactAnchor,
+) -> String {
+    let source = fact_anchor.source.as_str();
     let registry = CharacterRegistry::from_story_text(source, source);
-    let subject = derive_product_person(source, full_text);
-    let target = derive_action_target(&registry, &subject, source, full_text);
+    let subject = fact_anchor.subject.as_str();
+    let target = derive_action_target(&registry, subject, source, full_text);
     let start_state = derive_action_start_state(source);
-    let action = derive_visible_action(source, &subject, &target);
+    let action = derive_visible_action(source, subject, &target);
     let end_state = derive_action_end_state(source);
     let captured_moment = derive_captured_moment(source);
 
@@ -6681,10 +6889,9 @@ fn derive_camera_movement_from_story(
     shot_script: &str,
     scene_scale: &str,
     visual_description: &str,
-    character_action: &str,
+    subject: &str,
 ) -> String {
-    let evidence = format!("{shot_script}\n{visual_description}\n{character_action}");
-    let subject = character_action_subject(character_action);
+    let evidence = format!("{shot_script}\n{visual_description}");
     if contains_any_story_term(&evidence, &["海平线", "海面", "海浪", "浪声", "清晨微光"]) {
         format!("{scene_scale}远景定机位建立海平线与海面层次，保留浪声推动的持续起伏")
     } else if contains_any_story_term(&evidence, &["光斑", "光束", "舷窗", "薄雾"]) {
@@ -6701,6 +6908,12 @@ fn derive_camera_movement_from_story(
         format!("{scene_scale}缓慢上摇，跟住{subject}抬起动作的发力线")
     } else if contains_any_story_term(&evidence, &["后撤", "震退", "退开"]) {
         format!("{scene_scale}跟随{subject}后撤半步，稳住动作对象和空间距离")
+    } else if contains_any_story_term(&evidence, &["单膝跪", "跪在", "跪下", "脚步声", "步声"]) {
+        format!("{scene_scale}低机位稳住{subject}的跪姿和阴影空间，再把焦点压到来声方向")
+    } else if contains_any_story_term(&evidence, &["烟尘"])
+        && contains_any_story_term(&evidence, &["踏出", "侧身", "疾避"])
+    {
+        format!("{scene_scale}横移穿过烟尘边缘，交代踏出与侧身避让之间的空间错位")
     } else if contains_any_story_term(&evidence, &["掌心", "手臂", "刀柄", "手部"]) {
         format!("{scene_scale}缓慢推近{subject}手部动作，停在动作发力瞬间")
     } else if contains_any_story_term(&evidence, &["焦土", "战场", "残骸", "断桥", "城门"])
@@ -6745,7 +6958,7 @@ fn extract_character_name_after_role(text: &str) -> Option<String> {
         }
     }
 
-    (name.chars().count() >= 2).then_some(name)
+    (name.chars().count() >= 2 && !looks_like_name_noise_candidate(&name)).then_some(name)
 }
 
 fn is_character_name_stop(character: char) -> bool {
@@ -6771,7 +6984,11 @@ fn is_character_name_stop(character: char) -> bool {
                 | '及'
                 | '在'
                 | '从'
+                | '自'
+                | '于'
                 | '向'
+                | '朝'
+                | '往'
                 | '对'
                 | '被'
                 | '把'
@@ -6781,10 +6998,20 @@ fn is_character_name_stop(character: char) -> bool {
                 | '回'
                 | '稳'
                 | '抬'
+                | '跪'
+                | '膝'
+                | '疾'
+                | '避'
                 | '踏'
+                | '响'
+                | '退'
                 | '挡'
                 | '格'
                 | '冲'
+                | '侧'
+                | '身'
+                | '步'
+                | '声'
                 | '握'
                 | '站'
                 | '转'
@@ -6802,6 +7029,15 @@ fn is_character_name_stop(character: char) -> bool {
                 | '逼'
                 | '提'
                 | '劈'
+                | '烟'
+                | '尘'
+                | '桥'
+                | '影'
+                | '墙'
+                | '雾'
+                | '光'
+                | '土'
+                | '石'
                 | '后'
                 | '前'
                 | '中'
@@ -6819,6 +7055,43 @@ fn is_character_name_stop(character: char) -> bool {
                 | '的'
                 | '了'
         )
+}
+
+fn looks_like_name_noise_candidate(candidate: &str) -> bool {
+    if candidate
+        .chars()
+        .next()
+        .is_some_and(|character| matches!(character, '自' | '从' | '在' | '于' | '向' | '朝' | '往' | '被' | '把'))
+    {
+        return true;
+    }
+
+    candidate.chars().any(|character| {
+        matches!(
+            character,
+            '跪'
+                | '膝'
+                | '疾'
+                | '避'
+                | '踏'
+                | '响'
+                | '退'
+                | '冲'
+                | '侧'
+                | '身'
+                | '步'
+                | '声'
+                | '烟'
+                | '尘'
+                | '桥'
+                | '影'
+                | '墙'
+                | '雾'
+                | '光'
+                | '土'
+                | '石'
+        )
+    })
 }
 
 fn is_cjk_unified_ideograph(character: char) -> bool {
@@ -6973,7 +7246,13 @@ fn derive_action_target(
 }
 
 fn derive_action_start_state(source: &str) -> &'static str {
-    if contains_any_story_term(source, &["焦土", "裂痕", "犁痕"]) {
+    if contains_any_story_term(source, &["单膝跪", "跪在", "跪下"]) {
+        "高架桥阴影下压低重心"
+    } else if contains_any_story_term(source, &["烟尘"])
+        && contains_any_story_term(source, &["踏出", "侧身", "疾避"])
+    {
+        "烟尘边缘确认对方位置"
+    } else if contains_any_story_term(source, &["焦土", "裂痕", "犁痕"]) {
         "焦土裂痕边缘稳住身体"
     } else if contains_any_story_term(source, &["断桥", "重逢"]) {
         "断桥残口确认彼此位置"
@@ -7005,6 +7284,16 @@ fn derive_visible_action(source: &str, subject: &str, target: &str) -> String {
         format!("{subject}从紧握信号镜压低身位开始，到视线与海面方向重新锁定时收住，镜头捕捉信号镜边缘反光被手指压紧的一瞬间")
     } else if contains_any_story_term(source, &["重逢"]) {
         format!("{subject}在断桥残口向{target}靠近，确认对方安全并重新建立站位")
+    } else if contains_any_story_term(source, &["单膝跪", "跪在", "跪下"]) {
+        if contains_any_story_term(source, &["脚步声", "步声"]) {
+            format!("{subject}单膝跪在阴影下稳住身体，听见脚步声逼近后把注意力转向来声方向")
+        } else {
+            format!("{subject}单膝跪下稳住身体，把重心压低到当前停顿位置")
+        }
+    } else if contains_any_story_term(source, &["烟尘"])
+        && contains_any_story_term(source, &["踏出", "侧身", "疾避"])
+    {
+        format!("{subject}在烟尘边缘完成一进一避，敌方踏出时主角侧身让开冲击线")
     } else if contains_any_story_term(source, &["护住", "护着", "回身"]) {
         format!("{subject}回身护住{target}，用身体挡住逼近的威胁")
     } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
@@ -7037,6 +7326,12 @@ fn derive_action_end_state(source: &str) -> &'static str {
         "信号镜被压稳在手中"
     } else if contains_any_story_term(source, &["重逢"]) {
         "两人重新并肩"
+    } else if contains_any_story_term(source, &["单膝跪", "跪在", "跪下"]) {
+        "来声方向被确认"
+    } else if contains_any_story_term(source, &["烟尘"])
+        && contains_any_story_term(source, &["踏出", "侧身", "疾避"])
+    {
+        "双方位置重新错开"
     } else if contains_any_story_term(source, &["护住", "护着"]) {
         "被保护者退到安全半步"
     } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
@@ -7069,6 +7364,12 @@ fn derive_captured_moment(source: &str) -> &'static str {
         "手指压住信号镜边缘的一瞬间"
     } else if contains_any_story_term(source, &["重逢"]) {
         "两人视线重新对上的一瞬间"
+    } else if contains_any_story_term(source, &["单膝跪", "跪在", "跪下"]) {
+        "跪姿停住并听见脚步声的一瞬间"
+    } else if contains_any_story_term(source, &["烟尘"])
+        && contains_any_story_term(source, &["踏出", "侧身", "疾避"])
+    {
+        "烟尘中踏出与侧身避让交错的一瞬间"
     } else if contains_any_story_term(source, &["护住", "护着"]) {
         "身体挡住威胁的一瞬间"
     } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
@@ -7119,6 +7420,16 @@ fn derive_shot_title_action_core(segment: &str, person: &str, character_action: 
         "远处黑影贴边移动".to_string()
     } else if contains_any_story_term(segment, &["重逢"]) {
         "断桥重逢".to_string()
+    } else if contains_any_story_term(segment, &["单膝跪", "跪在", "跪下"]) {
+        if contains_any_story_term(segment, &["脚步声", "步声"]) {
+            "跪姿中的脚步声停顿".to_string()
+        } else {
+            "单膝跪下停顿".to_string()
+        }
+    } else if contains_any_story_term(segment, &["烟尘"])
+        && contains_any_story_term(segment, &["踏出", "侧身", "疾避"])
+    {
+        "烟尘踏出与侧身疾避".to_string()
     } else if contains_any_story_term(segment, &["护住", "护着", "回身"]) {
         "回身护人".to_string()
     } else if contains_any_story_term(segment, &["追杀", "压近", "逼近"]) {
@@ -8320,7 +8631,7 @@ fn build_prompt_text_compilation_request(
                 &scene_projection.fused_source_text,
                 &scene_projection.scene_scale,
                 &scene_projection.visual_description,
-                &scene_projection.character_action,
+                &scene_projection.person,
             ),
             dialogue: String::new(),
             duration_seconds,
@@ -8921,14 +9232,34 @@ pub fn resolve_scene_taxonomy(
         .cloned()
 }
 
-fn normalize_scene_type(scene_type: &str) -> String {
-    match scene_type.trim() {
-        "war_formation" | "weapon_highlight" | "council_strategy" | "slg_sandbox_view"
-        | "slg_city_growth" | "battle_report_ui" | "multi_army_siege" => {
-            "daily_dialogue".to_string()
-        }
-        other => other.to_string(),
+fn runtime_scene_option_mappings() -> &'static [SceneEntryMapping] {
+    RUNTIME_SCENE_ENTRY_MAPPINGS
+}
+
+fn resolve_scene_entry_mapping(scene_type: &str) -> Option<&'static SceneEntryMapping> {
+    let scene_type = scene_type.trim();
+    if scene_type.is_empty() {
+        return None;
     }
+    runtime_scene_option_mappings().iter().find(|mapping| {
+        mapping.desktop_entry == scene_type
+            || mapping.runtime_scene_family == scene_type
+            || mapping.aliases.iter().any(|alias| *alias == scene_type)
+    })
+}
+
+fn runtime_scene_family_for_scene_type(scene_type: &str) -> Option<String> {
+    resolve_scene_entry_mapping(scene_type).map(|mapping| mapping.runtime_scene_family.to_string())
+}
+
+fn scene_label_for_scene_type(scene_type: &str) -> Option<String> {
+    resolve_scene_entry_mapping(scene_type).map(|mapping| mapping.chinese_label.to_string())
+}
+
+fn normalize_scene_type(scene_type: &str) -> String {
+    resolve_scene_entry_mapping(scene_type)
+        .map(|mapping| mapping.canonical_bucket.to_string())
+        .unwrap_or_else(|| scene_type.trim().to_string())
 }
 
 fn build_validation_export_panel_snapshot_from_fixture(
@@ -9060,8 +9391,8 @@ mod tests {
         has_visual_environment_signal, has_visual_light_tone_or_material_signal,
         export_storyboard_bank, generate_storyboard, is_visual_description_grounding_incomplete,
         list_storyboard_shot_results, project_scene_performance, remove_storyboard_shot_result,
-        resolve_scene_taxonomy, resolve_storyboard_grounding_context, run_kb_router,
-        run_qwen_text_generation_with_transport,
+        normalize_scene_type, resolve_scene_taxonomy, resolve_storyboard_grounding_context,
+        run_kb_router, run_qwen_text_generation_with_transport, runtime_scene_option_mappings,
         run_v0_story_to_storyboard_chain, save_storyboard_rows, save_storyboard_shot_result,
         select_golden_sample_records, serialize_storyboard_rows, stable_hash_hex,
         stable_source_material_length_chars, subject_label_mentions_any_name,
@@ -9278,6 +9609,8 @@ mod tests {
             "主体人物",
             "对立人物",
             "目标人物",
+            "单膝跪与步声响",
+            "侧身疾与自烟尘",
             "not_specified_by_v120_bridge",
             "visual_scene_core",
             "fused_scene_performance_core_preserved",
@@ -9357,7 +9690,15 @@ mod tests {
     }
 
     fn assert_no_fabricated_people_terms(text: &str) {
-        for forbidden in ["对立人物", "目标人物", "主体人物", "完成关键动作"] {
+        for forbidden in [
+            "对立人物",
+            "目标人物",
+            "主体人物",
+            "完成关键动作",
+            "人物完成关键动作",
+            "单膝跪与步声响",
+            "侧身疾与自烟尘",
+        ] {
             assert!(
                 !text.contains(forbidden),
                 "unexpected fabricated term {forbidden}: {text}"
@@ -9880,21 +10221,39 @@ mod tests {
     fn resolve_scene_taxonomy_accepts_desktop_scene_type_aliases() {
         let state = test_state();
 
-        for scene_type in [
-            "war_formation",
-            "weapon_highlight",
-            "council_strategy",
-            "slg_sandbox_view",
-            "slg_city_growth",
-            "battle_report_ui",
-            "multi_army_siege",
-        ] {
-            let resolved = resolve_scene_taxonomy(&state, Some(scene_type));
+        assert_eq!(runtime_scene_option_mappings().len(), 21);
+        for mapping in runtime_scene_option_mappings() {
+            let resolved = resolve_scene_taxonomy(&state, Some(mapping.desktop_entry));
             assert_eq!(
                 resolved.as_ref().map(|item| item.scene_type.as_str()),
-                Some("daily_dialogue"),
-                "{scene_type} should resolve into the current MVP canonical bucket",
+                Some(mapping.canonical_bucket),
+                "{} should resolve into the current MVP canonical bucket",
+                mapping.desktop_entry
             );
+            assert_eq!(
+                normalize_scene_type(mapping.desktop_entry),
+                mapping.canonical_bucket,
+                "{} should normalize through the central mapping",
+                mapping.desktop_entry
+            );
+            assert!(
+                !mapping.chinese_label.trim().is_empty(),
+                "{} should carry a Chinese label",
+                mapping.desktop_entry
+            );
+            assert!(
+                !mapping.runtime_scene_family.trim().is_empty(),
+                "{} should carry a runtime scene family",
+                mapping.desktop_entry
+            );
+            for alias in mapping.aliases {
+                let resolved = resolve_scene_taxonomy(&state, Some(alias));
+                assert_eq!(
+                    resolved.as_ref().map(|item| item.scene_type.as_str()),
+                    Some(mapping.canonical_bucket),
+                    "{alias} should remain compatible with the current MVP canonical bucket",
+                );
+            }
         }
     }
 
@@ -10584,6 +10943,119 @@ mod tests {
     }
 
     #[test]
+    fn generate_storyboard_blocks_action_and_environment_phrases_from_subject_fields() {
+        let state = test_state();
+        for (task_name, shot_script, forbidden_subject) in [
+            (
+                "kneel-and-footsteps-subject-guard",
+                "主角单膝跪在坍塌的高架桥阴影下，脚步声响起。",
+                "单膝跪与步声响",
+            ),
+            (
+                "smoke-and-dodge-subject-guard",
+                "敌人自烟尘中踏出，主角侧身疾避。",
+                "侧身疾与自烟尘",
+            ),
+        ] {
+            let storyboard = generate_storyboard(
+                &state,
+                GenerateStoryboardRequest {
+                    task_name: task_name.to_string(),
+                    script_id: None,
+                    shot_script: Some(shot_script.to_string()),
+                    expanded_script_text: Some(format!(
+                        "scene_type: daily_dialogue\nsynopsis: {shot_script}"
+                    )),
+                    primary_scene_type: Some("daily_dialogue".to_string()),
+                    primary_scene_label: Some("动作事实锚定".to_string()),
+                    primary_scene_category: Some("action_beat".to_string()),
+                    shot_scene_type: None,
+                    shot_scene_label: None,
+                    shot_intent: None,
+                    adaptation_reason: None,
+                    selected_total_duration_seconds: 10,
+                },
+            );
+
+            assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
+            assert_eq!(
+                storyboard
+                    .kb_router_result
+                    .retrieval_trace
+                    .token_budget
+                    .full_kb_rows_included,
+                0
+            );
+            for row in &storyboard.rows {
+                let combined = format!(
+                    "{} {} {} {} {} {}",
+                    row.person,
+                    row.shot_title,
+                    row.camera_movement,
+                    row.visual_description,
+                    row.character_action,
+                    row.prompt_text
+                );
+                assert!(
+                    !combined.contains(forbidden_subject),
+                    "dirty subject phrase should not reach product fields: {combined}"
+                );
+                assert_storyboard_row_has_no_vague_or_internal_terms(row);
+                assert_prompt_text_has_no_internal_payload(&row.prompt_text);
+                assert!(row.dialogue.trim().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn generate_storyboard_keeps_real_names_when_actions_look_name_like() {
+        let state = test_state();
+        let shot_script = "林峰侧身疾避，叶倾颜回身护住他。";
+
+        let storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "real-name-action-guard".to_string(),
+                script_id: None,
+                shot_script: Some(shot_script.to_string()),
+                expanded_script_text: Some(format!(
+                    "scene_type: daily_dialogue\nsynopsis: {shot_script}"
+                )),
+                primary_scene_type: Some("daily_dialogue".to_string()),
+                primary_scene_label: Some("真实姓名动作锚定".to_string()),
+                primary_scene_category: Some("action_beat".to_string()),
+                shot_scene_type: None,
+                shot_scene_label: None,
+                shot_intent: None,
+                adaptation_reason: None,
+                selected_total_duration_seconds: 10,
+            },
+        );
+
+        assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
+        let combined = storyboard
+            .rows
+            .iter()
+            .map(|row| {
+                format!(
+                    "{} {} {} {} {}",
+                    row.person,
+                    row.shot_title,
+                    row.visual_description,
+                    row.character_action,
+                    row.prompt_text
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(combined.contains("林峰"));
+        assert!(combined.contains("叶倾颜"));
+        assert!(!combined.contains("侧身疾与"));
+        assert!(!combined.contains("主角从"));
+        assert_no_fabricated_people_terms(&combined);
+    }
+
+    #[test]
     fn single_environment_shot_keeps_non_human_grounding() {
         let draft = draft_from_single_segment(
             "coastal-environment-shot",
@@ -10978,6 +11450,14 @@ mod tests {
 
         let mut first_row_visuals = Vec::new();
         for case in cases {
+            let mapping = runtime_scene_option_mappings()
+                .iter()
+                .find(|mapping| mapping.runtime_scene_family == case.scene_type)
+                .expect("scene family regression should be backed by the central mapping");
+            assert_eq!(
+                mapping.chinese_label, case.scene_label,
+                "scene family case should use the central Chinese label"
+            );
             let storyboard = generate_storyboard(
                 &state,
                 GenerateStoryboardRequest {
@@ -10989,8 +11469,8 @@ mod tests {
                         case.synopsis
                     )),
                     primary_scene_type: Some("daily_dialogue".to_string()),
-                    primary_scene_label: Some(case.scene_label.to_string()),
-                    primary_scene_category: Some(case.scene_type.to_string()),
+                    primary_scene_label: Some(mapping.chinese_label.to_string()),
+                    primary_scene_category: Some(mapping.runtime_scene_family.to_string()),
                     shot_scene_type: None,
                     shot_scene_label: None,
                     shot_intent: None,
@@ -12558,15 +13038,16 @@ mod tests {
     fn desktop_scene_type_aliases_stay_valid_without_opening_new_schema_paths() {
         let state = test_state();
 
-        for scene_type in [
-            "war_formation",
-            "weapon_highlight",
-            "council_strategy",
-            "slg_sandbox_view",
-            "slg_city_growth",
-            "battle_report_ui",
-            "multi_army_siege",
-        ] {
+        let scene_types = runtime_scene_option_mappings()
+            .iter()
+            .flat_map(|mapping| std::iter::once(mapping.desktop_entry).chain(mapping.aliases.iter().copied()))
+            .collect::<Vec<_>>();
+        assert!(
+            scene_types.len() > runtime_scene_option_mappings().len(),
+            "regression should cover desktop entries and compatibility aliases"
+        );
+
+        for scene_type in scene_types {
             let script = expand_script(
                 &state,
                 ExpandScriptRequest {
