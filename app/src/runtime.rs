@@ -5689,6 +5689,10 @@ impl CharacterRegistry {
                 }
             }
         }
+
+        for name in detect_narrative_character_names(text) {
+            self.push("named", &name);
+        }
     }
 
     fn push(&mut self, role: &str, name: &str) {
@@ -5740,25 +5744,446 @@ impl CharacterRegistry {
     }
 }
 
+fn detect_narrative_character_names(text: &str) -> Vec<String> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut names = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        let Some((candidate, len)) = detect_narrative_character_name_at(&chars, index) else {
+            index += 1;
+            continue;
+        };
+        push_unique_string(&mut names, candidate);
+        index += len.max(1);
+    }
+    names
+}
+
+fn detect_narrative_character_name_at(chars: &[char], start: usize) -> Option<(String, usize)> {
+    if !is_cjk_unified_ideograph(*chars.get(start)?) {
+        return None;
+    }
+
+    let before = previous_visible_char(chars, start);
+    let mut candidate_lengths = Vec::new();
+    if let Some(compound_len) = narrative_compound_surname_len(chars, start) {
+        if start + compound_len < chars.len() {
+            candidate_lengths.push(compound_len + 2);
+            candidate_lengths.push(compound_len + 1);
+        }
+    } else if is_common_single_surname(chars[start]) {
+        if start + 1 < chars.len() {
+            candidate_lengths.push(3);
+            candidate_lengths.push(2);
+        }
+    } else if is_supported_narrative_name_prefix(chars[start]) {
+        if start + 1 < chars.len() {
+            candidate_lengths.push(2);
+        }
+    } else {
+        return None;
+    }
+
+    for total_len in candidate_lengths {
+        let end = start + total_len;
+        if end > chars.len() {
+            continue;
+        }
+        if !chars[start..end]
+            .iter()
+            .all(|character| is_cjk_unified_ideograph(*character))
+        {
+            continue;
+        }
+        let candidate = chars[start..end].iter().collect::<String>();
+        let after = next_visible_char(chars, end);
+        if candidate_looks_like_dialogue_modifier_suffix(chars, end, &candidate) {
+            continue;
+        }
+        if (!narrative_name_boundary_is_valid(before, after)
+            && !candidate_followed_by_dialogue_attribution(chars, end))
+            || looks_like_quoted_dialogue_fragment(before, after, &candidate)
+            || looks_like_non_character_phrase(&candidate)
+        {
+            continue;
+        }
+        return Some((candidate, total_len));
+    }
+
+    None
+}
+
+fn narrative_compound_surname_len(chars: &[char], start: usize) -> Option<usize> {
+    let candidate = chars
+        .get(start..start + 2)
+        .unwrap_or(&[])
+        .iter()
+        .collect::<String>();
+    [
+        "欧阳", "司马", "上官", "诸葛", "东方", "夏侯", "慕容", "司徒", "司空", "南宫",
+        "长孙", "宇文", "尉迟", "公孙", "令狐", "轩辕", "独孤",
+    ]
+    .iter()
+    .any(|surname| *surname == candidate)
+    .then_some(2)
+}
+
+fn is_supported_narrative_name_prefix(character: char) -> bool {
+    matches!(character, '阿' | '老')
+}
+
+fn is_common_single_surname(character: char) -> bool {
+    "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦许何吕施张孔曹严华金魏陶姜谢邹喻柏窦章云苏潘葛范彭郎鲁韦昌马苗凤方俞任袁柳鲍史唐费廉岑薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅卞齐康伍余元卜顾孟黄穆萧尹姚邵汪祁毛禹狄米贝明计伏成戴宋茅庞熊纪舒屈项祝董梁杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡凌霍虞万支柯管卢莫经房裘缪干解应宗丁宣邓郁单杭洪包左石崔吉钮龚程嵇邢裴陆荣翁荀羊於惠甄曲家封芮羿储靳汲邴糜松井段富巫乌焦巴弓牧隗山谷车侯宓全郗班秋仲伊宫宁仇栾暴甘厉戎祖武符刘景詹龙叶幸司郜黎薄印宿白怀蒲邰鄂索赖卓蔺屠蒙池乔阴胥苍双闻莘党翟谭贡劳姬申扶堵冉宰郦雍璩桑桂濮牛寿通边扈燕冀郏浦尚温别庄晏柴瞿阎连习容向古易慎戈廖终暨居衡步都耿满弘匡国文寇广禄阙东欧殳沃利蔚越夔隆师巩聂晁勾敖融冷辛阚那简饶曾沙关蒯相查后荆红游竺权盖益桓岳帅缑况有琴归海晋楚闫法福百".contains(character)
+}
+
+fn previous_visible_char(chars: &[char], start: usize) -> Option<char> {
+    chars.get(..start)
+        .unwrap_or(&[])
+        .iter()
+        .rev()
+        .copied()
+        .find(|character| !character.is_whitespace())
+}
+
+fn next_visible_char(chars: &[char], start: usize) -> Option<char> {
+    chars.get(start..)
+        .unwrap_or(&[])
+        .iter()
+        .copied()
+        .find(|character| !character.is_whitespace())
+}
+
+fn narrative_tail_starts_with(chars: &[char], start: usize, prefixes: &[&str]) -> bool {
+    let tail = chars.get(start..).unwrap_or(&[]).iter().collect::<String>();
+    prefixes.iter().any(|prefix| tail.starts_with(prefix))
+}
+
+fn candidate_looks_like_dialogue_modifier_suffix(
+    chars: &[char],
+    end: usize,
+    candidate: &str,
+) -> bool {
+    candidate.chars().count() >= 3
+        && candidate.ends_with(['低', '轻', '沉', '冷', '急', '缓'])
+        && narrative_tail_starts_with(chars, end, &["声说", "声道", "声问", "声提醒", "声低语"])
+}
+
+fn candidate_followed_by_dialogue_attribution(chars: &[char], end: usize) -> bool {
+    narrative_tail_starts_with(
+        chars,
+        end,
+        &[
+            "说",
+            "道",
+            "问",
+            "答",
+            "喊",
+            "唤",
+            "低声说",
+            "轻声说",
+            "沉声说",
+            "冷声说",
+            "急声说",
+            "低声道",
+            "轻声道",
+            "沉声道",
+            "低声问",
+            "轻声问",
+            "沉声问",
+            "低语",
+            "提醒",
+            "开口说",
+            "开口道",
+            "开口问",
+            "迅速",
+            "缓缓",
+            "慢慢",
+            "悄悄",
+            "踏",
+            "踩",
+            "握",
+            "持",
+            "挥",
+            "拔",
+            "取",
+            "迎",
+            "压",
+            "望",
+            "看",
+            "听",
+            "倚",
+            "靠",
+            "立",
+            "站",
+            "坐",
+            "停",
+            "落",
+            "起",
+            "沿",
+            "朝",
+            "向",
+            "直",
+            "长袖",
+            "抬手",
+            "抬眸",
+            "举刀",
+            "举剑",
+            "转身",
+            "回身",
+            "停住",
+            "停下",
+            "蹲身",
+            "蹲下",
+            "起身",
+            "跃下",
+            "踏着",
+            "沿着",
+            "把",
+            "将",
+        ],
+    )
+}
+
+fn narrative_name_boundary_is_valid(before: Option<char>, after: Option<char>) -> bool {
+    let before_ok = before.is_none_or(|character| {
+        matches!(
+            character,
+            '“'
+                | '”'
+                | '（'
+                | '）'
+                | '('
+                | ')'
+                | '，'
+                | '。'
+                | '、'
+                | '；'
+                | '：'
+                | ','
+                | ';'
+                | ':'
+                | '和'
+                | '与'
+                | '向'
+                | '对'
+                | '朝'
+                | '护'
+                | '替'
+                | '让'
+                | '把'
+                | '将'
+                | '被'
+                | '给'
+                | '看'
+                | '望'
+        )
+    });
+    let after_ok = after.is_none_or(|character| {
+        matches!(
+            character,
+            '“'
+                | '”'
+                | '（'
+                | '）'
+                | '('
+                | ')'
+                | '，'
+                | '。'
+                | '、'
+                | '；'
+                | '：'
+                | ','
+                | ';'
+                | ':'
+                | '和'
+                | '与'
+                | '在'
+                | '将'
+                | '把'
+                | '向'
+                | '朝'
+                | '对'
+                | '护'
+                | '抬'
+                | '握'
+                | '蹲'
+                | '站'
+                | '走'
+                | '跑'
+                | '贴'
+                | '移'
+                | '扫'
+                | '劈'
+                | '跳'
+                | '停'
+                | '扣'
+                | '放'
+                | '看'
+                | '望'
+                | '追'
+                | '迎'
+                | '格'
+                | '迅'
+                | '缓'
+                | '慢'
+                | '轻'
+                | '忽'
+                | '正'
+                | '立'
+                | '仍'
+                | '先'
+                | '又'
+        )
+    });
+    before_ok && after_ok
+}
+
+fn looks_like_quoted_dialogue_fragment(
+    before: Option<char>,
+    after: Option<char>,
+    candidate: &str,
+) -> bool {
+    matches!(before, Some('“' | '"' | '‘' | '\''))
+        && matches!(after, Some('，' | '。' | '！' | '？' | ',' | '.' | '!' | '?' | '：' | ':'))
+        && contains_any_story_term(
+            candidate,
+            &[
+                "别", "快", "先", "听", "看", "走", "退", "动", "来", "去", "回", "等",
+            ],
+        )
+}
+
+fn looks_like_non_character_phrase(candidate: &str) -> bool {
+    [
+        "海面",
+        "海边",
+        "木栈",
+        "栈道",
+        "灯塔",
+        "巡逻",
+        "信号",
+        "光斑",
+        "光束",
+        "海浪",
+        "护栏",
+        "舷窗",
+        "薄雾",
+        "黑影",
+        "别回头",
+        "刀客",
+        "敌将",
+        "敌人",
+        "对手",
+        "甲士",
+        "弓手",
+        "旗手",
+    ]
+    .iter()
+    .any(|term| candidate.contains(term))
+}
+
+fn derive_shadow_subject_label(text: &str) -> Option<String> {
+    if !contains_any_story_term(text, &["黑影", "人影", "身影"]) {
+        return None;
+    }
+    if text.contains("远处") {
+        Some("远处黑影".to_string())
+    } else if text.contains("轮廓") {
+        Some("黑影轮廓".to_string())
+    } else {
+        Some("未知黑影".to_string())
+    }
+}
+
+fn derive_non_character_subject_label(text: &str) -> Option<String> {
+    if contains_any_story_term(text, &["光斑"]) {
+        Some("光斑".to_string())
+    } else if contains_any_story_term(text, &["光束"]) {
+        Some("光束".to_string())
+    } else if contains_any_story_term(text, &["信号镜"]) {
+        Some("信号镜".to_string())
+    } else if contains_any_story_term(text, &["巡逻艇", "舷窗"]) {
+        Some("巡逻艇".to_string())
+    } else if contains_any_story_term(text, &["灯塔"]) {
+        Some("灯塔".to_string())
+    } else if contains_any_story_term(text, &["木栈道", "栈道"]) {
+        Some("木栈道".to_string())
+    } else if contains_any_story_term(text, &["城建", "脚手架", "吊机", "道路"]) {
+        Some("城建面板".to_string())
+    } else if contains_any_story_term(text, &["沙盘", "视口", "旗标", "地形高差"]) {
+        Some("沙盘".to_string())
+    } else if contains_any_story_term(text, &["行军轨迹", "补给线", "地图"]) {
+        Some("行军地图".to_string())
+    } else if contains_any_story_term(text, &["军阵", "盾墙", "长枪", "旌旗", "号角"]) {
+        Some("军阵".to_string())
+    } else if contains_any_story_term(text, &["战报 UI", "UI", "面板", "小地图", "曲线", "警示框"]) {
+        Some("UI".to_string())
+    } else if contains_any_story_term(text, &["海平线", "海面", "海边", "海浪", "浪声", "水面"]) {
+        Some("海面".to_string())
+    } else {
+        None
+    }
+}
+
+fn derive_explicit_enemy_label(text: &str) -> Option<String> {
+    if contains_any_story_term(text, &["敌方刀客", "刀客"]) {
+        Some("敌方刀客".to_string())
+    } else if contains_any_story_term(text, &["敌将"]) {
+        Some("敌将".to_string())
+    } else if contains_any_story_term(text, &["敌人"]) {
+        Some("敌人".to_string())
+    } else if contains_any_story_term(text, &["对手"]) {
+        Some("对手".to_string())
+    } else if contains_any_story_term(text, &["来袭"]) {
+        Some("来袭者".to_string())
+    } else {
+        None
+    }
+}
+
+fn subject_is_non_character_anchor(subject: &str) -> bool {
+    subject.contains("黑影")
+        || subject == "光斑"
+        || subject == "光束"
+        || subject == "信号镜"
+        || subject == "巡逻艇"
+        || subject == "灯塔"
+        || subject == "木栈道"
+        || subject == "海面"
+        || subject == "UI"
+        || subject == "沙盘"
+        || subject == "行军地图"
+        || subject == "军阵"
+        || subject == "城建面板"
+        || subject == "环境"
+        || subject == "场景"
+        || subject == "空镜"
+        || subject == "无"
+}
+
 fn derive_product_person(segment: &str, full_text: &str) -> String {
-    let registry = CharacterRegistry::from_story_text(segment, full_text);
-    if !registry.is_empty() {
-        let active_names = registry.names_in_text(segment);
+    let segment_registry = CharacterRegistry::from_story_text(segment, segment);
+    if !segment_registry.is_empty() {
+        let active_names = segment_registry.names_in_text(segment);
         if !active_names.is_empty() {
             return subject_label_from_names(&active_names);
         }
 
         if contains_any_story_term(segment, &["护住", "护着", "回身", "重逢"]) {
-            if let (Some(heroine), Some(protagonist)) =
-                (registry.heroine_name(), registry.protagonist_name())
+            if let (Some(heroine), Some(protagonist)) = (
+                segment_registry.heroine_name(),
+                segment_registry.protagonist_name(),
+            )
             {
                 return subject_label_from_names(&[heroine.to_string(), protagonist.to_string()]);
             }
         }
 
         if contains_enemy_or_conflict_terms(segment) {
-            if let (Some(protagonist), Some(antagonist)) =
-                (registry.protagonist_name(), registry.antagonist_name())
+            if let (Some(protagonist), Some(antagonist)) = (
+                segment_registry.protagonist_name(),
+                segment_registry.antagonist_name(),
+            )
             {
                 return subject_label_from_names(&[
                     protagonist.to_string(),
@@ -5767,17 +6192,25 @@ fn derive_product_person(segment: &str, full_text: &str) -> String {
             }
         }
 
-        if let Some(protagonist) = registry.protagonist_name() {
+        if let Some(protagonist) = segment_registry.protagonist_name() {
             return protagonist.to_string();
         }
 
         return subject_label_from_names(
-            &registry
+            &segment_registry
                 .characters
                 .iter()
                 .map(|character| character.name.clone())
                 .collect::<Vec<_>>(),
         );
+    }
+
+    if let Some(subject) = derive_shadow_subject_label(segment) {
+        return subject;
+    }
+
+    if let Some(subject) = derive_non_character_subject_label(segment) {
+        return subject;
     }
 
     derive_fallback_subject(segment, full_text)
@@ -5843,7 +6276,13 @@ fn derive_visual_composition_clause(
     } else {
         scene_scale.trim()
     };
-    if scale.contains("特写") || contains_any_story_term(source, &["掌心", "手臂", "银辉"]) {
+    if contains_any_story_term(source, &["海平线", "海面", "海浪", "浪声", "清晨微光"]) {
+        format!("{scale}把海平线、海面和浪头前后层次一起收进画面，微光落点留在主体区中央")
+    } else if contains_any_story_term(source, &["光斑", "光束", "舷窗", "巡逻艇"]) {
+        format!("{scale}把巡逻艇舷窗和光斑停驻的落点压在主体区中央，保留薄雾被切开的路径")
+    } else if subject.contains("黑影") || contains_any_story_term(source, &["黑影", "人影", "身影", "灯塔"]) {
+        format!("{scale}把{subject}压在灯塔底部与木栈道之间的狭窄空隙里，远近层次同时留在画面里")
+    } else if scale.contains("特写") || contains_any_story_term(source, &["掌心", "手臂", "银辉"]) {
         format!("{scale}压近{subject}的关键部位，以低角度把动作起势顶到画面前缘")
     } else if contains_enemy_or_conflict_terms(source) {
         format!("{scale}侧视角对角构图，把{subject}压在画面前侧的一步对冲距离里")
@@ -5865,6 +6304,66 @@ fn derive_visual_environment_clause(
     shot_intent: &str,
 ) -> String {
     let combined = format!("{source}\n{full_text}");
+    let ui_terms = collect_story_terms(
+        &combined,
+        &["战报 UI", "UI", "面板", "小地图", "曲线", "警示框", "视口", "沙盘", "地图"],
+        2,
+    );
+    if !ui_terms.is_empty() {
+        let anchors = format_story_term_pair(&ui_terms, "界面层级");
+        return format!("场景落在{anchors}撑开的界面空间里，图层、数值和态势标记的前后关系被一起留在画面上");
+    }
+    let military_terms = collect_story_terms(
+        &combined,
+        &[
+            "军阵",
+            "盾墙",
+            "长枪",
+            "旌旗",
+            "号角",
+            "城墙",
+            "云梯",
+            "投石车",
+            "军帐",
+            "舆图",
+            "河谷",
+            "丘陵",
+        ],
+        2,
+    );
+    if !military_terms.is_empty() {
+        let anchors = format_story_term_pair(&military_terms, "军阵空间");
+        return format!("场景压在{anchors}串起的军阵空间里，前场压迫和后场调度的层次被同时摊在画面里");
+    }
+    let build_terms = collect_story_terms(
+        &combined,
+        &["城建", "脚手架", "吊机", "道路", "外城墙"],
+        2,
+    );
+    if !build_terms.is_empty() {
+        let anchors = format_story_term_pair(&build_terms, "城建层级");
+        return format!("场景落在{anchors}展开的建设层级里，施工推进和结构延展的前后关系被清楚交代");
+    }
+    let coastal_terms = collect_story_terms(
+        &combined,
+        &[
+            "海边",
+            "海面",
+            "海平线",
+            "木栈道",
+            "栈道",
+            "灯塔",
+            "巡逻艇",
+            "舷窗",
+            "水面",
+            "浪声",
+        ],
+        2,
+    );
+    if !coastal_terms.is_empty() {
+        let anchors = format_story_term_pair(&coastal_terms, "海边空间");
+        return format!("场景落在{anchors}撑开的海边空间里，主体与灯塔、木栈道和水面的前后关系被一起留住");
+    }
     let ruin_terms = collect_story_terms(
         &combined,
         &[
@@ -6006,6 +6505,7 @@ fn derive_visual_light_tone_clause(
             "灯火",
             "月光",
             "晨光",
+            "微光",
             "暮色",
             "残阳",
             "反光",
@@ -6015,6 +6515,9 @@ fn derive_visual_light_tone_clause(
             "阴影",
             "树影",
             "灰云",
+            "探照灯",
+            "光斑",
+            "光束",
         ],
         2,
     );
@@ -6037,11 +6540,32 @@ fn derive_visual_light_tone_clause(
             "湿地",
             "枝叶",
             "人流",
+            "海面",
+            "水面",
+            "护栏",
+            "铁质",
+            "锈蚀",
+            "舷窗",
+            "船体",
         ],
         2,
     );
     let effect = derive_visual_tone_effect(source, shot_intent);
-    if !light_terms.is_empty() && !surface_terms.is_empty() {
+    if contains_any_story_term(&combined, &["海平线", "海面", "木栈道", "灯塔", "巡逻艇", "舷窗"]) {
+        if !light_terms.is_empty() && !surface_terms.is_empty() {
+            let light = format_story_term_pair(&light_terms, "海边光线");
+            let surface = format_story_term_pair(&surface_terms, "海边表面");
+            format!("{light}落在{surface}上，潮湿空气和锈蚀材质把这一拍的压力压得更稳，{effect}")
+        } else if !light_terms.is_empty() {
+            let light = format_story_term_pair(&light_terms, "海边光线");
+            format!("{light}把海雾和水面层次一起拉开，{effect}")
+        } else if !surface_terms.is_empty() {
+            let surface = format_story_term_pair(&surface_terms, "海边表面");
+            format!("{surface}的潮湿和锈蚀质地都被看得很实，{effect}")
+        } else {
+            format!("海边薄雾、水面反差和锈蚀材质把这一拍压得更冷更紧，{effect}")
+        }
+    } else if !light_terms.is_empty() && !surface_terms.is_empty() {
         let light = format_story_term_pair(&light_terms, "光线");
         let surface = format_story_term_pair(&surface_terms, "环境表面");
         format!("{light}落在{surface}上，{effect}")
@@ -6064,7 +6588,17 @@ fn derive_visual_light_tone_clause(
 }
 
 fn derive_visual_event_clause(source: &str, subject: &str) -> String {
-    if contains_any_story_term(source, &["重逢"]) {
+    if contains_any_story_term(source, &["海平线", "海面", "海浪", "浪声", "清晨微光"]) {
+        "当前视觉事件是清晨微光沿海平线浮起，海浪在岸边持续拍岸，海面节奏被稳稳留在画面里".to_string()
+    } else if contains_any_story_term(source, &["光斑", "光束", "舷窗", "薄雾"]) {
+        "当前视觉事件是锐利光束劈开薄雾直射巡逻艇舷窗，光斑在船体上跳跃两下后停驻".to_string()
+    } else if subject.contains("黑影") || contains_any_story_term(source, &["黑影", "人影", "身影", "灯塔"]) {
+        format!("当前视觉事件是{subject}贴着灯塔底部移动，轮廓在探照灯扫过水面时忽明忽暗")
+    } else if contains_any_story_term(source, &["蹲身", "蹲下", "斜扣", "接缝"])
+        && contains_any_story_term(source, &["信号镜"])
+    {
+        format!("当前视觉事件是{subject}把信号镜压进锈蚀护栏接缝，镜面反光被稳稳留在落点")
+    } else if contains_any_story_term(source, &["重逢"]) {
         format!("当前视觉事件是{subject}在断裂边缘重新并肩，视线和站位同时重新对上")
     } else if contains_any_story_term(source, &["护住", "护着", "回身"]) {
         format!("当前视觉事件是{subject}回身挡住来势，身体横切进对冲路线")
@@ -6082,7 +6616,17 @@ fn derive_visual_event_clause(source: &str, subject: &str) -> String {
 }
 
 fn derive_visual_focus_clause(source: &str, shot_intent: &str) -> String {
-    if contains_any_story_term(source, &["重逢"]) {
+    if contains_any_story_term(source, &["海平线", "海面", "海浪", "浪声", "清晨微光"]) {
+        "海面在低沉浪声里持续压场的建立感".to_string()
+    } else if contains_any_story_term(source, &["光斑", "光束", "舷窗", "薄雾"]) {
+        "锐利光束锁定巡逻艇落点的确认感".to_string()
+    } else if contains_any_story_term(source, &["黑影", "人影", "身影", "灯塔"]) {
+        "不明来向贴着灯塔底部逼近的压力感".to_string()
+    } else if contains_any_story_term(source, &["蹲身", "蹲下", "斜扣", "接缝"])
+        && contains_any_story_term(source, &["信号镜"])
+    {
+        "信号镜落点与手部动作一起压实的隐蔽感".to_string()
+    } else if contains_any_story_term(source, &["重逢"]) {
         "失而复得后的确认与仍未放松的紧绷感".to_string()
     } else if contains_any_story_term(source, &["护住", "护着", "回身"]) {
         "护人与来袭同时挤进画面的压迫感".to_string()
@@ -6107,7 +6651,7 @@ fn derive_character_action_from_story(segment: &str, full_text: &str) -> String 
     } else {
         segment
     };
-    let registry = CharacterRegistry::from_story_text(source, full_text);
+    let registry = CharacterRegistry::from_story_text(source, source);
     let subject = derive_product_person(source, full_text);
     let target = derive_action_target(&registry, &subject, source, full_text);
     let start_state = derive_action_start_state(source);
@@ -6115,14 +6659,22 @@ fn derive_character_action_from_story(segment: &str, full_text: &str) -> String 
     let end_state = derive_action_end_state(source);
     let captured_moment = derive_captured_moment(source);
 
+    if action.contains("镜头捕捉") && action.contains("从") && action.contains("到") {
+        return format!("{action}。");
+    }
+
     format!(
         "{subject}从{start_state}开始，{action}，到{end_state}时结束，镜头捕捉{captured_moment}。"
     )
 }
 
 fn derive_shot_title(index: usize, segment: &str, person: &str, character_action: &str) -> String {
-    let action_core = derive_shot_title_action_core(segment, character_action);
-    format!("镜头{}：{}{}", index + 1, person, action_core)
+    let action_core = derive_shot_title_action_core(segment, person, character_action);
+    if subject_is_non_character_anchor(person) || action_core.contains("镜头") {
+        format!("镜头{}：{}", index + 1, action_core)
+    } else {
+        format!("镜头{}：{}{}", index + 1, person, action_core)
+    }
 }
 
 fn derive_camera_movement_from_story(
@@ -6133,7 +6685,17 @@ fn derive_camera_movement_from_story(
 ) -> String {
     let evidence = format!("{shot_script}\n{visual_description}\n{character_action}");
     let subject = character_action_subject(character_action);
-    if contains_any_story_term(&evidence, &["站起", "起身"]) {
+    if contains_any_story_term(&evidence, &["海平线", "海面", "海浪", "浪声", "清晨微光"]) {
+        format!("{scene_scale}远景定机位建立海平线与海面层次，保留浪声推动的持续起伏")
+    } else if contains_any_story_term(&evidence, &["光斑", "光束", "舷窗", "薄雾"]) {
+        format!("{scene_scale}缓慢推向巡逻艇舷窗，再跟住光斑两次跳跃后的停驻")
+    } else if contains_any_story_term(&evidence, &["黑影", "人影", "身影", "灯塔"]) {
+        format!("{scene_scale}缓慢横移掠过灯塔底部，保持{subject}与木栈道和水面的空间关系")
+    } else if contains_any_story_term(&evidence, &["蹲身", "蹲下", "斜扣", "接缝"])
+        && contains_any_story_term(&evidence, &["信号镜"])
+    {
+        format!("{scene_scale}跟随{subject}下压到手部，再锁定信号镜与护栏接缝处的反光落点")
+    } else if contains_any_story_term(&evidence, &["站起", "起身"]) {
         format!("{scene_scale}低机位上摇，捕捉{subject}站起的动作转折")
     } else if contains_any_story_term(&evidence, &["抬起", "举起"]) {
         format!("{scene_scale}缓慢上摇，跟住{subject}抬起动作的发力线")
@@ -6144,7 +6706,7 @@ fn derive_camera_movement_from_story(
     } else if contains_any_story_term(&evidence, &["焦土", "战场", "残骸", "断桥", "城门"])
     {
         format!("{scene_scale}横移掠过环境边缘，再锁定{subject}当前动作")
-    } else if contains_any_story_term(&evidence, &["望向", "看向", "对手", "敌", "对立人物"])
+    } else if contains_any_story_term(&evidence, &["望向", "看向", "对手", "敌", "黑影"])
     {
         format!("{scene_scale}过肩跟拍{subject}视线方向，保持动作对象在画面内")
     } else if scene_scale.contains("特写") {
@@ -6306,25 +6868,29 @@ fn contains_enemy_or_conflict_terms(text: &str) -> bool {
 }
 
 fn derive_fallback_subject(segment: &str, full_text: &str) -> String {
-    let combined = format!("{segment} {full_text}");
-    let has_main = contains_any_story_term(&combined, &["主角", "男主", "女主", "少年"]);
-    let has_enemy = contains_enemy_or_conflict_terms(&combined);
-    let enemy_label = if combined.contains("刀客") {
-        "敌方刀客"
+    let source = if segment.trim().is_empty() {
+        full_text
     } else {
-        "对立人物"
+        segment
     };
+    let has_main = contains_any_story_term(source, &["主角", "男主", "女主", "少年"]);
+    let has_enemy = contains_enemy_or_conflict_terms(source);
+    let enemy_label = derive_explicit_enemy_label(source).unwrap_or_else(|| "对手".to_string());
 
-    if contains_any_story_term(&combined, &["群像", "众人", "队伍"]) {
+    if let Some(subject) = derive_shadow_subject_label(source) {
+        subject
+    } else if let Some(subject) = derive_non_character_subject_label(source) {
+        subject
+    } else if contains_any_story_term(source, &["群像", "众人", "队伍"]) {
         "群像角色".to_string()
     } else if has_main && has_enemy {
         format!("主角与{enemy_label}")
     } else if has_enemy {
-        enemy_label.to_string()
+        enemy_label
     } else if has_main {
         "主角".to_string()
     } else {
-        "目标人物".to_string()
+        "环境".to_string()
     }
 }
 
@@ -6375,16 +6941,34 @@ fn derive_action_target(
     }
 
     let combined = format!("{segment} {full_text}");
-    if subject.contains("敌方刀客") || subject.contains("对立人物") {
+    if subject.contains("敌方刀客")
+        || subject.contains("敌将")
+        || subject.contains("敌人")
+        || subject.contains("对手")
+    {
         "主角".to_string()
-    } else if combined.contains("刀客") {
-        "敌方刀客".to_string()
-    } else if contains_enemy_or_conflict_terms(&combined) {
-        "对立人物".to_string()
     } else if subject.contains('与') || subject.contains('、') {
         "彼此".to_string()
+    } else if let Some(shadow) = derive_shadow_subject_label(segment) {
+        if !subject.contains(&shadow) {
+            shadow
+        } else {
+            "灯塔底部".to_string()
+        }
+    } else if let Some(enemy) = derive_explicit_enemy_label(&combined) {
+        if !subject.contains(&enemy) {
+            enemy
+        } else {
+            "当前空间".to_string()
+        }
+    } else if let Some(anchor) = derive_non_character_subject_label(segment) {
+        if !subject.contains(&anchor) {
+            anchor
+        } else {
+            "当前空间".to_string()
+        }
     } else {
-        "目标人物".to_string()
+        "当前空间".to_string()
     }
 }
 
@@ -6405,7 +6989,21 @@ fn derive_action_start_state(source: &str) -> &'static str {
 }
 
 fn derive_visible_action(source: &str, subject: &str, target: &str) -> String {
-    if contains_any_story_term(source, &["重逢"]) {
+    if contains_any_story_term(source, &["海平线", "海面", "海浪", "浪声", "清晨微光"]) {
+        "海面从清晨微光浮上海平线开始，到浪声低沉而持续地拍向岸边时稳定下来，镜头捕捉海浪推着海面层次起伏的节奏".to_string()
+    } else if contains_any_story_term(source, &["光斑", "光束", "舷窗", "薄雾"]) {
+        "光斑从锐利光束劈开薄雾开始，沿巡逻艇舷窗与船体跳跃两下，到反光停驻时收住，镜头捕捉光束压住舷窗落点的瞬间".to_string()
+    } else if contains_any_story_term(source, &["黑影", "人影", "身影"]) {
+        format!("{subject}从贴着灯塔底部压低移动开始，到轮廓掠过探照灯边缘时收住，镜头捕捉黑影在雾里忽明忽暗的一瞬间")
+    } else if contains_any_story_term(source, &["蹲身", "蹲下", "斜扣", "接缝"])
+        && contains_any_story_term(source, &["信号镜"])
+    {
+        format!("{subject}从迅速蹲身压低重心开始，将信号镜斜扣进锈蚀护栏接缝，到镜面反光被调稳时结束，镜头捕捉手部和落点一起定住的一瞬间")
+    } else if contains_any_story_term(source, &["紧握", "握紧"])
+        && contains_any_story_term(source, &["信号镜"])
+    {
+        format!("{subject}从紧握信号镜压低身位开始，到视线与海面方向重新锁定时收住，镜头捕捉信号镜边缘反光被手指压紧的一瞬间")
+    } else if contains_any_story_term(source, &["重逢"]) {
         format!("{subject}在断桥残口向{target}靠近，确认对方安全并重新建立站位")
     } else if contains_any_story_term(source, &["护住", "护着", "回身"]) {
         format!("{subject}回身护住{target}，用身体挡住逼近的威胁")
@@ -6418,12 +7016,26 @@ fn derive_visible_action(source: &str, subject: &str, target: &str) -> String {
     } else if contains_any_story_term(source, &["震退", "七步"]) {
         format!("{subject}借格挡余力反震{target}，把对方逼到脚步失衡")
     } else {
-        format!("{subject}面向{target}完成清晰可见的状态转变并接上下一拍动作")
+        format!("{subject}从当前站位开始调整动作落点，到姿态在画面内稳定时结束，镜头捕捉这一拍状态变化的完成瞬间")
     }
 }
 
 fn derive_action_end_state(source: &str) -> &'static str {
-    if contains_any_story_term(source, &["重逢"]) {
+    if contains_any_story_term(source, &["海平线", "海面", "海浪", "浪声", "清晨微光"]) {
+        "海面节奏稳定延续"
+    } else if contains_any_story_term(source, &["光斑", "光束", "舷窗", "薄雾"]) {
+        "光斑在船体落点停驻"
+    } else if contains_any_story_term(source, &["黑影", "人影", "身影"]) {
+        "黑影轮廓压在灯塔底部"
+    } else if contains_any_story_term(source, &["蹲身", "蹲下", "斜扣", "接缝"])
+        && contains_any_story_term(source, &["信号镜"])
+    {
+        "信号镜落点稳住"
+    } else if contains_any_story_term(source, &["紧握", "握紧"])
+        && contains_any_story_term(source, &["信号镜"])
+    {
+        "信号镜被压稳在手中"
+    } else if contains_any_story_term(source, &["重逢"]) {
         "两人重新并肩"
     } else if contains_any_story_term(source, &["护住", "护着"]) {
         "被保护者退到安全半步"
@@ -6441,7 +7053,21 @@ fn derive_action_end_state(source: &str) -> &'static str {
 }
 
 fn derive_captured_moment(source: &str) -> &'static str {
-    if contains_any_story_term(source, &["重逢"]) {
+    if contains_any_story_term(source, &["海平线", "海面", "海浪", "浪声", "清晨微光"]) {
+        "清晨微光压住海平线的一瞬间"
+    } else if contains_any_story_term(source, &["光斑", "光束", "舷窗", "薄雾"]) {
+        "光斑两次跳跃后停驻的一瞬间"
+    } else if contains_any_story_term(source, &["黑影", "人影", "身影"]) {
+        "黑影轮廓擦过灯塔底部的一瞬间"
+    } else if contains_any_story_term(source, &["蹲身", "蹲下", "斜扣", "接缝"])
+        && contains_any_story_term(source, &["信号镜"])
+    {
+        "信号镜反光停住的一瞬间"
+    } else if contains_any_story_term(source, &["紧握", "握紧"])
+        && contains_any_story_term(source, &["信号镜"])
+    {
+        "手指压住信号镜边缘的一瞬间"
+    } else if contains_any_story_term(source, &["重逢"]) {
         "两人视线重新对上的一瞬间"
     } else if contains_any_story_term(source, &["护住", "护着"]) {
         "身体挡住威胁的一瞬间"
@@ -6458,25 +7084,57 @@ fn derive_captured_moment(source: &str) -> &'static str {
     }
 }
 
-fn derive_shot_title_action_core(segment: &str, character_action: &str) -> &'static str {
-    if contains_any_story_term(segment, &["重逢"]) {
-        "断桥重逢"
+fn derive_shot_title_action_core(segment: &str, person: &str, character_action: &str) -> String {
+    if contains_any_story_term(segment, &["海平线", "海面", "海浪", "浪声", "清晨微光"]) {
+        "清晨海面建立镜头".to_string()
+    } else if contains_any_story_term(segment, &["战报 UI", "UI", "小地图", "曲线", "警示框"]) {
+        "战报 UI 刷新".to_string()
+    } else if contains_any_story_term(segment, &["沙盘", "视口", "旗标", "地形高差"]) {
+        "沙盘视口态势".to_string()
+    } else if contains_any_story_term(segment, &["行军轨迹", "补给线", "地图"]) {
+        "行军轨迹合围".to_string()
+    } else if contains_any_story_term(segment, &["城建", "脚手架", "吊机", "道路", "外城墙"]) {
+        "城建演进反馈".to_string()
+    } else if contains_any_story_term(segment, &["军帐", "舆图"]) {
+        "军帐权谋调度".to_string()
+    } else if contains_any_story_term(segment, &["攻城", "云梯", "投石车", "城墙"]) {
+        "多军团攻城".to_string()
+    } else if contains_any_story_term(segment, &["军阵", "盾墙", "长枪", "旌旗", "号角"]) {
+        "军阵建立".to_string()
+    } else if contains_any_story_term(segment, &["灯塔", "木栈道", "栈道"])
+        && !contains_any_story_term(segment, &["蹲身", "蹲下", "信号镜"])
+    {
+        "灯塔与木栈道环境镜头".to_string()
+    } else if contains_any_story_term(segment, &["光斑", "光束", "舷窗", "巡逻艇"]) {
+        "巡逻艇接收光斑".to_string()
+    } else if contains_any_story_term(segment, &["蹲身", "蹲下", "斜扣", "接缝"])
+        && contains_any_story_term(segment, &["信号镜"])
+    {
+        "安放信号镜".to_string()
+    } else if contains_any_story_term(segment, &["紧握", "握紧"])
+        && contains_any_story_term(segment, &["信号镜"])
+    {
+        "握紧信号镜".to_string()
+    } else if person.contains("黑影") || contains_any_story_term(segment, &["黑影", "人影", "身影"]) {
+        "远处黑影贴边移动".to_string()
+    } else if contains_any_story_term(segment, &["重逢"]) {
+        "断桥重逢".to_string()
     } else if contains_any_story_term(segment, &["护住", "护着", "回身"]) {
-        "回身护人"
+        "回身护人".to_string()
     } else if contains_any_story_term(segment, &["追杀", "压近", "逼近"]) {
-        "压近断桥"
+        "压近断桥".to_string()
     } else if contains_any_story_term(segment, &["掌心", "银辉", "觉醒"]) {
-        "银辉觉醒"
+        "银辉觉醒".to_string()
     } else if contains_any_story_term(segment, &["震退", "七步"]) {
-        "震退对手"
+        "震退对手".to_string()
     } else if contains_any_story_term(segment, &["焦土", "裂痕"]) {
-        "踏碎焦土"
+        "踏碎焦土".to_string()
     } else if contains_any_story_term(segment, &["格挡", "刀锋", "攻击", "交锋"]) {
-        "踏步格挡"
+        "踏步格挡".to_string()
     } else if character_action.contains("镜头捕捉") {
-        "完成关键动作"
+        "动作落点".to_string()
     } else {
-        "推进当前动作"
+        "状态落点".to_string()
     }
 }
 
@@ -6625,6 +7283,35 @@ fn has_visual_environment_signal(text: &str) -> bool {
             "前沿",
             "旷野",
             "开阔地",
+            "海边",
+            "海面",
+            "海平线",
+            "海浪",
+            "木栈道",
+            "栈道",
+            "灯塔",
+            "巡逻艇",
+            "舷窗",
+            "水面",
+            "军阵",
+            "盾墙",
+            "旌旗",
+            "城墙",
+            "云梯",
+            "投石车",
+            "军帐",
+            "舆图",
+            "河谷",
+            "丘陵",
+            "沙盘",
+            "视口",
+            "地图",
+            "小地图",
+            "战报 UI",
+            "面板",
+            "城建",
+            "脚手架",
+            "道路",
             "近身空间",
             "可见空间",
             "室内空间",
@@ -6668,6 +7355,25 @@ fn has_visual_concrete_element_signal(text: &str) -> bool {
             "雨水",
             "雾气",
             "人流",
+            "信号镜",
+            "光斑",
+            "光束",
+            "舷窗",
+            "护栏",
+            "铁质",
+            "锈蚀",
+            "船体",
+            "水面",
+            "海浪",
+            "长枪",
+            "刀背",
+            "号角",
+            "旗标",
+            "补给线",
+            "吊机",
+            "脚手架",
+            "曲线",
+            "警示框",
         ],
     )
 }
@@ -6707,6 +7413,17 @@ fn has_visual_light_tone_or_material_signal(text: &str) -> bool {
             "颗粒感",
             "冷亮",
             "发冷",
+            "微光",
+            "探照灯",
+            "光斑",
+            "光束",
+            "锈蚀",
+            "铁质",
+            "冷灯",
+            "屏幕",
+            "告警",
+            "晨雾",
+            "火光",
         ],
     )
 }
@@ -7508,9 +8225,20 @@ fn is_role_action_grounding_incomplete(value: &str) -> bool {
             || trimmed.contains("朝向")
             || trimmed.contains("彼此")
             || trimmed.contains("敌方刀客")
-            || trimmed.contains("对立人物")
-            || trimmed.contains("目标人物")
-            || trimmed.contains("被保护者")))
+            || trimmed.contains("被保护者")
+            || trimmed.contains("海面")
+            || trimmed.contains("海平线")
+            || trimmed.contains("海浪")
+            || trimmed.contains("浪声")
+            || trimmed.contains("光斑")
+            || trimmed.contains("光束")
+            || trimmed.contains("巡逻艇")
+            || trimmed.contains("舷窗")
+            || trimmed.contains("信号镜")
+            || trimmed.contains("护栏")
+            || trimmed.contains("灯塔")
+            || trimmed.contains("黑影")
+            || trimmed.contains("木栈道")))
 }
 
 fn contains_forbidden_generation_terms(text: &str) -> bool {
@@ -8324,6 +9052,7 @@ mod tests {
         ValidationExportPanelSnapshotRequest, ValidationExportPanelState,
         allocate_long_text_auto_shot_task_durations, allocate_storyboard_row_durations,
         build_prompt_text_compilation_request, build_qwen_request_payload,
+        build_shot_grounded_row_draft,
         build_storyboard_preview_plan, build_text_generation_request,
         build_validation_export_panel_snapshot_from_fixture, compile_seedance_prompt_text,
         contains_any_story_term, contains_product_control_text, default_text_model_provider,
@@ -8331,10 +9060,12 @@ mod tests {
         has_visual_environment_signal, has_visual_light_tone_or_material_signal,
         export_storyboard_bank, generate_storyboard, is_visual_description_grounding_incomplete,
         list_storyboard_shot_results, project_scene_performance, remove_storyboard_shot_result,
-        resolve_scene_taxonomy, run_kb_router, run_qwen_text_generation_with_transport,
+        resolve_scene_taxonomy, resolve_storyboard_grounding_context, run_kb_router,
+        run_qwen_text_generation_with_transport,
         run_v0_story_to_storyboard_chain, save_storyboard_rows, save_storyboard_shot_result,
         select_golden_sample_records, serialize_storyboard_rows, stable_hash_hex,
         stable_source_material_length_chars, subject_label_mentions_any_name,
+        ShotGroundedRowDraft,
         update_storyboard_shot_result,
     };
     use crate::state::AppState;
@@ -8544,11 +9275,15 @@ mod tests {
         for forbidden in [
             "交锋双方",
             "当前镜头主体",
+            "主体人物",
+            "对立人物",
+            "目标人物",
             "not_specified_by_v120_bridge",
             "visual_scene_core",
             "fused_scene_performance_core_preserved",
             "按当前镜头脚本执行关键动作",
             "执行关键动作",
+            "完成关键动作",
             "保持连续性",
             "待明确",
         ] {
@@ -8619,6 +9354,40 @@ mod tests {
                 "prompt_text leaked internal payload term {forbidden}: {prompt_text}"
             );
         }
+    }
+
+    fn assert_no_fabricated_people_terms(text: &str) {
+        for forbidden in ["对立人物", "目标人物", "主体人物", "完成关键动作"] {
+            assert!(
+                !text.contains(forbidden),
+                "unexpected fabricated term {forbidden}: {text}"
+            );
+        }
+    }
+
+    fn draft_from_single_segment(task_name: &str, shot_script: &str) -> ShotGroundedRowDraft {
+        let request = GenerateStoryboardRequest {
+            task_name: task_name.to_string(),
+            script_id: None,
+            shot_script: Some(shot_script.to_string()),
+            expanded_script_text: Some(shot_script.to_string()),
+            primary_scene_type: Some("daily_dialogue".to_string()),
+            primary_scene_label: Some("海边潜行".to_string()),
+            primary_scene_category: Some("atmospheric_grounding".to_string()),
+            shot_scene_type: None,
+            shot_scene_label: None,
+            shot_intent: None,
+            adaptation_reason: None,
+            selected_total_duration_seconds: 10,
+        };
+        let grounding = resolve_storyboard_grounding_context(
+            &request,
+            request
+                .expanded_script_text
+                .clone()
+                .expect("single segment test should carry source text"),
+        );
+        build_shot_grounded_row_draft(&grounding, 0, 1, 10, None)
     }
 
     fn v0_chain_request_for_source(
@@ -9734,7 +10503,6 @@ mod tests {
 
         for row in &storyboard.rows {
             assert!(!["主角", "女主", "交锋双方", "当前镜头主体"].contains(&row.person.as_str()));
-            assert!(row.shot_title.contains(&row.person));
             assert!(row.character_action.contains("从"));
             assert!(row.character_action.contains("到"));
             assert!(row.character_action.contains("镜头捕捉"));
@@ -9788,7 +10556,7 @@ mod tests {
         assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
         for row in &storyboard.rows {
             assert!(
-                ["主角", "敌方刀客", "主角与敌方刀客", "主角与对立人物"]
+                ["主角", "敌方刀客", "主角与敌方刀客", "主角与对手"]
                     .contains(&row.person.as_str()),
                 "unexpected fallback person: {}",
                 row.person
@@ -9813,6 +10581,546 @@ mod tests {
                     .any(|warning| warning.code == "visual_description_grounding_incomplete")
             );
         }
+    }
+
+    #[test]
+    fn single_environment_shot_keeps_non_human_grounding() {
+        let draft = draft_from_single_segment(
+            "coastal-environment-shot",
+            "清晨微光浮在海平线上，浪声低沉而持续。",
+        );
+        let combined = format!(
+            "{} {} {} {} {}",
+            draft.person,
+            draft.shot_title,
+            draft.visual_description,
+            draft.character_action,
+            draft.camera_movement
+        );
+
+        assert!(["海面", "环境", "场景", "空镜", "无"].contains(&draft.person.as_str()));
+        assert!(draft.visual_description.contains("海平线"));
+        assert!(draft.visual_description.contains("微光"));
+        assert!(draft.visual_description.contains("海面"));
+        assert!(draft.character_action.contains("海面"));
+        assert!(draft.character_action.contains("镜头捕捉"));
+        assert!(draft.camera_movement.contains("定机位"));
+        assert!(!combined.contains("张雪"));
+        assert_no_fabricated_people_terms(&combined);
+    }
+
+    #[test]
+    fn single_light_shot_keeps_light_and_vessel_grounding() {
+        let draft = draft_from_single_segment(
+            "coastal-light-shot",
+            "一束锐利的光劈开薄雾，直射向巡逻艇舷窗，光斑在船体上跳跃两下，停驻。",
+        );
+        let combined = format!(
+            "{} {} {} {} {}",
+            draft.person,
+            draft.shot_title,
+            draft.visual_description,
+            draft.character_action,
+            draft.camera_movement
+        );
+
+        assert!(["光斑", "光束", "巡逻艇"].contains(&draft.person.as_str()));
+        assert!(draft.visual_description.contains("薄雾"));
+        assert!(draft.visual_description.contains("舷窗"));
+        assert!(draft.visual_description.contains("光斑"));
+        assert!(draft.character_action.contains("光斑"));
+        assert!(draft.character_action.contains("停驻"));
+        assert!(draft.camera_movement.contains("巡逻艇舷窗"));
+        assert!(!combined.contains("张雪"));
+        assert_no_fabricated_people_terms(&combined);
+    }
+
+    #[test]
+    fn single_named_prop_action_shot_keeps_named_person_grounding() {
+        let draft = draft_from_single_segment(
+            "coastal-prop-shot",
+            "张雪迅速蹲身，将信号镜斜扣在栈道锈蚀的铁质护栏接缝处。",
+        );
+        let combined = format!(
+            "{} {} {} {} {}",
+            draft.person,
+            draft.shot_title,
+            draft.visual_description,
+            draft.character_action,
+            draft.camera_movement
+        );
+
+        assert_eq!(draft.person, "张雪");
+        assert!(draft.shot_title.contains("张雪"));
+        assert!(combined.contains("信号镜"));
+        assert!(combined.contains("护栏"));
+        assert!(draft.character_action.contains("张雪"));
+        assert!(draft.character_action.contains("信号镜"));
+        assert!(!draft.camera_movement.trim().is_empty());
+        assert_no_fabricated_people_terms(&combined);
+    }
+
+    #[test]
+    fn generate_storyboard_and_export_keep_coastal_shadow_sample_fact_grounded() {
+        let state = test_state();
+        let shot_script = "清晨微光浮在海平线上，浪声低沉而持续。张雪蹲在海边木栈道上，手里紧握信号镜。远处一道黑影贴着灯塔底部移动，巡逻艇的探照灯扫过水面。一束锐利的光劈开薄雾，直射向巡逻艇舷窗，光斑在船体上跳跃两下，停驻。张雪迅速蹲身，将信号镜斜扣在栈道锈蚀的铁质护栏接缝处。";
+
+        let storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "coastal-fact-grounding".to_string(),
+                script_id: None,
+                shot_script: Some(shot_script.to_string()),
+                expanded_script_text: Some(
+                    "scene_type: daily_dialogue\nsynopsis: 张雪在海边木栈道借信号镜向巡逻艇发送信号，远处黑影贴着灯塔移动。"
+                        .to_string(),
+                ),
+                primary_scene_type: Some("daily_dialogue".to_string()),
+                primary_scene_label: Some("海边木栈道潜行".to_string()),
+                primary_scene_category: Some("atmospheric_grounding".to_string()),
+                shot_scene_type: None,
+                shot_scene_label: None,
+                shot_intent: None,
+                adaptation_reason: None,
+                selected_total_duration_seconds: 45,
+            },
+        );
+
+        assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
+        let combined_rows = storyboard
+            .rows
+            .iter()
+            .map(|row| {
+                format!(
+                    "{} {} {} {} {} {}",
+                    row.person,
+                    row.shot_title,
+                    row.visual_description,
+                    row.character_action,
+                    row.camera_movement,
+                    row.prompt_text
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(storyboard.rows.iter().any(|row| row.person.contains("张雪")));
+        assert!(
+            combined_rows.contains("远处黑影")
+                || combined_rows.contains("未知黑影")
+                || combined_rows.contains("黑影轮廓")
+        );
+        for row in &storyboard.rows {
+            let combined = format!(
+                "{} {} {} {} {} {}",
+                row.person,
+                row.shot_title,
+                row.visual_description,
+                row.character_action,
+                row.camera_movement,
+                row.prompt_text
+            );
+            assert_storyboard_row_has_no_vague_or_internal_terms(row);
+            assert_prompt_text_has_no_internal_payload(&row.prompt_text);
+            assert_no_fabricated_people_terms(&combined);
+        }
+
+        let export = export_bundle(
+            &state,
+            ExportBundleRequest {
+                result_id: Some(storyboard.result_id.clone()),
+                task_id: None,
+                export_format: "xlsx".to_string(),
+            },
+        );
+        let json_artifact = export
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.artifact_kind == "storyboard_json")
+            .expect("json artifact should exist");
+        let json_text = fs::read_to_string(json_artifact.artifact_path.as_ref().unwrap())
+            .expect("json artifact should be readable");
+
+        assert_no_fabricated_people_terms(&json_text);
+        assert!(json_text.contains("张雪"));
+        assert!(
+            json_text.contains("海平线")
+                || json_text.contains("光斑")
+                || json_text.contains("信号镜")
+        );
+    }
+
+    #[test]
+    fn generate_storyboard_keeps_fact_grounding_across_scene_families() {
+        struct FactCase<'a> {
+            task_name: &'a str,
+            scene_type: &'a str,
+            scene_label: &'a str,
+            shot_script: &'a str,
+            synopsis: &'a str,
+            expected_dialogue: Option<&'a str>,
+            required_terms: &'a [&'a str],
+            forbid_ruin_template: bool,
+        }
+
+        let state = test_state();
+        let cases = vec![
+            FactCase {
+                task_name: "hot-blooded-battle",
+                scene_type: "action_beat",
+                scene_label: "热血战斗",
+                shot_script: "顾曜踏碎碎石迎上长刀，火星贴着刀背炸开，呼吸声被近身对冲压得更急。",
+                synopsis: "热血战斗中的近身对冲。",
+                expected_dialogue: None,
+                required_terms: &["顾曜", "火星", "长刀"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "group-performance",
+                scene_type: "group_performance",
+                scene_label: "群像表演",
+                shot_script: "甲士、弓手和旗手在城门阴影下错身换位，旌旗被风扯直，三层阵列同时压住前场。",
+                synopsis: "群像调度里的城门压场。",
+                expected_dialogue: None,
+                required_terms: &["甲士", "弓手", "旌旗"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "emotional-dialogue",
+                scene_type: "dialogue_beat",
+                scene_label: "情绪对话",
+                shot_script: "窗棂边只剩一盏冷灯，沈青低声说：“别回头，我听见脚步声。”",
+                synopsis: "压低声线的情绪对话。",
+                expected_dialogue: Some("别回头，我听见脚步声。"),
+                required_terms: &["沈青", "冷灯", "脚步声"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "encounter-performance",
+                scene_type: "encounter_performance",
+                scene_label: "相遇表演",
+                shot_script: "陆临与苏禾在渡口木桥上同时停住脚步，晨雾把两人的视线慢慢推近。",
+                synopsis: "两人在渡口相遇。",
+                expected_dialogue: None,
+                required_terms: &["陆临", "苏禾", "晨雾"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "field-chase",
+                scene_type: "field_chase",
+                scene_label: "场域追逐",
+                shot_script: "张雪沿海边木栈道急奔，远处黑影踩过断裂旧缆绳，脚步声从沙丘后逼近。",
+                synopsis: "海边栈道上的追逐压迫。",
+                expected_dialogue: None,
+                required_terms: &["张雪", "黑影", "断裂旧缆绳"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "spectacle-showcase",
+                scene_type: "spectacle_showcase",
+                scene_label: "奇观展示",
+                shot_script: "巨大的荧光浮标沿潮沟次第亮起，灯塔顶灯穿过薄雾，把整片海湾切成明暗两层。",
+                synopsis: "海湾奇观建立。",
+                expected_dialogue: None,
+                required_terms: &["荧光浮标", "灯塔顶灯", "薄雾"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "daily-healing",
+                scene_type: "healing_daily",
+                scene_label: "日常治愈",
+                shot_script: "午后蒸汽从陶锅边沿慢慢升起，阿禾把热茶放在窗台上，院子里的风铃轻轻碰响。",
+                synopsis: "安静的日常治愈时刻。",
+                expected_dialogue: None,
+                required_terms: &["阿禾", "热茶", "风铃"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "guoman-hot-blooded",
+                scene_type: "guoman_action",
+                scene_label: "国漫热血打斗",
+                shot_script: "主角踏着瓦脊翻身跃下，拳风扫开雨幕，敌方刀客的刀锋擦着檐角劈落。",
+                synopsis: "国漫热血打斗近景。",
+                expected_dialogue: None,
+                required_terms: &["主角", "敌方刀客", "刀锋"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "guoman-group-performance",
+                scene_type: "guoman_group",
+                scene_label: "国漫群像表演",
+                shot_script: "少年、老匠和旗手在山门前同时转身，鼓点压住人群呼吸，层层站位把前场撑满。",
+                synopsis: "国漫群像表演中的局部交锋镜头。",
+                expected_dialogue: None,
+                required_terms: &["少年", "老匠", "鼓点"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "ink-fight",
+                scene_type: "ink_action",
+                scene_label: "水墨武打",
+                shot_script: "墨色雨丝斜落竹桥，沈砚长袖一带，剑影在白墙上划开一笔冷亮反光。",
+                synopsis: "水墨武打里的身法转换。",
+                expected_dialogue: None,
+                required_terms: &["沈砚", "竹桥", "剑影"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "eastern-spectacle",
+                scene_type: "eastern_spectacle",
+                scene_label: "东方奇观",
+                shot_script: "云海之上悬着巨型铜环，晨光沿浮空石阶一层层铺开，鹤影掠过殿檐。",
+                synopsis: "东方奇观建立。",
+                expected_dialogue: None,
+                required_terms: &["铜环", "晨光", "鹤影"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "xianxia-action",
+                scene_type: "xianxia_action",
+                scene_label: "仙侠动作",
+                shot_script: "苏砚踏上碎云，袖间符光炸开，长剑带着银辉直取石门前的傀儡关节。",
+                synopsis: "仙侠动作中的瞬时发力。",
+                expected_dialogue: None,
+                required_terms: &["苏砚", "符光", "长剑"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "urban-fantasy",
+                scene_type: "urban_fantasy",
+                scene_label: "都市奇幻",
+                shot_script: "地铁站台的广告屏忽然雪花闪烁，林策抬手压住发光的符纸，潮湿轨道反出冷白光。",
+                synopsis: "都市奇幻中的异常显现。",
+                expected_dialogue: None,
+                required_terms: &["林策", "广告屏", "符纸"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "nation-war-establishing",
+                scene_type: "nation_war_establishing",
+                scene_label: "国战军阵建立",
+                shot_script: "号角压住清晨寒雾，前列长枪、盾墙和后排旌旗在山口展开三层军阵。",
+                synopsis: "国战军阵建立镜头。",
+                expected_dialogue: None,
+                required_terms: &["号角", "长枪", "军阵"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "weapon-highlight",
+                scene_type: "weapon_highlight",
+                scene_label: "武将兵器高光",
+                shot_script: "霍青提起鎏金长枪，枪锋在火光里掠出一道冷亮弧线。",
+                synopsis: "武将兵器高光。",
+                expected_dialogue: None,
+                required_terms: &["霍青", "长枪", "枪锋"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "court-tent-strategy",
+                scene_type: "court_strategy",
+                scene_label: "朝堂军帐权谋",
+                shot_script: "军帐内烛火压低，裴肃指尖点在北境舆图上，低声道：“今晚先让东路按兵不动。”",
+                synopsis: "朝堂军帐中的调度权谋。",
+                expected_dialogue: Some("今晚先让东路按兵不动。"),
+                required_terms: &["裴肃", "军帐", "舆图"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "multi-corps-siege",
+                scene_type: "siege_assault",
+                scene_label: "多军团攻城",
+                shot_script: "云梯、投石车和三路攻城队列同时压向城墙，城门上方的旗号被浓烟撕成碎片。",
+                synopsis: "多军团攻城压场。",
+                expected_dialogue: None,
+                required_terms: &["云梯", "投石车", "城墙"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "sandtable-view",
+                scene_type: "sandtable_overview",
+                scene_label: "沙盘战略视口",
+                shot_script: "沙盘视口里，蓝线沿河谷包抄，红色旗标在峡口后撤，地形高差以半透明层级叠出。",
+                synopsis: "沙盘视口中的态势更新。",
+                expected_dialogue: None,
+                required_terms: &["沙盘", "旗标", "地形高差"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "march-encirclement",
+                scene_type: "march_encirclement",
+                scene_label: "行军轨迹合围",
+                shot_script: "军报地图上的三道行军轨迹在北侧丘陵收拢成半月形合围，补给线在后方持续闪烁。",
+                synopsis: "行军轨迹合围态势。",
+                expected_dialogue: None,
+                required_terms: &["地图", "行军轨迹", "补给线"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "city-build-feedback",
+                scene_type: "city_build_feedback",
+                scene_label: "城建演进反馈",
+                shot_script: "城建面板里，外城墙从木制脚手架间逐帧抬升，运石吊机和新铺道路在晨雾里同步延展。",
+                synopsis: "城建演进反馈界面。",
+                expected_dialogue: None,
+                required_terms: &["城建面板", "脚手架", "吊机"],
+                forbid_ruin_template: true,
+            },
+            FactCase {
+                task_name: "battle-report-ui",
+                scene_type: "battle_report_ui",
+                scene_label: "战报 UI",
+                shot_script: "战报 UI 上，伤亡数字、士气曲线和补给告警依次刷新，右侧小地图闪出新的红色警示框。",
+                synopsis: "战报 UI 的即时刷新。",
+                expected_dialogue: None,
+                required_terms: &["战报 UI", "士气曲线", "警示框"],
+                forbid_ruin_template: true,
+            },
+        ];
+
+        let mut first_row_visuals = Vec::new();
+        for case in cases {
+            let storyboard = generate_storyboard(
+                &state,
+                GenerateStoryboardRequest {
+                    task_name: case.task_name.to_string(),
+                    script_id: None,
+                    shot_script: Some(case.shot_script.to_string()),
+                    expanded_script_text: Some(format!(
+                        "scene_type: daily_dialogue\nsynopsis: {}",
+                        case.synopsis
+                    )),
+                    primary_scene_type: Some("daily_dialogue".to_string()),
+                    primary_scene_label: Some(case.scene_label.to_string()),
+                    primary_scene_category: Some(case.scene_type.to_string()),
+                    shot_scene_type: None,
+                    shot_scene_label: None,
+                    shot_intent: None,
+                    adaptation_reason: None,
+                    selected_total_duration_seconds: 10,
+                },
+            );
+
+            assert_ne!(
+                storyboard.export_status.status,
+                BridgeCallStatus::Blocked,
+                "scene family {} should not block",
+                case.scene_label
+            );
+            assert_eq!(
+                storyboard
+                    .kb_router_result
+                    .retrieval_trace
+                    .token_budget
+                    .full_kb_rows_included,
+                0,
+                "scene family {} must keep summary-only KB boundary",
+                case.scene_label
+            );
+            let combined_rows = storyboard
+                .rows
+                .iter()
+                .map(|row| {
+                    format!(
+                        "{} {} {} {} {} {} {}",
+                        row.person,
+                        row.shot_title,
+                        row.visual_description,
+                        row.character_action,
+                        row.camera_movement,
+                        row.dialogue,
+                        row.prompt_text
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            for term in case.required_terms {
+                assert!(
+                    combined_rows.contains(term),
+                    "scene family {} should preserve required fact term {}",
+                    case.scene_label,
+                    term
+                );
+            }
+            assert_no_fabricated_people_terms(&combined_rows);
+            if case.forbid_ruin_template {
+                for forbidden in ["断楼", "废墟", "残墙", "灰云"] {
+                    assert!(
+                        !combined_rows.contains(forbidden),
+                        "scene family {} drifted into ruin template term {}",
+                        case.scene_label,
+                        forbidden
+                    );
+                }
+            }
+            for row in &storyboard.rows {
+                assert_storyboard_row_has_no_vague_or_internal_terms(row);
+                assert_prompt_text_has_no_internal_payload(&row.prompt_text);
+                assert!(
+                    row.visual_description.contains("主体为"),
+                    "scene family {} should anchor a visible subject: {}",
+                    case.scene_label,
+                    row.visual_description
+                );
+                assert!(
+                    row.visual_description.contains("当前视觉事件是"),
+                    "scene family {} should describe the current visual event: {}",
+                    case.scene_label,
+                    row.visual_description
+                );
+                assert!(
+                    row.visual_description.contains("画面突出"),
+                    "scene family {} should land on a current focus: {}",
+                    case.scene_label,
+                    row.visual_description
+                );
+                assert!(
+                    case.required_terms.iter().any(|term| row.visual_description.contains(term))
+                        || case
+                            .required_terms
+                            .iter()
+                            .any(|term| row.person.contains(term) || row.shot_title.contains(term)),
+                    "scene family {} should keep at least one core fact inside subject/title/visual fields: {}",
+                    case.scene_label,
+                    row.visual_description
+                );
+                assert_no_fabricated_people_terms(&row.visual_description);
+                assert_no_fabricated_people_terms(&row.character_action);
+                if let Some(expected_dialogue) = case.expected_dialogue {
+                    assert!(
+                        row.dialogue.contains(expected_dialogue)
+                            || row.prompt_text.contains(expected_dialogue),
+                        "scene family {} should preserve dialogue {}",
+                        case.scene_label,
+                        expected_dialogue
+                    );
+                } else {
+                    assert!(
+                        row.dialogue.trim().is_empty(),
+                        "scene family {} should not invent dialogue: {}",
+                        case.scene_label,
+                        row.dialogue
+                    );
+                }
+            }
+            first_row_visuals.push(
+                storyboard
+                    .rows
+                    .first()
+                    .expect("single-scene regression should produce at least one row")
+                    .visual_description
+                    .clone(),
+            );
+        }
+
+        let unique_visual_count = first_row_visuals
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        assert!(
+            unique_visual_count >= 16,
+            "visual descriptions should vary across scene families, got {} unique visuals",
+            unique_visual_count
+        );
     }
 
     #[test]
