@@ -14,6 +14,7 @@
   --gold: #f6cf62;
   --gold-deep: #ddb245;
   --danger: #bf4a46;
+  --storyboard-surface: #f7faff;
   --shadow: 0 12px 32px rgba(17, 28, 51, 0.08);
   --radius-lg: 14px;
   --radius-md: 10px;
@@ -464,6 +465,7 @@ textarea {
   flex: 1;
   flex-direction: column;
   min-height: 0;
+  background: var(--storyboard-surface);
 }
 
 .section-name {
@@ -1304,7 +1306,7 @@ textarea {
   border: 1px solid var(--line);
   border-radius: var(--radius-md) var(--radius-md) 0 0;
   overflow: hidden;
-  background: #fff;
+  background: var(--storyboard-surface);
 }
 
 .table-wrapper--single-page {
@@ -1324,6 +1326,7 @@ textarea {
 
 .storyboard-table tbody tr {
   height: var(--storyboard-row-height);
+  background: var(--storyboard-surface);
 }
 
 .storyboard-table th,
@@ -1564,7 +1567,7 @@ textarea {
   border: 1px solid var(--line);
   border-top: none;
   border-radius: 0 0 var(--radius-md) var(--radius-md);
-  background: #fff;
+  background: var(--storyboard-surface);
 }
 
 .page-size-control,
