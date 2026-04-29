@@ -938,14 +938,22 @@ export function App() {
   };
 
   const syncModelProviderStatusFromWarnings = (warnings: ProductWarning[]) => {
-    if (!hasTextModelFallback(warnings)) {
+    const fallbackWarning = textModelFallbackWarning(warnings);
+    if (!fallbackWarning) {
+      if (modelProviderStatus.status === "fallback" && desktopRuntimeAvailable) {
+        getTextModelProviderStatus()
+          .then(applyProviderStatusToUi)
+          .catch(() => {
+            // Keep the last visible state if the status refresh itself fails.
+          });
+      }
       return;
     }
     setModelProviderStatus((current) => ({
       ...current,
       status: "fallback",
       live_ready: false,
-      message: "千问：调用失败已回退，本次已使用本地候选结果。",
+      message: fallbackWarning.message || `text model fallback: ${fallbackWarning.code}`,
     }));
   };
 
@@ -4260,7 +4268,7 @@ function formatModelProviderStatus(
     return "预留，当前未启用";
   }
   if (status.status === "fallback") {
-    return "live call 失败进入 fallback";
+    return "上次 live call 已 fallback";
   }
   if (status.status === "api_config_unsaved" || status.status === "unconfigured") {
     return "API 配置未保存";
@@ -4293,8 +4301,16 @@ function formatModelProviderStatusTone(status: TextModelProviderStatus) {
   return "unconfigured";
 }
 
+function textModelFallbackWarning(warnings: ProductWarning[]) {
+  return warnings.find(isTextModelFallbackWarning);
+}
+
 function hasTextModelFallback(warnings: ProductWarning[]) {
-  return warnings.some((warning) =>
+  return warnings.some(isTextModelFallbackWarning);
+}
+
+function isTextModelFallbackWarning(warning: ProductWarning) {
+  return (
     /^text_model_/.test(warning.code) &&
     (
       warning.code.includes("fallback") ||
@@ -4303,7 +4319,7 @@ function hasTextModelFallback(warnings: ProductWarning[]) {
       warning.code.includes("network") ||
       warning.code.includes("invalid") ||
       warning.code.includes("not_supported")
-    ),
+    )
   );
 }
 

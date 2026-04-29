@@ -888,8 +888,11 @@ pub fn generate_storyboard(
     }
 
     if !live_row_patches.is_empty() {
-        let live_validator_findings =
-            validate_live_storyboard_rows(&rows, request.selected_total_duration_seconds);
+        let live_validator_findings = validate_live_storyboard_rows(
+            &rows,
+            request.selected_total_duration_seconds,
+            &deterministic_rows,
+        );
         if !live_validator_findings.is_empty() {
             warnings.extend(live_validator_findings);
             warnings.push(ProductWarning {
@@ -2149,10 +2152,10 @@ fn build_qwen_request_payload(
         TextGenerationOutputSchema::RepairPlanJson => "repair_plan_json",
         TextGenerationOutputSchema::SeedancePromptText => "seedance_prompt_text",
     };
-    let system_prompt = "You are Hope's controlled text-generation layer. Ground storyboard output in shot_script first, then expanded_script_text, then primary scene fields, and only then compressed KB context. Preserve accepted character relationships, motivation, event order, timeline, prop state, emotional progression, conflict causality, and next-scene continuity. Scene changes expression only; directing schedules shots only. Never emit full KB rows, source_register, overlay JSON, or internal control text. Never invent real director names, IP names, brand names, or external asset bindings.";
+    let system_prompt = "You are Hope's controlled text-generation layer. Ground storyboard output in shot_script first, then expanded_script_text, then primary scene fields, and only then compressed KB context. Preserve accepted character relationships, motivation, event order, timeline, prop state, emotional progression, conflict causality, and next-scene continuity. Scene changes expression only; directing schedules shots only. Never invent character names, rename roles, emit full KB rows, source_register, overlay JSON, internal control text, real director names, IP names, brand names, or external asset bindings.";
     let user_prompt = match (request.task_type, request.output_schema) {
         (TextGenerationTask::ExpandScript, TextGenerationOutputSchema::PlainText) => format!(
-            "task_type=expand_script\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=story_script_plain_text\nconstraints=Write only user-visible story body. Do not output scene_type, target_duration_seconds, source_package, source_input_type, authoring_mode, prompt_text, storyboard rows, timecodes, JSON, source_register, overlay JSON, or internal control lines. Keep the story ready for later shot decomposition without pre-formatting shots.",
+            "task_type=expand_script\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=story_script_plain_text\nconstraints=Write only user-visible story body. Do not invent character names or rename role labels. Do not output scene_type, target_duration_seconds, source_package, source_input_type, authoring_mode, prompt_text, storyboard rows, timecodes, JSON, source_register, overlay JSON, or internal control lines. Keep the story ready for later shot decomposition without pre-formatting shots.",
             scene_type,
             duration_seconds,
             request.story_input,
@@ -2164,7 +2167,7 @@ fn build_qwen_request_payload(
             TextGenerationTask::GenerateStoryboard,
             TextGenerationOutputSchema::StoryboardRowsJson,
         ) => format!(
-            "task_type=generate_storyboard\nscene_type={}\nduration_seconds={}\nshot_script={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=storyboard_rows_json\nconstraints=Output a JSON object with a rows array. Each row must include person, shot_title, scene_scale, camera_movement, visual_description, character_action, dialogue, and duration_seconds. Preserve accepted continuity. Visual descriptions must include environment or space, composition, visible light or atmosphere, and the current visual event. Never emit full KB rows, source_register, overlay JSON, or internal control text. Never turn internal sample evidence into final prompt_text.",
+            "task_type=generate_storyboard\nscene_type={}\nduration_seconds={}\nshot_script={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=storyboard_rows_json\nconstraints=Output a JSON object with a rows array. Each row must include person, shot_title, scene_scale, camera_movement, visual_description, character_action, dialogue, and duration_seconds. The person field must use only a name or role label explicitly present in shot_script; do not invent character names or rename roles. Preserve accepted continuity. Visual descriptions must include environment or space, composition, visible light or atmosphere, and the current visual event. Never emit full KB rows, source_register, overlay JSON, or internal control text. Never turn internal sample evidence into final prompt_text.",
             scene_type,
             duration_seconds,
             request.story_input,
@@ -2173,7 +2176,7 @@ fn build_qwen_request_payload(
             request.selected_kb_rules.join(" | "),
         ),
         _ => format!(
-            "task_type={:?}\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema={}\nconstraints=Keep total duration conserved. Preserve accepted continuity. Never emit full KB rows, source_register, overlay JSON, or internal control text. Never turn internal sample evidence into final prompt_text.",
+            "task_type={:?}\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema={}\nconstraints=Keep total duration conserved. Preserve accepted continuity. Do not invent character names or rename roles. Never emit full KB rows, source_register, overlay JSON, or internal control text. Never turn internal sample evidence into final prompt_text.",
             request.task_type,
             scene_type,
             duration_seconds,
@@ -3252,6 +3255,7 @@ fn apply_live_storyboard_patch(row: &mut GeneratedStoryboardRow, patch: &LiveSto
 fn validate_live_storyboard_rows(
     rows: &[GeneratedStoryboardRow],
     expected_duration_seconds: u16,
+    deterministic_rows: &[GeneratedStoryboardRow],
 ) -> Vec<ProductWarning> {
     let mut findings = Vec::new();
     if rows.iter().map(|row| row.duration_seconds).sum::<u16>() != expected_duration_seconds {
@@ -3261,7 +3265,19 @@ fn validate_live_storyboard_rows(
             related_sample_id: None,
         });
     }
-    for row in rows {
+    for (index, row) in rows.iter().enumerate() {
+        if let Some(baseline_row) = deterministic_rows.get(index) {
+            if let Some(name) = live_storyboard_row_untrusted_character(row, baseline_row) {
+                findings.push(ProductWarning {
+                    code: "text_model_validator_failed".to_string(),
+                    message: format!(
+                        "Live storyboard row {} introduced an ungrounded character name: {}.",
+                        row.order, name
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
+        }
         for (field_name, field_value) in [
             ("person", row.person.as_str()),
             ("shot_title", row.shot_title.as_str()),
@@ -3368,6 +3384,90 @@ fn validate_live_storyboard_rows(
         }
     }
     findings
+}
+
+fn live_storyboard_row_untrusted_character(
+    row: &GeneratedStoryboardRow,
+    baseline_row: &GeneratedStoryboardRow,
+) -> Option<String> {
+    let evidence = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        baseline_row.shot_script,
+        baseline_row.person,
+        baseline_row.shot_title,
+        baseline_row.visual_description,
+        baseline_row.character_action,
+        baseline_row.dialogue,
+        row.shot_script
+    );
+    let live_text = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        row.person, row.shot_title, row.visual_description, row.character_action, row.camera_movement
+    );
+    let mut candidates = Vec::new();
+    for character in CharacterRegistry::from_story_text(&live_text, &live_text).characters {
+        push_unique_fact(&mut candidates, character.name);
+    }
+    for part in split_live_subject_parts(&row.person) {
+        if looks_like_potential_live_character_label(&part) {
+            push_unique_fact(&mut candidates, part);
+        }
+    }
+
+    candidates
+        .into_iter()
+        .find(|candidate| !live_character_label_is_grounded(candidate, &evidence, &baseline_row.person))
+}
+
+fn split_live_subject_parts(value: &str) -> Vec<String> {
+    value
+        .split(['、', '/', ',', '，', '和', '与', '&'])
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+fn looks_like_potential_live_character_label(value: &str) -> bool {
+    let trimmed = value.trim();
+    let char_count = trimmed.chars().count();
+    if !(2..=6).contains(&char_count) {
+        return false;
+    }
+    if subject_is_non_character_anchor(trimmed) || looks_like_non_character_phrase(trimmed) {
+        return false;
+    }
+    if contains_any_story_term(
+        trimmed,
+        &[
+            "主角",
+            "女主",
+            "敌人",
+            "敌将",
+            "敌方刀客",
+            "黑影",
+            "未知身影",
+            "对手",
+            "来袭者",
+        ],
+    ) {
+        return true;
+    }
+    trimmed.chars().all(|character| ('\u{4e00}'..='\u{9fff}').contains(&character))
+        && !looks_like_name_noise_candidate(trimmed)
+}
+
+fn live_character_label_is_grounded(
+    character: &str,
+    evidence: &str,
+    baseline_person: &str,
+) -> bool {
+    let trimmed = character.trim();
+    if trimmed.is_empty() || subject_is_non_character_anchor(trimmed) {
+        return true;
+    }
+    evidence.contains(trimmed)
+        || baseline_person.contains(trimmed)
+        || (!baseline_person.trim().is_empty() && trimmed.contains(baseline_person.trim()))
 }
 
 fn is_role_action_grounding_incomplete(value: &str) -> bool {
@@ -7003,7 +7103,9 @@ mod tests {
         GoldenSampleSourceContext, GoldenSampleSourceFields, GoldenSampleSourceRegister,
         GoldenSampleV3CoreCoverage, GoldenSampleValidatorEvidence, KbBundleManifestRecord,
         KbBundleRecordCounts, KbGoldenSampleRuntimePackage, KbRuntimeSummary, KbSnapshotRecord,
-        PromptTemplateRecord, SceneTaxonomyRecord,
+        PromptTemplateRecord, PromptTextCompilationStatus, ScenePerformanceProjection,
+        SceneTaxonomyRecord, SequenceFieldState, SequenceGrouping, ShotGroundingSource,
+        StructureMode,
     };
     use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
     use project_store::{
@@ -7022,7 +7124,7 @@ mod tests {
         has_visual_concrete_element_signal, has_visual_environment_signal,
         has_visual_light_tone_or_material_signal, normalize_scene_type,
         resolve_expand_script_target_duration_seconds, resolve_scene_taxonomy,
-        runtime_scene_option_mappings,
+        runtime_scene_option_mappings, validate_live_storyboard_rows,
     };
     use crate::state::load_desktop_shared_fixture;
     use crate::{
@@ -7405,6 +7507,81 @@ mod tests {
                 "storyboard text should not invent generic people term {forbidden}: {text}"
             );
         }
+    }
+
+    fn test_live_validation_row(person: &str) -> GeneratedStoryboardRow {
+        let sequence_grouping = SequenceGrouping {
+            structure_mode: StructureMode::SingleShot,
+            sequence_id: None,
+            shot_order: None,
+            sequence_field_state: SequenceFieldState::NotApplicable,
+        };
+        let scene_performance_projection = ScenePerformanceProjection {
+            source_sample_id: "test".to_string(),
+            source_sample_title: "test".to_string(),
+            scene_scale: "中近景".to_string(),
+            person: person.to_string(),
+            visual_description: format!(
+                "主体为{person}，中近景把{person}放在画面前侧，当前视觉事件是废墟中的压迫逼近，画面突出尘土与黑暗钢筋。"
+            ),
+            character_action: format!(
+                "{person}从废墟边缘的低身状态开始，到抬头承受压迫的瞬间结束，镜头捕捉呼吸和手指动作。"
+            ),
+            fused_source_text: "废墟之上，主角单膝跪地，敌人缓步逼近。".to_string(),
+            sequence_grouping: sequence_grouping.clone(),
+        };
+        GeneratedStoryboardRow {
+            shot_id: "shot-1".to_string(),
+            order: 1,
+            shot_script: "废墟之上，主角单膝跪地，敌人缓步逼近。".to_string(),
+            primary_scene_type: "hot_blood_battle".to_string(),
+            primary_scene_label: "热血战斗".to_string(),
+            primary_scene_category: "combat".to_string(),
+            shot_scene_type: "hot_blood_battle".to_string(),
+            shot_scene_label: "热血战斗".to_string(),
+            shot_intent: "action_beat".to_string(),
+            adaptation_reason: "test".to_string(),
+            grounding_source: ShotGroundingSource::ShotScript,
+            person: person.to_string(),
+            shot_title: format!("镜头1：{person}废墟压迫"),
+            scene_scale: "中近景".to_string(),
+            visual_description: scene_performance_projection.visual_description.clone(),
+            character_action: scene_performance_projection.character_action.clone(),
+            camera_movement: "中近景定机位观察主角动作起止，镜头捕捉废墟压迫。".to_string(),
+            dialogue: "你撑不了多久。".to_string(),
+            prompt_text: "以当前镜头脚本为准，输出单个镜头画面。".to_string(),
+            prompt_text_compilation_status: PromptTextCompilationStatus::ReadyStub,
+            prompt_text_compilation_warnings: vec![],
+            prompt_text_source_row_id: "shot-1".to_string(),
+            duration_seconds: 10,
+            shot_duration_seconds: 10,
+            duration_source: "test".to_string(),
+            scene_performance_projection,
+            external_reference_handle_candidates: vec![],
+            sequence_grouping,
+        }
+    }
+
+    #[test]
+    fn live_storyboard_validator_rejects_untrusted_character_names() {
+        let baseline = test_live_validation_row("主角");
+        let mut live_row = baseline.clone();
+        live_row.person = "孔泛".to_string();
+        live_row.shot_title = "镜头1：孔泛废墟压迫".to_string();
+        live_row.visual_description =
+            "主体为孔泛，特写压低孔泛的脸部，强调废墟中的压迫。".to_string();
+        live_row.character_action =
+            "孔泛从高架桥阴影下压低重心开始，到抬头承受压迫结束，镜头捕捉手指动作。".to_string();
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+
+        assert!(
+            warnings.iter().any(|warning| warning
+                .message
+                .contains("ungrounded character name")),
+            "live storyboard rows should reject invented character names: {:?}",
+            warnings
+        );
     }
 
     #[test]
