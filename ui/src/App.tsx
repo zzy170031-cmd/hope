@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Shell } from "./components/Shell";
 import logoUrl from "./assets/hope-desktop-logo.png";
 import {
@@ -94,6 +94,9 @@ interface ShotCandidate {
   text: string;
   preview: string;
   durationSeconds: number;
+  sceneType: SceneFusionOption;
+  sceneLabel: string;
+  sceneCategory: string;
 }
 
 type TaskDraftScriptTextSource = "candidate" | "task" | "manual";
@@ -118,6 +121,9 @@ interface TaskDraftState {
   baseSegmentTitle: string;
   baseScriptText: string;
   baseDurationSeconds: number;
+  sourceSceneType: SceneFusionOption | string;
+  sourceSceneLabel: string;
+  sourceSceneCategory: string;
   scriptTextSource: TaskDraftScriptTextSource;
   manualEditedFields: TaskDraftManualEditedFields;
   durationHint: string;
@@ -190,7 +196,7 @@ interface SourceInputAnalysis {
 }
 
 const DEFAULT_STORYBOARD_PAGE_SIZE = 5;
-const STORYBOARD_PAGE_SIZE_OPTIONS = [3, 4, 5, 6, 10, 20];
+const STORYBOARD_PAGE_SIZE_OPTIONS = [2, 3, 4, 5, 6, 10, 20];
 const DURATION_OPTIONS = [5, 10, 15, 30, 45, 60];
 const TASK_DRAFT_DURATION_HINT = "时长只用于当前任务的生成与导出标记，不会自动改写正文。";
 const FIXED_DURATION_MODE: TargetDurationMode = "fixed_seconds";
@@ -426,6 +432,8 @@ export function App() {
   const [taskDraft, setTaskDraft] = useState<TaskDraftState | null>(null);
   const [isTaskPickerOpen, setIsTaskPickerOpen] = useState(false);
   const [taskSerial, setTaskSerial] = useState(0);
+  const tableWrapperRef = useRef<HTMLDivElement | null>(null);
+  const exportRowRef = useRef<HTMLElement | null>(null);
   const [exportMessage, setExportMessage] = useState("等待导出");
 
   const editingRow = editingDraft;
@@ -451,11 +459,24 @@ export function App() {
       return;
     }
 
-    const handleResize = () => setStoryboardPageSize(resolveStoryboardPageSize());
+    const handleResize = () =>
+      setStoryboardPageSize(resolveStoryboardPageSize(tableWrapperRef.current, exportRowRef.current));
     handleResize();
     window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, [storyboardPageSizeManual]);
+    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(handleResize);
+    if (resizeObserver) {
+      if (tableWrapperRef.current) {
+        resizeObserver.observe(tableWrapperRef.current);
+      }
+      if (exportRowRef.current) {
+        resizeObserver.observe(exportRowRef.current);
+      }
+    }
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      resizeObserver?.disconnect();
+    };
+  }, [rows.length, storyboardPageSizeManual]);
 
   const currentSceneTask = useMemo(
     () => sceneTasks.find((task) => task.id === currentTaskId) ?? null,
@@ -548,6 +569,12 @@ export function App() {
     acceptedScriptDurationSeconds ?? acceptedPlanFallbackDuration,
     acceptedPlanFallbackDuration,
   );
+  const plannedShotCandidateCount = useMemo(() => {
+    const count = storyPlanIsCurrent && expandedScriptSnapshotIsCurrent
+      ? responseShotTaskCount(expandedScriptResult)
+      : 0;
+    return count > 1 ? count : 0;
+  }, [expandedScriptResult, expandedScriptSnapshotIsCurrent, storyPlanIsCurrent]);
   const currentTaskDuration = storyPlanIsCurrent
     ? normalizeDurationOption(
         currentSceneTask?.sourceDurationSeconds ?? shotCandidateBaseDuration,
@@ -558,9 +585,23 @@ export function App() {
   const shotCandidates = useMemo(
     () =>
       storyPlanIsCurrent
-        ? buildShotCandidates(acceptedScript, shotCandidateBaseDuration, acceptedPlanMode)
+        ? buildShotCandidates(
+            acceptedScript,
+            shotCandidateBaseDuration,
+            acceptedPlanMode,
+            plannedShotCandidateCount,
+            acceptedScriptScene ?? selectedSceneOption,
+          )
         : [],
-    [acceptedPlanMode, acceptedScript, shotCandidateBaseDuration, storyPlanIsCurrent],
+    [
+      acceptedPlanMode,
+      acceptedScript,
+      acceptedScriptScene,
+      plannedShotCandidateCount,
+      selectedSceneOption,
+      shotCandidateBaseDuration,
+      storyPlanIsCurrent,
+    ],
   );
   const confirmedSceneTaskIds = useMemo(
     () =>
@@ -1427,6 +1468,9 @@ export function App() {
       task.sourceDurationSeconds ?? task.selectedTotalDurationSeconds,
       shotCandidateBaseDuration,
     ),
+    sourceSceneType: task.sourceSceneType ?? acceptedScriptScene?.value ?? selectedSceneOption.value,
+    sourceSceneLabel: task.sourceSceneLabel ?? acceptedScriptScene?.label ?? selectedSceneOption.label,
+    sourceSceneCategory: task.sourceSceneCategory ?? acceptedScriptScene?.group ?? selectedSceneOption.group,
     scriptTextSource: task.scriptTextSource ?? "task",
     manualEditedFields: createTaskDraftEditFlags(),
     durationHint: TASK_DRAFT_DURATION_HINT,
@@ -1460,6 +1504,7 @@ export function App() {
 
     const fallbackSceneIndex = shotCandidates.length + 1;
     const nextUnusedCandidate =
+      shotCandidates.find((candidate) => !sceneTasks.some((task) => task.candidateId === candidate.id)) ??
       shotCandidates[0];
     const firstCandidate = nextUnusedCandidate ?? {
       id: "custom",
@@ -1468,6 +1513,9 @@ export function App() {
       text: acceptedScript.trim(),
       preview: acceptedScript.trim(),
       durationSeconds: shotCandidateBaseDuration,
+      sceneType: selectedSceneOption.value,
+      sceneLabel: selectedSceneOption.label,
+      sceneCategory: selectedSceneOption.group,
     };
     const nextShotIndex = resolveNextShotIndexForCandidate(firstCandidate.id);
     const defaultTaskName = formatDefaultShotTaskName(firstCandidate.sceneIndex, nextShotIndex);
@@ -1530,7 +1578,10 @@ export function App() {
     const nextTaskId = editingTask?.id ?? createTaskRecordId();
     const isCreatingNewRecord = !sceneTasks.some((task) => task.id === nextTaskId);
     const nextSegmentTitle = taskDraft.segmentTitle || candidate?.title || "自定义镜头片段";
-    const taskScene = acceptedScriptScene ?? selectedSceneOption;
+    const taskScene =
+      findSceneOption(taskDraft.sourceSceneType) ??
+      acceptedScriptScene ??
+      selectedSceneOption;
     const taskDurationSeconds = normalizeDurationOption(taskDraft.durationSeconds, shotCandidateBaseDuration);
     const taskDurationMode = acceptedScriptTargetDurationMode ?? targetDurationMode;
 
@@ -1607,6 +1658,9 @@ export function App() {
         text: taskDraft.baseScriptText,
         preview: truncatePreview(taskDraft.baseScriptText),
         durationSeconds: taskDraft.baseDurationSeconds,
+        sceneType: taskDraft.sourceSceneType as SceneFusionOption,
+        sceneLabel: taskDraft.sourceSceneLabel,
+        sceneCategory: taskDraft.sourceSceneCategory,
       };
       const nextShotIndex = resolveNextShotIndexForCandidate(currentCandidate.id) + 1;
 
@@ -2758,7 +2812,10 @@ export function App() {
           <section className="panel-section panel-section--storyboard">
             <div className="section-name">当前镜头结果</div>
 
-            <div className={rows.length ? "table-wrapper" : "table-wrapper table-wrapper--single-page"}>
+            <div
+              ref={tableWrapperRef}
+              className={rows.length ? "table-wrapper" : "table-wrapper table-wrapper--single-page"}
+            >
               <table className="storyboard-table">
                 <thead>
                   <tr>
@@ -2886,7 +2943,7 @@ export function App() {
 
           </section>
 
-          <section className="export-row">
+          <section ref={exportRowRef} className="export-row">
             <div className="finalized-bank">
               <strong>已定稿分镜区</strong>
               <span>已确认 {confirmedShotCount}/{sceneTasks.length} 个镜头</span>
@@ -3128,7 +3185,7 @@ export function App() {
                             </span>
                           </span>
                           <span>{candidate.preview}</span>
-                          <small>预计任务 {candidate.durationSeconds} 秒</small>
+                          <small>{candidate.sceneCategory} · {candidate.sceneLabel} · 预计任务 {candidate.durationSeconds} 秒</small>
                         </button>
                       );
                     }) : (
@@ -4374,110 +4431,98 @@ function buildShotCandidates(
   expandedScript: string,
   totalDurationSeconds: number,
   targetDurationMode: TargetDurationMode = FIXED_DURATION_MODE,
+  plannedShotTaskCount = 0,
+  fallbackScene: SceneOption = SCENE_OPTIONS[0],
 ): ShotCandidate[] {
   const scriptBody = extractScriptBody(expandedScript);
   if (!scriptBody) {
     return [];
   }
 
-  return buildDynamicShotCandidatesFromBody(scriptBody, totalDurationSeconds, targetDurationMode);
-
-  const sentences = splitScriptBody(scriptBody);
-  const segments = mergeScriptSegments(sentences.length ? sentences : [scriptBody]);
-  const fullDuration = normalizeScriptDurationOption(totalDurationSeconds, 15);
-  if (targetDurationMode === LONG_TEXT_DURATION_MODE) {
-    const plannedDurations = allocateLongTextAutoShotTaskDurations(fullDuration);
-    const durations = plannedDurations.length > 1
-      ? plannedDurations
-      : Array.from({ length: Math.max(2, segments.length || 2) }, () => 10);
-    return durations.map((durationSeconds, index) => {
-      const segment = storySegmentForPlannedTask(segments, index, durations.length, scriptBody);
-      return {
-        id: `auto-segment-${index + 1}`,
-        sceneIndex: index + 1,
-        title: `自动分段 ${index + 1}`,
-        text: segment,
-        preview: truncatePreview(segment),
-        durationSeconds,
-      };
-    });
-  }
-
-  const fixedFullDuration = normalizeDurationOption(totalDurationSeconds, 15);
-  const candidates = segments.slice(0, 8).map((segment, index) => ({
-    id: `candidate-${index + 1}`,
-    sceneIndex: index + 1,
-    title: `场景候选 ${index + 1}`,
-    text: segment,
-    preview: truncatePreview(segment),
-    durationSeconds: fixedFullDuration,
-  }));
-
-  return candidates.length
-    ? candidates
-    : [
-        {
-          id: "custom",
-          sceneIndex: 1,
-          title: "自定义镜头片段",
-          text: scriptBody,
-          preview: truncatePreview(scriptBody),
-          durationSeconds: fixedFullDuration,
-        },
-      ];
+  return buildDynamicShotCandidatesFromBody(
+    scriptBody,
+    totalDurationSeconds,
+    targetDurationMode,
+    plannedShotTaskCount,
+    fallbackScene,
+  );
 }
 
 function buildDynamicShotCandidatesFromBody(
   scriptBody: string,
   totalDurationSeconds: number,
   targetDurationMode: TargetDurationMode,
+  plannedShotTaskCount = 0,
+  fallbackScene: SceneOption = SCENE_OPTIONS[0],
 ): ShotCandidate[] {
   const cleanBody = normalizeScriptText(scriptBody);
   if (!cleanBody) {
     return [];
   }
+  const plannedCount = normalizePlannedShotTaskCount(plannedShotTaskCount);
 
   if (targetDurationMode === LONG_TEXT_DURATION_MODE) {
     const plannedDurations = allocateLongTextAutoShotTaskDurations(totalDurationSeconds);
-    const targetCount = plannedDurations.length || Math.max(1, Math.min(8, Math.ceil(cleanBody.length / 320)));
-    const segments = rebalanceCandidateSegments(buildCandidateSourceSegments(cleanBody), targetCount);
+    const sourceSegments = buildCandidateSourceSegments(cleanBody);
+    const sentenceCount = splitScriptBody(cleanBody).length || 1;
+    const planningUnitCount = splitCandidatePlanningUnits(cleanBody).length || sourceSegments.length;
+    const naturalCount = Math.max(
+      plannedDurations.length || 1,
+      resolveDynamicCandidateCount(cleanBody, sentenceCount, sourceSegments.length, totalDurationSeconds, planningUnitCount),
+    );
+    const targetCount = resolveCandidateTargetCount(naturalCount, totalDurationSeconds, plannedCount);
+    const segments = rebalanceCandidateSegments(sourceSegments, targetCount);
     const durations = allocateCandidateDurations(totalDurationSeconds, segments);
-    return segments.map((segment, index) => ({
-      id: `auto-segment-${index + 1}`,
-      sceneIndex: index + 1,
-      title: `自动分段 ${index + 1}`,
-      text: segment,
-      preview: truncatePreview(segment),
-      durationSeconds: durations[index] ?? 10,
-    }));
+    return segments.map((segment, index) =>
+      createShotCandidateFromSegment("auto-segment", segment, index, durations[index] ?? 10, fallbackScene),
+    );
   }
 
   const fixedFullDuration = normalizeDurationOption(totalDurationSeconds, 15);
   const sourceSegments = buildCandidateSourceSegments(cleanBody);
   const sentenceCount = splitScriptBody(cleanBody).length || 1;
-  const desiredCount = resolveDynamicCandidateCount(cleanBody, sentenceCount, sourceSegments.length, fixedFullDuration);
+  const planningUnitCount = splitCandidatePlanningUnits(cleanBody).length || sourceSegments.length;
+  const naturalCount = resolveDynamicCandidateCount(
+    cleanBody,
+    sentenceCount,
+    sourceSegments.length,
+    fixedFullDuration,
+    planningUnitCount,
+  );
+  const desiredCount = resolveCandidateTargetCount(naturalCount, fixedFullDuration, plannedCount);
   const segments = rebalanceCandidateSegments(sourceSegments, desiredCount);
   const durations = allocateCandidateDurations(fixedFullDuration, segments);
 
   return segments.length
-    ? segments.map((segment, index) => ({
-        id: `candidate-${index + 1}`,
-        sceneIndex: index + 1,
-        title: `场景候选 ${index + 1}`,
-        text: segment,
-        preview: truncatePreview(segment),
-        durationSeconds: durations[index] ?? fixedFullDuration,
-      }))
+    ? segments.map((segment, index) =>
+        createShotCandidateFromSegment("candidate", segment, index, durations[index] ?? fixedFullDuration, fallbackScene),
+      )
     : [
-        {
-          id: "custom",
-          sceneIndex: 1,
-          title: "自定义镜头片段",
-          text: cleanBody,
-          preview: truncatePreview(cleanBody),
-          durationSeconds: fixedFullDuration,
-        },
+        createShotCandidateFromSegment("custom", cleanBody, 0, fixedFullDuration, fallbackScene, "自定义镜头片段"),
       ];
+}
+
+function createShotCandidateFromSegment(
+  idPrefix: string,
+  segment: string,
+  index: number,
+  durationSeconds: number,
+  fallbackScene: SceneOption,
+  explicitTitle?: string,
+): ShotCandidate {
+  const scene = recommendSceneOptionForCandidateSegment(segment, fallbackScene);
+  const sceneIndex = index + 1;
+  return {
+    id: idPrefix === "custom" ? "custom" : `${idPrefix}-${sceneIndex}`,
+    sceneIndex,
+    title: explicitTitle ?? `${scene.label} · 场景候选 ${sceneIndex}`,
+    text: segment,
+    preview: truncatePreview(segment),
+    durationSeconds,
+    sceneType: scene.value,
+    sceneLabel: scene.label,
+    sceneCategory: scene.group,
+  };
 }
 
 function buildCandidateSourceSegments(scriptBody: string) {
@@ -4537,31 +4582,52 @@ function uniqueCandidateSegments(segments: string[]) {
   return unique;
 }
 
+function normalizeCandidateSegments(segments: string[]) {
+  return segments.map((segment) => normalizeScriptText(segment)).filter(Boolean);
+}
+
 function resolveDynamicCandidateCount(
   scriptBody: string,
   sentenceCount: number,
   sourceSegmentCount: number,
   totalDurationSeconds: number,
+  planningUnitCount = 0,
 ) {
-  const durationUnits = Math.max(1, Math.round(totalDurationSeconds / 5));
-  const durationCap =
-    totalDurationSeconds <= 15 ? 2 :
-    totalDurationSeconds <= 30 ? 3 :
-    totalDurationSeconds <= 60 ? 5 :
-    8;
-  const maxCount = Math.max(1, Math.min(durationUnits, durationCap, sentenceCount || 1));
+  void sentenceCount;
+  const durationCap = resolveCandidateDurationCap(totalDurationSeconds);
   const lengthCount =
     scriptBody.length <= 180 ? 1 :
     scriptBody.length <= 420 ? 2 :
     scriptBody.length <= 800 ? 3 :
     Math.min(8, Math.ceil(scriptBody.length / 320));
-  const sceneCount = Math.max(1, sourceSegmentCount);
-  return Math.max(1, Math.min(maxCount, Math.max(lengthCount, sceneCount)));
+  const sceneCount = Math.max(1, sourceSegmentCount, planningUnitCount);
+  return Math.max(1, Math.min(durationCap, Math.max(lengthCount, sceneCount)));
+}
+
+function resolveCandidateDurationCap(totalDurationSeconds: number) {
+  const duration = normalizeScriptDurationOption(totalDurationSeconds, 15);
+  const fiveSecondUnits = Math.max(1, Math.ceil(duration / 5));
+  if (duration <= 30) {
+    return Math.min(6, fiveSecondUnits);
+  }
+  if (duration <= 60) {
+    return Math.min(6, fiveSecondUnits);
+  }
+  if (duration <= 120) {
+    return Math.min(8, fiveSecondUnits);
+  }
+  return Math.min(10, fiveSecondUnits);
+}
+
+function resolveCandidateTargetCount(naturalCount: number, totalDurationSeconds: number, plannedCount = 0) {
+  const durationCap = resolveCandidateDurationCap(totalDurationSeconds);
+  const planCap = plannedCount > 0 ? Math.min(plannedCount, durationCap) : durationCap;
+  return Math.max(1, Math.min(Math.max(1, Math.floor(naturalCount) || 1), durationCap, planCap));
 }
 
 function rebalanceCandidateSegments(sourceSegments: string[], desiredCount: number) {
-  const segments = uniqueCandidateSegments(sourceSegments);
-  const targetCount = Math.max(1, Math.min(desiredCount, segments.length));
+  const segments = expandCandidateSegmentsForTargetCount(sourceSegments, desiredCount);
+  const targetCount = Math.max(1, Math.min(Math.floor(desiredCount) || 1, segments.length));
   if (segments.length <= targetCount) {
     return segments;
   }
@@ -4572,7 +4638,79 @@ function rebalanceCandidateSegments(sourceSegments: string[], desiredCount: numb
     const end = Math.max(start + 1, Math.ceil(((index + 1) * segments.length) / targetCount));
     balanced.push(segments.slice(start, end).join("").trim());
   }
-  return uniqueCandidateSegments(balanced);
+  return normalizeCandidateSegments(balanced);
+}
+
+function expandCandidateSegmentsForTargetCount(sourceSegments: string[], desiredCount: number) {
+  const segments = normalizeCandidateSegments(sourceSegments);
+  const targetCount = Math.max(1, Math.floor(desiredCount) || 1);
+  if (segments.length >= targetCount) {
+    return segments;
+  }
+
+  const text = segments.join("");
+  const clauseSegments = splitCandidatePlanningUnits(text);
+  if (clauseSegments.length >= targetCount) {
+    return clauseSegments;
+  }
+
+  return splitTextEvenlyForCandidateCount(text, targetCount);
+}
+
+function splitCandidatePlanningUnits(text: string) {
+  return normalizeCandidateSegments(text.match(/[^，,。！？!?；;]+[，,。！？!?；;]?/g) ?? [text]);
+}
+
+function splitTextEvenlyForCandidateCount(text: string, count: number) {
+  const cleanText = normalizeScriptText(text);
+  const chars = Array.from(cleanText);
+  const targetCount = Math.max(1, Math.min(Math.floor(count) || 1, chars.length || 1));
+  const chunks: string[] = [];
+  for (let index = 0; index < targetCount; index += 1) {
+    const start = Math.floor((index * chars.length) / targetCount);
+    const end = Math.max(start + 1, Math.floor(((index + 1) * chars.length) / targetCount));
+    chunks.push(chars.slice(start, end).join("").trim());
+  }
+  return normalizeCandidateSegments(chunks);
+}
+
+function normalizePlannedShotTaskCount(value: number) {
+  const count = Number(value);
+  if (!Number.isFinite(count) || count <= 1) {
+    return 0;
+  }
+  return Math.min(12, Math.max(2, Math.floor(count)));
+}
+
+function recommendSceneOptionForCandidateSegment(segment: string, fallbackScene: SceneOption) {
+  const text = segment.trim();
+  const candidates: Array<[SceneFusionOption, RegExp]> = [
+    ["slg_battle_report", /战报|UI|界面|面板|数据|结算|提示/i],
+    ["slg_sandbox_view", /沙盘|地图|俯瞰|战略|视口|路线图|全局/i],
+    ["slg_march_encirclement", /行军|合围|包围|包抄|军团|部队|推进|调兵/i],
+    ["siege_defense", /攻城|守城|围城|城墙|城门|箭楼|投石|城防/i],
+    ["council_strategy", /朝堂|军帐|权谋|谋略|计策|议事|密谈|布局/i],
+    ["weapon_highlight", /兵器|武器|长枪|长刀|刀光|剑|枪尖|弓|戟/i],
+    ["xianxia_action", /仙|灵力|法阵|飞剑|御剑|真气|灵光|符/i],
+    ["ink_wuxia_combat", /水墨|武侠|江湖|刀客|剑气|掌风|轻功|衣袍/i],
+    ["field_chase", /追逐|追击|逃|奔跑|疾避|侧身|冲刺|闪避/i],
+    ["emotional_dialogue", /对白|旁白|说|问|沉默|眼神|犹豫|泪|情绪|低声/i],
+    ["ensemble_performance", /众人|群像|人群|队伍|伙伴|围观|并肩|多名/i],
+    ["encounter_performance", /相遇|出现|靠近|对视|初见|迎面|踏出/i],
+    ["daily_healing", /日常|治愈|温柔|阳光|饭|家|平静|微笑/i],
+    ["eastern_spectacle", /东方|宫殿|云海|山门|天幕|奇观|巨像|光柱/i],
+    ["spectacle_showcase", /觉醒|爆炸|崩塌|巨|光芒|冲天|震动|能量/i],
+    ["urban_fantasy", /城市|都市|街区|高架|地铁|霓虹|废墟城市/i],
+    ["hot_blood_battle", /战斗|敌人|激烈|击败|冲突|攻势|压迫|格挡|拳|脚|血/i],
+  ];
+
+  for (const [value, pattern] of candidates) {
+    if (pattern.test(text)) {
+      return findSceneOption(value) ?? fallbackScene;
+    }
+  }
+
+  return fallbackScene;
 }
 
 function allocateCandidateDurations(totalDurationSeconds: number, segments: string[]) {
@@ -4652,9 +4790,9 @@ function createSceneTasksFromCandidates(
     scriptText: candidate.text,
     baseSceneText: candidate.text,
     scriptId,
-    sourceSceneType: scene.value,
-    sourceSceneLabel: scene.label,
-    sourceSceneCategory: scene.group,
+    sourceSceneType: candidate.sceneType ?? scene.value,
+    sourceSceneLabel: candidate.sceneLabel ?? scene.label,
+    sourceSceneCategory: candidate.sceneCategory ?? scene.group,
     sourceDurationSeconds: normalizeDurationOption(candidate.durationSeconds, 10),
     sourceDurationMode,
     status: "draft",
@@ -4701,6 +4839,9 @@ function createTaskDraftFromCandidate(
     baseSegmentTitle: candidate.title,
     baseScriptText: candidate.text,
     baseDurationSeconds: durationSeconds,
+    sourceSceneType: candidate.sceneType,
+    sourceSceneLabel: candidate.sceneLabel,
+    sourceSceneCategory: candidate.sceneCategory,
     scriptTextSource: "candidate",
     manualEditedFields: createTaskDraftEditFlags(),
     durationHint: TASK_DRAFT_DURATION_HINT,
@@ -5451,10 +5592,10 @@ function resolveStoryboardPageSize() {
   }
 
   const { innerHeight, innerWidth } = window;
-  if (innerHeight < 760 || innerWidth < 900) {
+  if (innerHeight < 900 || innerWidth < 1320) {
     return 3;
   }
-  if (innerHeight < 900) {
+  if (innerHeight < 1040 || innerWidth < 1600) {
     return 4;
   }
   if (innerHeight >= 1040 && innerWidth >= 1600) {
