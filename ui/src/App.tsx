@@ -5586,22 +5586,50 @@ function clampPage(page: number, pageCount: number) {
   return Math.min(Math.max(1, page), pageCount);
 }
 
-function resolveStoryboardPageSize() {
+function resolveStoryboardPageSize(tableWrapper?: HTMLDivElement | null, exportRow?: HTMLElement | null) {
   if (typeof window === "undefined") {
     return DEFAULT_STORYBOARD_PAGE_SIZE;
   }
 
   const { innerHeight, innerWidth } = window;
+  let pageSize = DEFAULT_STORYBOARD_PAGE_SIZE;
   if (innerHeight < 900 || innerWidth < 1320) {
-    return 3;
+    pageSize = 3;
+  } else if (innerHeight < 1040 || innerWidth < 1600) {
+    pageSize = 4;
+  } else if (innerHeight >= 1040 && innerWidth >= 1600) {
+    pageSize = 6;
   }
-  if (innerHeight < 1040 || innerWidth < 1600) {
-    return 4;
+
+  const measuredPageSize = resolveMeasuredStoryboardPageSize(tableWrapper, exportRow);
+  if (measuredPageSize) {
+    return Math.min(pageSize, measuredPageSize);
   }
-  if (innerHeight >= 1040 && innerWidth >= 1600) {
-    return 6;
+  return pageSize;
+}
+
+function resolveMeasuredStoryboardPageSize(tableWrapper?: HTMLDivElement | null, exportRow?: HTMLElement | null) {
+  if (!tableWrapper || !exportRow) {
+    return null;
   }
-  return DEFAULT_STORYBOARD_PAGE_SIZE;
+
+  const table = tableWrapper.querySelector("table");
+  const header = tableWrapper.querySelector("thead");
+  const row = tableWrapper.querySelector("tbody tr");
+  if (!table || !header || !row) {
+    return null;
+  }
+
+  const tableRect = table.getBoundingClientRect();
+  const footerRect = exportRow.getBoundingClientRect();
+  const headerHeight = header.getBoundingClientRect().height || 38;
+  const rowHeight = row.getBoundingClientRect().height;
+  const usableHeight = footerRect.top - tableRect.top - headerHeight - 10;
+  if (rowHeight <= 0 || usableHeight <= 0) {
+    return null;
+  }
+
+  return Math.max(2, Math.floor(usableHeight / rowHeight));
 }
 
 function renumberRows(rows: StoryboardWorkbenchRow[]) {
