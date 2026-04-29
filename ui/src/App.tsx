@@ -282,7 +282,7 @@ const DEFAULT_MODEL_PROVIDER_STATUS: TextModelProviderStatus = {
   api_key_present: false,
   live_ready: false,
   status: "api_config_unsaved",
-  message: "API 配置未保存，请在 Tauri 桌面壳内保存 session-only API 配置。",
+  message: "API 配置未保存，请在正式应用窗口内保存 session-only API 配置。",
   storage: "session-only",
 };
 
@@ -610,7 +610,7 @@ export function App() {
   const selectedModelLabel = useMemo(() => resolveModelLabel(modelConfig.provider), [modelConfig.provider]);
   const desktopRuntimeAvailable = bridgeStatus.mode === "desktop";
   const desktopRuntimeTone = desktopRuntimeAvailable ? "enabled" : "reserved";
-  const desktopRuntimeLabel = desktopRuntimeAvailable ? "Tauri 桌面壳" : "非桌面壳不可验收";
+  const desktopRuntimeLabel = desktopRuntimeAvailable ? "真实 IPC 已连接" : "非正式运行环境不可验收";
   const modelReservedWarning = modelConfig.provider === "qwen"
     ? ""
     : "该模型接口已配置为预留状态，当前仍使用本地文本生成桥接。";
@@ -672,9 +672,9 @@ export function App() {
       ...DEFAULT_MODEL_PROVIDER_STATUS,
       status: "not_desktop",
       live_ready: false,
-      message: "未在桌面壳内运行，非 Tauri 环境不可验收。",
+      message: "未在正式应用窗口内运行，当前环境不可验收。",
     });
-    setExportMessage(`${operation} 需要 Tauri 桌面壳真实 IPC；当前为非桌面壳不可验收。`);
+    setExportMessage(`${operation} 需要正式应用窗口的真实 IPC；当前环境不可验收。`);
     return false;
   };
 
@@ -685,7 +685,7 @@ export function App() {
         ...DEFAULT_MODEL_PROVIDER_STATUS,
         status: "not_desktop",
         live_ready: false,
-        message: "未在桌面壳内运行，非 Tauri 环境不可验收。",
+        message: "未在正式应用窗口内运行，当前环境不可验收。",
       });
       return () => {
         cancelled = true;
@@ -930,7 +930,7 @@ export function App() {
       status: provider === "qwen" ? "api_config_unsaved" : "reserved",
       message:
         provider === "qwen"
-          ? "API 配置未保存，请在 Tauri 桌面壳内保存 session-only API 配置。"
+          ? "API 配置未保存，请在正式应用窗口内保存 session-only API 配置。"
           : "该模型接口为预留状态，当前未启用真实调用。",
     });
     setExportMessage(
@@ -2408,9 +2408,11 @@ export function App() {
                   {modelRuntimeLabel}
                 </small>
               </label>
-              <span className={`top-select__status top-select__status--${desktopRuntimeTone}`}>
-                {desktopRuntimeLabel}
-              </span>
+              {!desktopRuntimeAvailable ? (
+                <span className={`top-select__status top-select__status--${desktopRuntimeTone}`}>
+                  {desktopRuntimeLabel}
+                </span>
+              ) : null}
               <button
                 type="button"
                 className={activePanel === "docs" ? "toolbar-button toolbar-button--active" : "toolbar-button"}
@@ -2462,7 +2464,7 @@ export function App() {
               ) : (
                 <form className="api-config" onSubmit={handleSaveModelConfig}>
                   <div className="api-config__notice">
-                    当前只启用千问文本生成配置；API Key 仅保存在本次桌面会话中。关键验收必须在 Tauri 桌面壳内完成。
+                    当前只启用千问文本生成配置；API Key 仅保存在本次应用会话中。关键验收必须在正式应用窗口内完成。
                   </div>
                   <div className="api-config__rows">
                     <div className="api-config__row api-config__row--primary">
@@ -4193,7 +4195,7 @@ function formatModelProviderStatus(
   status: TextModelProviderStatus,
 ) {
   if (status.status === "not_desktop") {
-    return "非桌面壳不可验收";
+    return "非正式运行环境不可验收";
   }
   if (config.provider !== "qwen") {
     return "预留，当前未启用";
