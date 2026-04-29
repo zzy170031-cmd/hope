@@ -14,7 +14,7 @@
   --gold: #f6cf62;
   --gold-deep: #ddb245;
   --danger: #bf4a46;
-  --storyboard-surface: #f7faff;
+  --storyboard-surface: #f7ffff;
   --shadow: 0 12px 32px rgba(17, 28, 51, 0.08);
   --radius-lg: 14px;
   --radius-md: 10px;
@@ -1560,6 +1560,7 @@ textarea {
 
 .pagination-row {
   display: grid;
+  flex: 0 0 auto;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
@@ -1637,8 +1638,8 @@ textarea {
 }
 
 .export-row {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(280px, auto) minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
   margin-top: auto;
@@ -2055,6 +2056,21 @@ textarea {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: #fffdf8;
+}
+
+.export-pagination-slot {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+
+.export-pagination-slot .pagination-row {
+  width: 100%;
+  max-width: 860px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
 }
 
 .task-queue__scroll {

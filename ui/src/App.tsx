@@ -2884,68 +2884,6 @@ export function App() {
               </table>
             </div>
 
-            {rows.length ? (
-            <div className="pagination-row">
-              <div className="page-size-control">
-                <label htmlFor="storyboard-page-size">每页显示</label>
-                <select id="storyboard-page-size" value={storyboardPageSize} onChange={handleStoryboardPageSizeChange}>
-                  {STORYBOARD_PAGE_SIZE_OPTIONS.map((size) => (
-                    <option key={size} value={size}>
-                      {size} 条
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="total-count">当前显示 {pageStartRow}-{pageEndRow} / 共 {rows.length} 条 · 第 {currentPage}/{pageCount} 页</div>
-
-              <div className="page-switcher">
-                <button
-                  type="button"
-                  className="page-arrow"
-                  onClick={() => setCurrentPage((value) => clampPage(value - 1, pageCount))}
-                  disabled={currentPage === 1}
-                >
-                  &lt;
-                </button>
-                {pageTokens.map((token, index) =>
-                  token === "..." ? (
-                    <span key={`ellipsis-${index}`} className="page-ellipsis">
-                      ...
-                    </span>
-                  ) : (
-                    <button
-                      key={token}
-                      type="button"
-                      className={token === currentPage ? "page-number page-number--active" : "page-number"}
-                      onClick={() => setCurrentPage(token)}
-                    >
-                      {token}
-                    </button>
-                  ),
-                )}
-                <button
-                  type="button"
-                  className="page-arrow"
-                  onClick={() => setCurrentPage((value) => clampPage(value + 1, pageCount))}
-                  disabled={currentPage === pageCount}
-                >
-                  &gt;
-                </button>
-              </div>
-
-              <form className="jump-form" onSubmit={handleJump}>
-                <span>跳至</span>
-                <input
-                  value={jumpPage}
-                  onChange={(event) => setJumpPage(event.target.value.replace(/[^0-9]/g, ""))}
-                  inputMode="numeric"
-                />
-                <span>页</span>
-                <button type="submit">跳转</button>
-              </form>
-            </div>
-            ) : null}
           </section>
 
           <section className="export-row">
@@ -2956,6 +2894,70 @@ export function App() {
               <button type="button" className="link-button" onClick={handleOpenFinalizedStoryboardDialog}>
                 查看全部
               </button>
+            </div>
+            <div className="export-pagination-slot">
+              {rows.length ? (
+                <div className="pagination-row">
+                  <div className="page-size-control">
+                    <label htmlFor="storyboard-page-size">每页显示</label>
+                    <select id="storyboard-page-size" value={storyboardPageSize} onChange={handleStoryboardPageSizeChange}>
+                      {STORYBOARD_PAGE_SIZE_OPTIONS.map((size) => (
+                        <option key={size} value={size}>
+                          {size} 条
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="total-count">当前显示 {pageStartRow}-{pageEndRow} / 共 {rows.length} 条 · 第 {currentPage}/{pageCount} 页</div>
+
+                  <div className="page-switcher">
+                    <button
+                      type="button"
+                      className="page-arrow"
+                      onClick={() => setCurrentPage((value) => clampPage(value - 1, pageCount))}
+                      disabled={currentPage === 1}
+                    >
+                      &lt;
+                    </button>
+                    {pageTokens.map((token, index) =>
+                      token === "..." ? (
+                        <span key={`ellipsis-${index}`} className="page-ellipsis">
+                          ...
+                        </span>
+                      ) : (
+                        <button
+                          key={token}
+                          type="button"
+                          className={token === currentPage ? "page-number page-number--active" : "page-number"}
+                          onClick={() => setCurrentPage(token)}
+                        >
+                          {token}
+                        </button>
+                      ),
+                    )}
+                    <button
+                      type="button"
+                      className="page-arrow"
+                      onClick={() => setCurrentPage((value) => clampPage(value + 1, pageCount))}
+                      disabled={currentPage === pageCount}
+                    >
+                      &gt;
+                    </button>
+                  </div>
+
+                  <form className="jump-form" onSubmit={handleJump}>
+                    <span>跳至</span>
+                    <input
+                      value={jumpPage}
+                      onChange={(event) => setJumpPage(event.target.value.replace(/[^0-9]/g, ""))}
+                      inputMode="numeric"
+                    />
+                    <span>页</span>
+                    <button type="submit">跳转</button>
+                  </form>
+                </div>
+              ) : null}
             </div>
             <div className="export-actions">
               <button
