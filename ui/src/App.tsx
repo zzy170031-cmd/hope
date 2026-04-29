@@ -431,6 +431,8 @@ export function App() {
   const editingRow = editingDraft;
 
   const pageCount = Math.max(1, Math.ceil(rows.length / storyboardPageSize));
+  const pageStartRow = rows.length ? (currentPage - 1) * storyboardPageSize + 1 : 0;
+  const pageEndRow = rows.length ? Math.min(rows.length, currentPage * storyboardPageSize) : 0;
   const pagedRows = useMemo(() => {
     const start = (currentPage - 1) * storyboardPageSize;
     return rows.slice(start, start + storyboardPageSize);
@@ -2893,7 +2895,7 @@ export function App() {
                 </select>
               </div>
 
-              <div className="total-count">共 {rows.length} 条 · 第 {currentPage}/{pageCount} 页</div>
+              <div className="total-count">当前显示 {pageStartRow}-{pageEndRow} / 共 {rows.length} 条 · 第 {currentPage}/{pageCount} 页</div>
 
               <div className="page-switcher">
                 <button
