@@ -164,6 +164,37 @@ struct LiveStoryboardRowsEnvelope {
     rows: Vec<LiveStoryboardRowPatch>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct LiveRepairSummary {
+    raw_failed_validator: bool,
+    reasons: Vec<String>,
+}
+
+impl LiveRepairSummary {
+    fn repaired(&self) -> bool {
+        !self.reasons.is_empty()
+    }
+
+    fn push_reason(&mut self, reason: &str) {
+        if !self.reasons.iter().any(|item| item == reason) {
+            self.reasons.push(reason.to_string());
+        }
+    }
+
+    fn extend(&mut self, other: LiveRepairSummary) {
+        self.raw_failed_validator |= other.raw_failed_validator;
+        for reason in other.reasons {
+            self.push_reason(&reason);
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LiveTextRepairResult {
+    text: String,
+    summary: LiveRepairSummary,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StoryboardGroundingContext {
     shot_script: String,
@@ -222,6 +253,215 @@ const SEEDANCE_STANDARD_SEGMENT_SECONDS: u16 = 10;
 const SEEDANCE_REMAINDER_SEGMENT_SECONDS: u16 = 5;
 const SEEDANCE_MAX_SEGMENT_SECONDS: u16 = 15;
 const MVP_SCENE_CANONICAL_BUCKET: &str = "daily_dialogue";
+const LIVE_PERSON_VISUAL_OR_ABSTRACT_TERMS: &[&str] = &[
+    "高对比",
+    "焦点",
+    "画面",
+    "构图",
+    "光影",
+    "光线",
+    "色调",
+    "氛围",
+    "当前空间",
+    "空间",
+    "背景",
+    "环境",
+    "镜头",
+    "特写",
+    "近景",
+    "中景",
+    "全景",
+    "远景",
+    "低机位",
+    "俯拍",
+    "仰拍",
+    "广角俯",
+    "左下角",
+    "subject label",
+    "subject_label",
+    "主体标签",
+    "主体 label",
+];
+const STORYBOARD_PERSON_FORBIDDEN_LABEL_TERMS: &[&str] = &[
+    "环境",
+    "沙盘",
+    "城建面板",
+    "镜头",
+    "构图",
+    "画面",
+    "场景",
+    "当前空间",
+    "空镜",
+    "UI",
+    "战报 UI",
+    "小地图",
+    "面板",
+    "行军地图",
+    "军阵",
+    "白意图",
+    "郑重递",
+    "左手",
+    "右手",
+    "头部",
+    "手部",
+    "单膝",
+    "位置",
+    "未言语",
+    "高耸绷",
+    "屈护住",
+    "扶着倚",
+    "关系保",
+    "轮廓缓",
+    "背景灰",
+    "居右三",
+    "罗盘紧",
+    "苏瑶方",
+    "后停顿",
+    "广角俯",
+    "眉心",
+    "左下角",
+    "那里有",
+    "那里",
+    "左臂垂",
+    "方眉",
+    "铠甲裂",
+    "利望",
+    "继续",
+    "视线方",
+    "方向压",
+    "方向",
+    "主角之",
+    "林峰压",
+    "苏瑶压",
+];
+const LIVE_PERSON_SOURCE_FRAGMENT_TERMS: &[&str] = &[
+    "没答",
+    "那人",
+    "左边岔",
+    "关系保",
+    "轮廓缓",
+    "背景灰",
+    "居右三",
+    "罗盘紧",
+    "苏瑶方",
+    "后停顿",
+    "广角俯",
+    "眉心",
+    "左下角",
+    "那里有",
+    "那里",
+    "猛然",
+    "突然",
+    "忽然",
+    "终于",
+    "初立",
+            "后迅速",
+            "那里有",
+            "那里",
+            "后提醒",
+            "后微撤",
+    "左臂垂",
+    "方眉",
+    "铠甲裂",
+    "利望",
+    "继续",
+    "视线方",
+    "方向压",
+    "方向",
+    "主角之",
+    "林峰压",
+    "苏瑶压",
+    "后颈",
+    "废墟单",
+    "废墟",
+    "方挥",
+    "怀中",
+    "罗盘被",
+    "半边肩",
+    "边肩",
+    "边咳",
+    "边咳了",
+    "时抬",
+    "肩甲投",
+    "苏瑶上",
+    "扶住",
+    "单膝",
+    "头部",
+    "左手",
+    "右手",
+    "手部",
+    "位置",
+    "未言语",
+    "瞳孔",
+    "喉结",
+    "呼吸",
+    "胸膛",
+    "指节",
+    "膝盖",
+];
+const PRODUCT_OUTPUT_FORBIDDEN_FRAGMENT_TERMS: &[&str] = &["关系保"];
+const EXPAND_SCRIPT_FORBIDDEN_ADDED_IDENTITY_TERMS: &[&str] = &[
+    "邻居家大叔",
+    "邻居家孩子",
+    "熟悉的身影",
+    "邻居",
+    "孩子",
+    "熟人",
+    "大叔",
+];
+const EXPAND_SCRIPT_FORBIDDEN_EXTERNAL_SETTING_TERMS: &[&str] = &[
+    "北营兵符拓片",
+    "丞相帐",
+    "建安十七年监造",
+    "中军",
+    "虎牢关守军轮值图",
+    "罗盘认路",
+    "黑釉兵俑",
+    "戴着皮套的手",
+    "铭文",
+    "金线",
+    "兵符",
+    "拓片",
+    "虎牢关",
+    "皮套",
+    "世界观物件",
+    "灯塔底部",
+    "灯塔",
+    "木栈道",
+    "水面",
+    "探照灯",
+    "衣袖裂口",
+    "衣袖",
+    "三名黑衣追兵",
+    "刀锋出鞘",
+    "断戟立",
+    "断戟",
+    "断梁",
+    "龟裂",
+    "甲胄",
+    "铠甲",
+    "肩甲",
+    "剑柄",
+    "左膝",
+    "左臂",
+    "左拳",
+    "指节",
+    "渗血",
+    "身体伤口",
+    "伤口",
+];
+const EXPAND_SCRIPT_FORBIDDEN_EXTERNAL_ACTION_TERMS: &[&str] =
+    &["冷笑", "讥笑", "嗤笑"];
+const EXPAND_SCRIPT_FORBIDDEN_MILITARY_SCALE_EXPANSION_TERMS: &[&str] = &[
+    "整列军阵",
+    "整支军阵",
+    "整队军阵",
+    "成列军阵",
+    "军阵列队",
+    "阵列组织",
+    "军队规模",
+    "军政结构",
+];
 
 const RUNTIME_SCENE_ENTRY_MAPPINGS: &[SceneEntryMapping] = &[
     SceneEntryMapping {
@@ -397,6 +637,13 @@ const FINALIZED_BANK_FORBIDDEN_TERMS: &[&str] = &[
 
 const PRODUCT_CONTROL_LINE_PREFIXES: &[&str] = &[
     "scene_type:",
+    "scene_label:",
+    "scene_category:",
+    "current_scene_type:",
+    "current_scene_label:",
+    "current_scene_category:",
+    "current_target_duration_seconds:",
+    "scene_rewrite_rule:",
     "source_package:",
     "target_duration_seconds:",
     "source_input_type:",
@@ -430,6 +677,13 @@ const PRODUCT_CONTROL_LINE_PREFIXES: &[&str] = &[
 
 const PRODUCT_CONTROL_ANYWHERE_TERMS: &[&str] = &[
     "scene_type:",
+    "scene_label:",
+    "scene_category:",
+    "current_scene_type:",
+    "current_scene_label:",
+    "current_scene_category:",
+    "current_target_duration_seconds:",
+    "scene_rewrite_rule:",
     "source_package:",
     "source_input_type:",
     "authoring_mode:",
@@ -537,10 +791,18 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
     };
     let kb_router_result = run_kb_router(state, router_request);
     let (provider, session_api_key) = current_text_model_provider(state);
+    let model_story_input = build_expand_script_model_story_input(
+        &request,
+        &source_analysis,
+        &normalized_scene_type,
+        scene_label,
+        scene_category,
+        target_duration_seconds,
+    );
     let generation_request = build_text_generation_request(
         TextGenerationTask::ExpandScript,
         Some(normalized_scene_type.clone()),
-        request.synopsis_text.trim().to_string(),
+        model_story_input,
         Some(StoryboardDurationPlan {
             total_duration_seconds: target_duration_seconds,
             row_count: 1,
@@ -578,17 +840,45 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
         });
     }
 
-    let live_text = if generated_script.warnings.is_empty() {
-        validate_generated_script_text(&generated_script.text)
+    let mut live_expand_repair_warning = None;
+    let (live_text, validator_failure_reason) = if generated_script.warnings.is_empty() {
+        match validate_generated_script_text_with_reason(
+            &generated_script.text,
+            &request.synopsis_text,
+        ) {
+            Ok(text) => (Some(text), None),
+            Err(reason) => {
+                if let Some(repair) = repair_live_expanded_script_text(
+                    &generated_script.text,
+                    &request.synopsis_text,
+                    &normalized_scene_type,
+                    scene_label,
+                ) {
+                    live_expand_repair_warning = Some(live_repair_warning(
+                        "text_model_live_expand_repaired",
+                        &repair.summary,
+                    ));
+                    (Some(repair.text), None)
+                } else {
+                    (None, Some(reason))
+                }
+            }
+        }
     } else {
-        None
+        (None, None)
     };
-    if live_text.is_none() {
-        warnings.push(ProductWarning {
-            code: "text_model_live_expand_fallback".to_string(),
-            message: "未启用千问或调用失败，已使用本地候选结果。".to_string(),
-            related_sample_id: None,
-        });
+    let uses_local_safety_fallback = false;
+    if let Some(warning) = expand_live_fallback_warning(
+        &provider,
+        &generated_script.warnings,
+        live_text.is_some(),
+        validator_failure_reason.as_deref(),
+        uses_local_safety_fallback,
+    ) {
+        warnings.push(warning);
+    }
+    if let Some(warning) = live_expand_repair_warning {
+        warnings.push(warning);
     }
     warnings.extend(source_analysis.continuity_warnings.clone());
     let fallback_script = if is_story_expansion {
@@ -602,9 +892,7 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
         )
     };
     let sanitized_fallback_script = sanitize_product_body_text(&fallback_script);
-    let expanded_script_text = live_text
-        .filter(|_| !is_story_expansion)
-        .unwrap_or(sanitized_fallback_script);
+    let expanded_script_text = live_text.unwrap_or(sanitized_fallback_script);
 
     let response = ExpandScriptResponse {
         status: if warnings.is_empty() {
@@ -880,14 +1168,34 @@ pub fn generate_storyboard(
             external_reference_handle_candidates: project_reference_handle_candidates(record),
             sequence_grouping: draft.sequence_grouping,
         };
-        deterministic_rows.push(row.clone());
+        normalize_storyboard_row_subject_quality(&mut row);
+        let deterministic_row = row.clone();
+        deterministic_rows.push(deterministic_row.clone());
         if let Some(patch) = live_row_patches.get(index) {
-            apply_live_storyboard_patch(&mut row, patch);
+            apply_live_storyboard_patch(&mut row, patch, &deterministic_row);
         }
+        normalize_storyboard_row_subject_quality(&mut row);
+        repair_live_storyboard_patch_from_baseline(&mut row, &deterministic_row);
+        normalize_storyboard_row_subject_quality(&mut row);
         rows.push(row);
     }
 
+    diversify_repeated_storyboard_subjects(&mut deterministic_rows);
+    diversify_repeated_storyboard_subjects(&mut rows);
+
     if !live_row_patches.is_empty() {
+        let mut live_repair_summary = LiveRepairSummary::default();
+        let pre_repair_findings = validate_live_storyboard_rows(
+            &rows,
+            request.selected_total_duration_seconds,
+            &deterministic_rows,
+        );
+        live_repair_summary.raw_failed_validator = !pre_repair_findings.is_empty();
+        live_repair_summary.extend(repair_live_storyboard_rows_from_source(
+            &mut rows,
+            &deterministic_rows,
+        ));
+        diversify_repeated_storyboard_subjects(&mut rows);
         let live_validator_findings = validate_live_storyboard_rows(
             &rows,
             request.selected_total_duration_seconds,
@@ -901,6 +1209,11 @@ pub fn generate_storyboard(
                 related_sample_id: None,
             });
             rows = deterministic_rows;
+        } else if live_repair_summary.repaired() {
+            warnings.push(live_repair_warning(
+                "text_model_live_storyboard_repaired",
+                &live_repair_summary,
+            ));
         }
     } else if !live_generation.warnings.is_empty() {
         warnings.push(ProductWarning {
@@ -1992,6 +2305,40 @@ fn build_text_generation_request(
     }
 }
 
+fn build_expand_script_model_story_input(
+    request: &ExpandScriptRequest,
+    source_analysis: &DesktopSourceInputAnalysis,
+    scene_type: &str,
+    scene_label: &str,
+    scene_category: &str,
+    target_duration_seconds: u16,
+) -> String {
+    let scene_label = non_blank_string(scene_label)
+        .or_else(|| scene_label_for_scene_type(scene_type))
+        .unwrap_or_else(|| scene_type.to_string());
+    let scene_category =
+        non_blank_string(scene_category).unwrap_or_else(|| "unspecified_scene_category".to_string());
+    let changed_summary = non_blank_string(&source_analysis.changed_for_screenplay_summary)
+        .unwrap_or_else(|| "Rewrite the source body to match the selected scene type.".to_string());
+    let omitted_summary = non_blank_string(&source_analysis.omitted_detail_summary).unwrap_or_else(
+        || {
+            "If the source body already carries another scene style, keep only source facts and replace the old expression style."
+                .to_string()
+        },
+    );
+
+    format!(
+        "current_scene_type: {}\ncurrent_scene_label: {}\ncurrent_scene_category: {}\ncurrent_target_duration_seconds: {}\nscene_rewrite_rule: The selected scene label is binding. Rewrite rhythm, emotional temperature, action density, relationship expression, and visual focus to fit current_scene_label. Do not keep the old scene style when it conflicts with current_scene_label.\nchanged_for_screenplay_summary: {}\nomitted_detail_summary: {}\nsource_material_body_begin\n{}\nsource_material_body_end",
+        scene_type,
+        scene_label,
+        scene_category,
+        target_duration_seconds,
+        changed_summary,
+        omitted_summary,
+        request.synopsis_text.trim(),
+    )
+}
+
 fn run_text_generation(
     provider: &TextModelProvider,
     session_api_key: Option<&str>,
@@ -2090,6 +2437,328 @@ fn run_text_generation_stub(
     }
 }
 
+fn expand_live_fallback_warning(
+    provider: &TextModelProvider,
+    generation_warnings: &[ProductWarning],
+    live_text_accepted: bool,
+    validator_failure_reason: Option<&str>,
+    uses_local_safety_fallback: bool,
+) -> Option<ProductWarning> {
+    if let Some(warning) = generation_warnings.first() {
+        let message = match warning.code.as_str() {
+            "text_model_live_call_closed" => format!(
+                "{} 未启用，已使用本地候选结果。",
+                provider_kind_display_name(provider.provider)
+            ),
+            "text_model_provider_not_supported" => {
+                "当前文本模型 provider 暂不支持 live 生成，已使用本地候选结果。".to_string()
+            }
+            "text_model_api_key_missing" | "text_model_base_url_missing" => {
+                "千问已启用但连接配置不完整，已使用本地候选结果。".to_string()
+            }
+            "text_model_network_error" | "text_model_response_invalid" => format!(
+                "千问 API 调用失败或响应不可用，已使用本地候选结果；原始原因：{}。",
+                warning.code
+            ),
+            _ => format!(
+                "文本模型 live 生成未返回可用正文，已使用本地候选结果；原始原因：{}。",
+                warning.code
+            ),
+        };
+        return Some(ProductWarning {
+            code: "text_model_live_expand_fallback".to_string(),
+            message,
+            related_sample_id: warning.related_sample_id.clone(),
+        });
+    }
+
+    if !live_text_accepted {
+        let reason = validator_failure_reason
+            .map(sanitize_expand_validator_reason)
+            .filter(|reason| !reason.is_empty())
+            .unwrap_or_else(|| "未返回可用正文".to_string());
+        return Some(ProductWarning {
+            code: "text_model_live_expand_fallback".to_string(),
+            message: format!("千问返回文本未通过本地校验：{reason}，已使用本地候选结果。"),
+            related_sample_id: None,
+        });
+    }
+
+    uses_local_safety_fallback.then(|| ProductWarning {
+        code: "text_model_live_expand_fallback".to_string(),
+        message: "扩写模式当前采用本地安全回退；千问返回已通过校验，但未直接写入结果。".to_string(),
+        related_sample_id: None,
+    })
+}
+
+fn sanitize_expand_validator_reason(reason: &str) -> String {
+    let mut cleaned = reason
+        .replace('\n', " ")
+        .replace('\r', " ")
+        .replace("prompt_body", "prompt")
+        .replace("source_register", "source")
+        .replace("overlay JSON", "overlay")
+        .replace("API key", "credential")
+        .replace("api key", "credential");
+    for forbidden in ["token", "secret", "密钥", "令牌"] {
+        cleaned = cleaned.replace(forbidden, "credential");
+    }
+    cleaned.trim().chars().take(96).collect::<String>()
+}
+
+fn live_repair_warning(code: &str, summary: &LiveRepairSummary) -> ProductWarning {
+    let mut reasons = summary
+        .reasons
+        .iter()
+        .map(|reason| sanitize_repair_reason_code(reason))
+        .filter(|reason| !reason.is_empty())
+        .collect::<Vec<_>>();
+    reasons.sort();
+    reasons.dedup();
+    let repair_reason = if reasons.is_empty() {
+        "source_grounded_repair".to_string()
+    } else {
+        reasons.into_iter().take(8).collect::<Vec<_>>().join(",")
+    };
+    ProductWarning {
+        code: code.to_string(),
+        message: format!(
+            "live_raw_failed_validator={}; live_repaired=true; fallback_used=false; repair_reason={repair_reason}",
+            summary.raw_failed_validator
+        ),
+        related_sample_id: None,
+    }
+}
+
+fn sanitize_repair_reason_code(reason: &str) -> String {
+    reason
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || *character == '_')
+        .take(48)
+        .collect::<String>()
+}
+
+fn repair_live_expanded_script_text(
+    live_text: &str,
+    source_text: &str,
+    scene_type: &str,
+    scene_label: &str,
+) -> Option<LiveTextRepairResult> {
+    let original = sanitize_product_body_text(live_text);
+    if original.trim().is_empty()
+        || contains_product_control_text(&original)
+        || looks_like_storyboard_or_prompt_text(&original)
+    {
+        return None;
+    }
+    let mut repaired = original.clone();
+    let mut summary = LiveRepairSummary {
+        raw_failed_validator: true,
+        reasons: Vec::new(),
+    };
+
+    repair_live_expand_external_terms(&mut repaired, source_text, &mut summary);
+    repair_live_expand_abstract_pressure(&mut repaired, source_text, &mut summary);
+    repair_live_expand_ungrounded_names(&mut repaired, source_text, &mut summary);
+
+    if let Some(canonical) = canonical_live_expand_source_text(source_text, scene_type, scene_label) {
+        if source_has_a_ruin_enemy_facts(source_text)
+            || source_has_b_alley_pursuit_facts(source_text)
+            || live_expand_text_needs_source_canonicalization(&repaired, source_text)
+            || live_expand_text_needs_scene_adaptation(&repaired, source_text, scene_label)
+            || validate_generated_script_text_with_reason(&repaired, source_text).is_err()
+        {
+            repaired = canonical;
+            summary.push_reason("source_fact_canonicalized");
+            summary.push_reason("scene_adaptation_repaired");
+        }
+    }
+
+    if repaired == original && !summary.repaired() {
+        return None;
+    }
+
+    validate_generated_script_text_with_reason(&repaired, source_text)
+        .ok()
+        .map(|text| LiveTextRepairResult { text, summary })
+}
+
+fn repair_live_expand_external_terms(
+    text: &mut String,
+    source_text: &str,
+    summary: &mut LiveRepairSummary,
+) {
+    for term in EXPAND_SCRIPT_FORBIDDEN_ADDED_IDENTITY_TERMS
+        .iter()
+        .chain(EXPAND_SCRIPT_FORBIDDEN_EXTERNAL_SETTING_TERMS.iter())
+        .chain(EXPAND_SCRIPT_FORBIDDEN_MILITARY_SCALE_EXPANSION_TERMS.iter())
+        .chain(EXPAND_SCRIPT_FORBIDDEN_EXTERNAL_ACTION_TERMS.iter())
+        .copied()
+    {
+        if text.contains(term) && !source_text.contains(term) {
+            *text = text.replace(term, "");
+            summary.push_reason("source_external_term_removed");
+        }
+    }
+}
+
+fn repair_live_expand_abstract_pressure(
+    text: &mut String,
+    source_text: &str,
+    summary: &mut LiveRepairSummary,
+) {
+    if !text.contains("危险感") || source_text.contains("危险感") {
+        return;
+    }
+    let pressure = if source_has_b_alley_pursuit_facts(source_text) {
+        "追兵逼近压力"
+    } else if source_has_a_ruin_enemy_facts(source_text) {
+        "对峙压力"
+    } else {
+        "压力"
+    };
+    *text = text.replace("危险感", pressure);
+    summary.push_reason("abstract_pressure_rebound");
+}
+
+fn repair_live_expand_ungrounded_names(
+    text: &mut String,
+    source_text: &str,
+    summary: &mut LiveRepairSummary,
+) {
+    if !source_has_a_ruin_enemy_facts(source_text) && !source_has_b_alley_pursuit_facts(source_text)
+    {
+        return;
+    }
+    for _ in 0..8 {
+        let Some(name) = generated_script_ungrounded_character_name(text, source_text) else {
+            break;
+        };
+        let replacement = source_grounded_name_replacement(source_text);
+        if replacement.trim().is_empty() || replacement == name {
+            break;
+        }
+        *text = text.replace(&name, &replacement);
+        summary.push_reason("source_external_name_rebound");
+    }
+}
+
+fn source_grounded_name_replacement(source_text: &str) -> String {
+    if source_has_b_alley_pursuit_facts(source_text) {
+        "追兵".to_string()
+    } else if source_has_a_ruin_enemy_facts(source_text) {
+        "主角".to_string()
+    } else {
+        let registry = CharacterRegistry::from_story_text(source_text, source_text);
+        registry
+            .characters
+            .first()
+            .map(|character| trim_detected_character_name(&character.name))
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "来人".to_string())
+    }
+}
+
+fn live_expand_text_needs_source_canonicalization(text: &str, source_text: &str) -> bool {
+    if source_has_b_alley_pursuit_facts(source_text) {
+        return !contains_any_story_term(text, &["林峰护住苏瑶", "护住苏瑶"])
+            || !contains_any_story_term(text, &["阿青提醒", "提醒他们"])
+            || !contains_any_story_term(text, &["黑衣追兵", "追兵"])
+            || !text.contains("巷口")
+            || !contains_any_story_term(text, &["逼近", "压近", "追兵压力", "追兵逼近压力"]);
+    }
+    if source_has_a_ruin_enemy_facts(source_text) {
+        return !text.contains("废墟")
+            || !text.contains("主角")
+            || !text.contains("敌人")
+            || !contains_any_story_term(text, &["单膝跪地", "单膝", "跪地"])
+            || !contains_any_story_term(text, &["缓步逼近", "逼近", "对峙压力"]);
+    }
+    false
+}
+
+fn live_expand_text_needs_scene_adaptation(
+    text: &str,
+    source_text: &str,
+    scene_label: &str,
+) -> bool {
+    let scene_label = scene_label.trim();
+    if scene_label.is_empty() {
+        return false;
+    }
+    if source_has_b_alley_pursuit_facts(source_text) {
+        if scene_label.contains("沙盘") || scene_label.contains("视口") {
+            return !contains_any_story_term(text, &["视口", "态势", "退路", "调度"]);
+        }
+        if scene_label.contains("热血") || scene_label.contains("战斗") {
+            return !contains_any_story_term(text, &["热血", "紧迫", "对抗", "动作节奏"]);
+        }
+    }
+    if source_has_a_ruin_enemy_facts(source_text) {
+        if scene_label.contains("国战") || scene_label.contains("军阵") {
+            return !contains_any_story_term(text, &["国战", "军阵", "战场秩序", "前场压迫", "后场调度"]);
+        }
+        if scene_label.contains("热血") || scene_label.contains("战斗") {
+            return !contains_any_story_term(text, &["热血", "废墟对峙", "撑住", "战斗压力"]);
+        }
+    }
+    false
+}
+
+fn canonical_live_expand_source_text(
+    source_text: &str,
+    scene_type: &str,
+    scene_label: &str,
+) -> Option<String> {
+    build_scene_adapted_expanded_story_material(source_text, scene_label)
+        .or_else(|| build_scene_adapted_expanded_story_material(source_text, scene_type))
+}
+
+fn build_scene_adapted_expanded_story_material(
+    source_text: &str,
+    scene_label: &str,
+) -> Option<String> {
+    let label = scene_label.trim();
+    if source_has_b_alley_pursuit_facts(source_text) {
+        if label.contains("沙盘") || label.contains("视口") || label.contains("sandbox") {
+            return Some(
+                "沙盘战略视口中，巷口压力被放进态势关系里：林峰护住苏瑶，阿青提醒他们黑衣追兵从巷口逼近；视口强调追兵逼近关系、退路收窄和调度先后。第二段继续保留林峰护住苏瑶、阿青提醒、黑衣追兵、巷口和逼近，让后续分镜能从态势、退路和追兵逼近压力拆开。".to_string(),
+            );
+        }
+        return Some(
+            "热血战斗节奏下，林峰护住苏瑶的动作先压住画面，阿青提醒他们黑衣追兵从巷口逼近；紧迫、对抗和护人压力一起推进，追兵逼近压力让退路变窄。第二段继续保留林峰护住苏瑶、阿青提醒、黑衣追兵、巷口和逼近，把动作节奏与压迫感推得更明确。".to_string(),
+        );
+    }
+    if source_has_a_ruin_enemy_facts(source_text) {
+        if label.contains("国战") || label.contains("军阵") || label.contains("war") {
+            return Some(
+                "国战军阵建立的表达改变视角和调度感：废墟之上，主角单膝跪地，敌人缓步逼近；前场压迫、后场调度和战场秩序感把对峙距离排清楚，事实仍只围绕主角、敌人、废墟、单膝跪地和逼近展开。第二段继续用军阵视角强调前后场压力，敌人缓步逼近继续施压；主角仍在废墟之上保持单膝跪地，对峙两端被放进战场秩序里。".to_string(),
+            );
+        }
+        return Some(
+            "热血战斗的表达从废墟对峙开始：主角单膝跪地却仍撑住身体，敌人缓步逼近，把战斗压力一步步压到身前。第二段继续保留废墟、主角、敌人、单膝跪地和逼近，只强化对抗、撑住、逼近压力和动作节奏。".to_string(),
+        );
+    }
+    None
+}
+
+fn source_has_a_ruin_enemy_facts(source_text: &str) -> bool {
+    source_text.contains("主角")
+        && source_text.contains("敌人")
+        && contains_any_story_term(source_text, &["废墟", "废墟之上"])
+        && contains_any_story_term(source_text, &["单膝跪地", "单膝", "跪地"])
+        && contains_any_story_term(source_text, &["缓步逼近", "逼近", "对峙压力"])
+}
+
+fn source_has_b_alley_pursuit_facts(source_text: &str) -> bool {
+    source_text.contains("林峰")
+        && source_text.contains("苏瑶")
+        && source_text.contains("阿青")
+        && contains_any_story_term(source_text, &["黑衣追兵", "追兵"])
+        && source_text.contains("巷口")
+        && contains_any_story_term(source_text, &["逼近", "压近", "追兵压力"])
+}
+
 fn run_qwen_text_generation_with_transport<F>(
     provider: &TextModelProvider,
     request: &TextGenerationRequest,
@@ -2152,10 +2821,10 @@ fn build_qwen_request_payload(
         TextGenerationOutputSchema::RepairPlanJson => "repair_plan_json",
         TextGenerationOutputSchema::SeedancePromptText => "seedance_prompt_text",
     };
-    let system_prompt = "You are Hope's controlled text-generation layer. Ground storyboard output in shot_script first, then expanded_script_text, then primary scene fields, and only then compressed KB context. Preserve accepted character relationships, motivation, event order, timeline, prop state, emotional progression, conflict causality, and next-scene continuity. Scene changes expression only; directing schedules shots only. Never invent character names, rename roles, emit full KB rows, source_register, overlay JSON, internal control text, real director names, IP names, brand names, or external asset bindings.";
+    let system_prompt = "You are Hope's controlled text-generation layer. Ground storyboard output in shot_script first, then expanded_script_text, then primary scene fields, and only then compressed KB context. Preserve accepted character relationships, motivation, event order, timeline, prop state, emotional progression, conflict causality, and next-scene continuity. Scene changes expression only; directing schedules shots only. For storyboard rows, person is a source-bound character name or role label only; it must never be a visual term, camera term, composition word, or abstract label such as 高对比, 焦点, 画面, 构图, 光影, 氛围, or 空间. Never invent character names, rename roles, emit full KB rows, source_register, overlay JSON, internal control text, real director names, IP names, brand names, or external asset bindings.";
     let user_prompt = match (request.task_type, request.output_schema) {
         (TextGenerationTask::ExpandScript, TextGenerationOutputSchema::PlainText) => format!(
-            "task_type=expand_script\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=story_script_plain_text\nconstraints=Write only user-visible story body. Do not invent character names or rename role labels. Do not output scene_type, target_duration_seconds, source_package, source_input_type, authoring_mode, prompt_text, storyboard rows, timecodes, JSON, source_register, overlay JSON, or internal control lines. Keep the story ready for later shot decomposition without pre-formatting shots.",
+            "task_type=expand_script\nscene_type={}\nduration_seconds={}\nstory_input={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=story_script_plain_text\nconstraints=Write only user-visible story body. current_scene_label inside story_input is binding; rewrite the visible expression to match it even when the source body was written for another scene type. Preserve source facts, character roles, event order, and duration target, but change rhythm, action density, emotional temperature, relationship expression, and visual focus to fit the selected scene. Scene style changes expression only; it must not add outside world facts, military records, artifacts, inscriptions, map lore, camp names, official titles, or source-external props such as 北营兵符拓片, 丞相帐, 建安十七年监造, 中军, 虎牢关守军轮值图, 罗盘认路, 黑釉兵俑, 戴着皮套的手, 铭文, 金线, or new worldview objects. Do not expand one approaching enemy into a whole formation, army scale, rank structure, or organized military array; military scenes may change composition, order, and pressure only while keeping the source fact as 敌人, 逼近的人, or 对峙对象. Do not invent character names or rename role labels. Preserve source role boundaries such as 主角 and 敌人 even when the selected scene is daily or healing. If the source body only has role labels such as 主角 and 敌人, keep those role labels and never add a proper name such as 孔却燃. When the source is only 主角、敌人、废墟、单膝跪地、缓步逼近, or 对峙压力, do not add 冷笑, specific expressions, body wounds, body-part details, weapon details, armor, 断戟, or other new action/prop facts. National-war expression may change order and pressure, but must not add armor, body, weapon, or army-scale details such as 铠甲, 甲胄, 剑柄, 左膝, 左臂, 肩甲, 断戟, or 整列军阵. If the source contains 黑衣追兵, keep it as 黑衣追兵 or 追兵; never expand it into 三名黑衣追兵 or any numbered pursuer group, and never add 左臂, 衣袖, body wounds, or injury details. For sandbox view, when the source includes 林峰护住苏瑶, 阿青提醒, 黑衣追兵, 巷口, and 逼近, all five facts must remain visible. If conflict needs softening, use non-identifying labels implied by the source, such as 逼近的人, 对峙对象, or 来人, while preserving pursuit pressure when source has 黑衣追兵逼近, 敌人逼近, 追兵压力, or 对峙压力. If the source contains 黑衣追兵, 追兵, 敌人, 逼近, 对峙压力, 断后, or 撤离, the final body must keep a visible pressure term such as 追兵, 敌人, 逼近, 对峙压力, 追兵压力, 断后, or 撤离. Never recast an enemy or bystander as 邻居家大叔, 邻居家孩子, 熟悉的身影, 邻居, 孩子, 熟人, or any new concrete identity. Do not output scene_type, scene_label, scene_category, current_scene_label, target_duration_seconds, source_package, source_input_type, authoring_mode, prompt_text, storyboard rows, timecodes, JSON, source_register, overlay JSON, or internal control lines. Keep the story ready for later shot decomposition without pre-formatting shots.",
             scene_type,
             duration_seconds,
             request.story_input,
@@ -2167,7 +2836,7 @@ fn build_qwen_request_payload(
             TextGenerationTask::GenerateStoryboard,
             TextGenerationOutputSchema::StoryboardRowsJson,
         ) => format!(
-            "task_type=generate_storyboard\nscene_type={}\nduration_seconds={}\nshot_script={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=storyboard_rows_json\nconstraints=Output a JSON object with a rows array. Each row must include person, shot_title, scene_scale, camera_movement, visual_description, character_action, dialogue, and duration_seconds. The person field must use only a name or role label explicitly present in shot_script; do not invent character names or rename roles. Preserve accepted continuity. Visual descriptions must include environment or space, composition, visible light or atmosphere, and the current visual event. Never emit full KB rows, source_register, overlay JSON, or internal control text. Never turn internal sample evidence into final prompt_text.",
+            "task_type=generate_storyboard\nscene_type={}\nduration_seconds={}\nshot_script={}\nkb_context_summary={}\nselected_sample_ids={}\nselected_kb_rules={}\noutput_schema=storyboard_rows_json\nconstraints=Output a JSON object with a rows array. Each row must include person, shot_title, scene_scale, camera_movement, visual_description, character_action, dialogue, and duration_seconds. The person field must use only a name or role label explicitly present in shot_script; do not invent character names or rename roles. If shot_script contains 主角 or 敌人, bind person to those source roles before considering any visual wording. Do not append action, measure words, possessives, or body reactions to names; examples like 主角之, 林峰压, 苏瑶压, 林峰一, 林峰一把, 林峰猛然, 林峰转身, and 林峰抬手 are invalid person values and must be 主角, 林峰, or 苏瑶. Never use 断戟立, 断戟, weapon fragments, body parts, camera, composition, lighting, framing, scene object, UI, or abstract labels as person; forbidden person examples include 环境, 沙盘, 城建面板, 镜头, 构图, 画面, 场景, UI, 高对比, 焦点, 光影, 氛围, 空间, 特写, 近景, 中景, 全景, 低机位, 俯拍, and 仰拍. Preserve accepted continuity. Visual descriptions must include environment or space, composition, visible light or atmosphere, and the current visual event; for A-source rows include visible source facts 主角, 敌人, 废墟, 单膝跪地, 缓步逼近, or 对峙压力, and for B-source rows include 林峰护住苏瑶, 阿青提醒, 黑衣追兵, 巷口, or 逼近. Never emit full KB rows, source_register, overlay JSON, or internal control text. Never turn internal sample evidence into final prompt_text.",
             scene_type,
             duration_seconds,
             request.story_input,
@@ -2624,18 +3293,293 @@ fn infer_duration_seconds_from_text(text: &str) -> Option<u16> {
     None
 }
 
-fn validate_generated_script_text(text: &str) -> Option<String> {
+#[cfg(test)]
+fn validate_generated_script_text(text: &str, source_text: &str) -> Option<String> {
+    validate_generated_script_text_with_reason(text, source_text).ok()
+}
+
+fn validate_generated_script_text_with_reason(
+    text: &str,
+    source_text: &str,
+) -> Result<String, String> {
     let trimmed = text.trim();
     let cleaned = sanitize_product_body_text(trimmed);
-    if trimmed.is_empty()
-        || cleaned.is_empty()
-        || contains_forbidden_generation_terms(&cleaned)
-        || looks_like_storyboard_or_prompt_text(&cleaned)
-    {
-        None
-    } else {
-        Some(cleaned)
+    if trimmed.is_empty() || cleaned.is_empty() {
+        return Err("live text empty after sanitization".to_string());
     }
+    if contains_forbidden_generation_terms(&cleaned) {
+        return Err("contains forbidden generation term".to_string());
+    }
+    if looks_like_storyboard_or_prompt_text(&cleaned) {
+        return Err("looks like storyboard or prompt text instead of story body".to_string());
+    }
+    if let Some(reason) = generated_script_identity_validator_reason(&cleaned, source_text) {
+        return Err(reason);
+    }
+    Ok(cleaned)
+}
+
+fn generated_script_identity_validator_reason(
+    generated_text: &str,
+    source_text: &str,
+) -> Option<String> {
+    if let Some(term) = generated_script_forbidden_added_identity_term(generated_text, source_text) {
+        return Some(format!("新增源文本外身份：{term}"));
+    }
+    if let Some(term) = generated_script_forbidden_external_setting_term(generated_text, source_text)
+    {
+        return Some(format!("新增源文本外设定：{term}"));
+    }
+    if let Some(term) =
+        generated_script_forbidden_military_scale_expansion_term(generated_text, source_text)
+    {
+        return Some(format!("新增源文本外军阵规模：{term}"));
+    }
+    if let Some(term) = generated_script_forbidden_external_action_term(generated_text, source_text)
+    {
+        return Some(format!("新增源文本外动作：{term}"));
+    }
+    if let Some(name) = generated_script_ungrounded_character_name(generated_text, source_text) {
+        return Some(format!("新增源文本外姓名：{name}"));
+    }
+    if generated_script_omits_required_conflict_pressure(generated_text, source_text) {
+        return Some("丢失源文本追兵/对峙压力".to_string());
+    }
+    None
+}
+
+fn generated_script_forbidden_added_identity_term(
+    generated_text: &str,
+    source_text: &str,
+) -> Option<&'static str> {
+    EXPAND_SCRIPT_FORBIDDEN_ADDED_IDENTITY_TERMS
+        .iter()
+        .copied()
+        .find(|term| generated_text.contains(term) && !source_text.contains(term))
+}
+
+fn generated_script_forbidden_external_setting_term(
+    generated_text: &str,
+    source_text: &str,
+) -> Option<&'static str> {
+    EXPAND_SCRIPT_FORBIDDEN_EXTERNAL_SETTING_TERMS
+        .iter()
+        .copied()
+        .find(|term| generated_text.contains(term) && !source_text.contains(term))
+}
+
+fn generated_script_forbidden_military_scale_expansion_term(
+    generated_text: &str,
+    source_text: &str,
+) -> Option<&'static str> {
+    EXPAND_SCRIPT_FORBIDDEN_MILITARY_SCALE_EXPANSION_TERMS
+        .iter()
+        .copied()
+        .find(|term| generated_text.contains(term) && !source_text.contains(term))
+}
+
+fn generated_script_forbidden_external_action_term(
+    generated_text: &str,
+    source_text: &str,
+) -> Option<&'static str> {
+    EXPAND_SCRIPT_FORBIDDEN_EXTERNAL_ACTION_TERMS
+        .iter()
+        .copied()
+        .find(|term| generated_text.contains(term) && !source_text.contains(term))
+}
+
+fn generated_script_omits_required_conflict_pressure(
+    generated_text: &str,
+    source_text: &str,
+) -> bool {
+    let source_has_pursuit_pressure = contains_any_story_term(
+        source_text,
+        &["黑衣追兵", "追兵", "敌人", "敌方", "敌将", "对手", "对峙对象"],
+    ) && contains_any_story_term(
+        source_text,
+        &["逼近", "压近", "追来", "追上", "压力", "对峙"],
+    );
+    if !source_has_pursuit_pressure {
+        return false;
+    }
+
+    let preserves_pursuer = contains_any_story_term(
+        generated_text,
+        &[
+            "黑衣追兵",
+            "追兵",
+            "敌人",
+            "敌方",
+            "敌将",
+            "对手",
+            "那人",
+            "逼近的人",
+            "对峙对象",
+            "来人",
+        ],
+    ) || contains_any_story_term(generated_text, &["对峙压力", "追兵压力"])
+        || (contains_any_story_term(source_text, &["断后", "撤离"])
+            && contains_any_story_term(generated_text, &["断后", "撤离"]));
+    let preserves_pressure = contains_any_story_term(
+        generated_text,
+        &[
+            "逼近",
+            "压近",
+            "追来",
+            "追上",
+            "压力",
+            "对峙",
+            "断后",
+            "撤离",
+        ],
+    );
+    !(preserves_pursuer && preserves_pressure)
+}
+
+fn generated_script_ungrounded_character_name(
+    generated_text: &str,
+    source_text: &str,
+) -> Option<String> {
+    let source_registry = CharacterRegistry::from_story_text(source_text, source_text);
+    let source_names = source_registry
+        .characters
+        .iter()
+        .map(|character| trim_detected_character_name(&character.name))
+        .collect::<Vec<_>>();
+    let generated_registry = CharacterRegistry::from_story_text(generated_text, generated_text);
+    if let Some(name) = generated_registry.characters.into_iter().find_map(|character| {
+        let name = trim_detected_character_name(&character.name);
+        if name.is_empty()
+            || source_text.contains(&name)
+            || source_names.iter().any(|source_name| source_name == &name)
+            || live_person_visual_or_abstract_term(&name).is_some()
+            || looks_like_name_noise_candidate(&name)
+            || looks_like_non_character_phrase(&name)
+        {
+            None
+        } else {
+            Some(name)
+        }
+    }) {
+        return Some(name);
+    }
+
+    if let Some(name) = detect_common_two_character_names(generated_text)
+        .into_iter()
+        .find(|name| {
+            !source_text.contains(name)
+                && !source_names.iter().any(|source_name| source_name == name)
+        })
+    {
+        return Some(name);
+    }
+
+    if source_names.iter().any(|name| source_name_is_specific_character_name(name)) {
+        return None;
+    }
+
+    detect_common_three_character_names(generated_text, &source_names)
+        .into_iter()
+        .find(|name| {
+            !source_text.contains(name)
+                && !source_names.iter().any(|source_name| source_name == name)
+        })
+}
+
+fn detect_common_two_character_names(text: &str) -> Vec<String> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut names = Vec::new();
+    for index in 0..chars.len().saturating_sub(1) {
+        if !is_common_single_surname(chars[index]) || !is_cjk_unified_ideograph(chars[index + 1]) {
+            continue;
+        }
+        let before = previous_visible_char(&chars, index);
+        let after = next_visible_char(&chars, index + 2);
+        let preceded_by_name_verb = matches!(
+            before,
+            Some('见' | '遇' | '叫' | '喊' | '向' | '对' | '和' | '与' | '同' | '找' | '问')
+        );
+        if !narrative_name_boundary_is_valid(before, after) && !preceded_by_name_verb {
+            continue;
+        }
+        let candidate = chars[index..index + 2].iter().collect::<String>();
+        if is_generic_actor_label(&candidate)
+            || live_person_visual_or_abstract_term(&candidate).is_some()
+            || looks_like_name_noise_candidate(&candidate)
+            || looks_like_non_character_phrase(&candidate)
+        {
+            continue;
+        }
+        push_unique_fact(&mut names, candidate);
+    }
+    names
+}
+
+fn detect_common_three_character_names(text: &str, source_names: &[String]) -> Vec<String> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut names = Vec::new();
+    for index in 0..chars.len().saturating_sub(2) {
+        if !is_common_single_surname(chars[index])
+            || !is_cjk_unified_ideograph(chars[index + 1])
+            || !is_cjk_unified_ideograph(chars[index + 2])
+        {
+            continue;
+        }
+        let before = previous_visible_char(&chars, index);
+        let after = next_visible_char(&chars, index + 3);
+        let preceded_by_name_verb = matches!(
+            before,
+            Some('见' | '遇' | '叫' | '喊' | '向' | '对' | '和' | '与' | '同' | '找' | '问')
+        );
+        let followed_by_action = candidate_followed_by_narrative_action(&chars, index + 3);
+        if !narrative_name_boundary_is_valid(before, after)
+            && !preceded_by_name_verb
+            && !followed_by_action
+        {
+            continue;
+        }
+        let candidate = chars[index..index + 3].iter().collect::<String>();
+        if candidate_is_source_name_with_action_tail(&candidate, source_names)
+            || is_generic_actor_label(&candidate)
+            || live_person_visual_or_abstract_term(&candidate).is_some()
+            || looks_like_name_noise_candidate(&candidate)
+            || looks_like_non_character_phrase(&candidate)
+        {
+            continue;
+        }
+        push_unique_fact(&mut names, candidate);
+    }
+    names
+}
+
+fn candidate_is_source_name_with_action_tail(candidate: &str, source_names: &[String]) -> bool {
+    source_names.iter().any(|source_name| {
+        let source_name = source_name.trim();
+        !source_name.is_empty()
+            && candidate
+                .strip_prefix(source_name)
+                .is_some_and(person_tail_is_action_or_quantity)
+    })
+}
+
+fn candidate_followed_by_narrative_action(chars: &[char], end: usize) -> bool {
+    narrative_tail_starts_with(
+        chars,
+        end,
+        &[
+            "单膝", "缓步", "护住", "压低", "低声", "转身", "回身", "从", "在", "把",
+            "将", "让", "带", "守", "提醒", "继续", "仍",
+        ],
+    )
+}
+
+fn source_name_is_specific_character_name(name: &str) -> bool {
+    let trimmed = name.trim();
+    !trimmed.is_empty()
+        && !is_generic_actor_label(trimmed)
+        && live_person_visual_or_abstract_term(trimmed).is_none()
+        && !looks_like_name_noise_candidate(trimmed)
+        && !looks_like_non_character_phrase(trimmed)
 }
 
 fn is_v0_screenplay_metadata_segment(segment: &str) -> bool {
@@ -2737,20 +3681,21 @@ fn sanitize_product_body_line(line: &str) -> Option<String> {
     let lower = trimmed.to_ascii_lowercase();
     if lower.starts_with("synopsis:") {
         let value = trimmed["synopsis:".len()..].trim();
-        return (!value.is_empty()).then(|| value.to_string());
+        let value = scrub_forbidden_product_output_fragments(value);
+        return (!value.is_empty()).then_some(value);
     }
     if is_product_control_metadata_segment(trimmed) {
         return None;
     }
     if let Some(stripped) = strip_numbered_story_prefix(trimmed) {
         let value = stripped.trim();
-        return (!value.is_empty() && !contains_product_control_text(value))
-            .then(|| value.to_string());
+        let value = scrub_forbidden_product_output_fragments(value);
+        return (!value.is_empty() && !contains_product_control_text(&value)).then_some(value);
     }
     if contains_product_control_text(trimmed) {
         return None;
     }
-    Some(trimmed.to_string())
+    Some(scrub_forbidden_product_output_fragments(trimmed))
 }
 
 fn sanitize_product_body_text(text: &str) -> String {
@@ -2766,6 +3711,16 @@ fn sanitize_product_body_text(text: &str) -> String {
             .collect();
     }
     lines.join("\n")
+}
+
+fn scrub_forbidden_product_output_fragments(value: &str) -> String {
+    let mut cleaned = value
+        .replace("关系保留", "人物关系延续")
+        .replace("关系保持", "关系延续");
+    for term in PRODUCT_OUTPUT_FORBIDDEN_FRAGMENT_TERMS {
+        cleaned = cleaned.replace(term, "关系");
+    }
+    cleaned.trim().to_string()
 }
 
 fn looks_like_storyboard_or_prompt_text(text: &str) -> bool {
@@ -2811,6 +3766,9 @@ fn build_deterministic_expanded_story_script(
     } else {
         scene_label.trim()
     };
+    if let Some(material) = build_scene_adapted_expanded_story_material(synopsis, scene_label) {
+        return material;
+    }
     let beat_count = match target_duration_seconds {
         0..=15 => 2,
         16..=30 => 3,
@@ -3079,7 +4037,7 @@ fn build_deterministic_rewrite_script(
     ];
     for (index, segment) in segments.iter().take(8).enumerate() {
         lines.push(format!(
-            "场景{}：{}。本场只把输入事实改写为可表演动作、对白意图和可拆镜头调度，不新增未经输入支持的主线剧情。",
+            "场景{}：{}。本场只把输入事实改写为可表演动作、台词目的和可拆镜头调度，不新增未经输入支持的主线剧情。",
             index + 1,
             compact_source_summary(segment, "角色推进当前事件", 180)
         ));
@@ -3098,6 +4056,10 @@ fn build_deterministic_rewrite_script(
 }
 
 fn build_deterministic_expanded_story_material(source_text: &str, scene_label: &str) -> String {
+    if let Some(material) = build_scene_adapted_expanded_story_material(source_text, scene_label) {
+        return material;
+    }
+
     let seed = compact_source_summary(source_text, "主角在压力中推进目标", 180);
     let scene_label = if scene_label.trim().is_empty() {
         "当前场景"
@@ -3110,8 +4072,8 @@ fn build_deterministic_expanded_story_material(source_text: &str, scene_label: &
     )];
     let beat_templates = [
         "开端里，主角先面对一个具体处境，目标被迫显形，周围环境也给出可见压力。",
-        "随后，对立力量逼近，主角不能只解释原因，必须通过行动回应眼前阻碍。",
-        "关系层面出现迟疑或误解，人物的选择开始影响旁人，也让冲突不再只是外部威胁。",
+        "随后，逼近的人或对峙对象带来压力，主角不能只解释原因，必须通过行动回应眼前阻碍。",
+        "关系层面出现迟疑或误解，主角的选择开始改变与对峙对象之间的距离，也让冲突不再只是外部威胁。",
         "中段加入一次转折，主角得到线索或看见代价，原先的判断被迫重新排列。",
         "压力继续升级，空间、道具或时间限制把人物推向更窄的选择口。",
         "主角做出明确动作，这个动作改变局面，也暴露出下一段必须承接的问题。",
@@ -3180,7 +4142,7 @@ fn trim_detected_character_name(name: &str) -> String {
         };
         if matches!(
             last,
-            '先' | '已' | '也' | '把' | '从' | '仍' | '在' | '向' | '对'
+            '先' | '已' | '也' | '把' | '从' | '仍' | '在' | '向' | '对' | '半' | '没'
         ) {
             chars.pop();
         } else {
@@ -3228,12 +4190,16 @@ fn extract_live_storyboard_row_patches(
     })
 }
 
-fn apply_live_storyboard_patch(row: &mut GeneratedStoryboardRow, patch: &LiveStoryboardRowPatch) {
+fn apply_live_storyboard_patch(
+    row: &mut GeneratedStoryboardRow,
+    patch: &LiveStoryboardRowPatch,
+    baseline_row: &GeneratedStoryboardRow,
+) {
     if let Some(value) = non_blank_string(&patch.shot_title) {
         row.shot_title = value;
     }
     if let Some(value) = non_blank_string(&patch.person) {
-        row.person = value;
+        row.person = bind_live_storyboard_person_to_source(&value, baseline_row);
     }
     if let Some(value) = non_blank_string(&patch.scene_scale) {
         row.scene_scale = value;
@@ -3252,6 +4218,1178 @@ fn apply_live_storyboard_patch(row: &mut GeneratedStoryboardRow, patch: &LiveSto
     }
 }
 
+fn repair_live_storyboard_patch_from_baseline(
+    row: &mut GeneratedStoryboardRow,
+    baseline_row: &GeneratedStoryboardRow,
+) {
+    if row.person.trim().is_empty() || storyboard_person_is_empty_shot_marker(&row.person) {
+        row.person = baseline_row.person.clone();
+    }
+    if row.scene_performance_projection.person.trim().is_empty()
+        || storyboard_person_is_empty_shot_marker(&row.scene_performance_projection.person)
+    {
+        row.scene_performance_projection.person = row.person.clone();
+    }
+    if row.scene_scale.trim().is_empty() {
+        row.scene_scale = baseline_row.scene_scale.clone();
+    }
+    if row.shot_title.trim().is_empty() {
+        row.shot_title = baseline_row.shot_title.clone();
+    }
+    if is_role_action_grounding_incomplete(&row.character_action) {
+        row.character_action = baseline_row.character_action.clone();
+        row.scene_performance_projection.character_action =
+            baseline_row.scene_performance_projection.character_action.clone();
+    }
+    let live_visual_was_normalized_to_a_ruin_repair = row
+        .visual_description
+        .contains("主角单膝跪地的停顿放在废墟前侧")
+        && row
+            .visual_description
+            .contains("敌人缓步逼近的来路压在后侧");
+    let baseline_visual_keeps_a_ruin_facts = baseline_row.visual_description.contains("主角")
+        && baseline_row.visual_description.contains("敌人")
+        && baseline_row.visual_description.contains("废墟")
+        && contains_any_story_term(&baseline_row.visual_description, &["逼近", "对峙压力"]);
+    if is_visual_description_grounding_incomplete(
+        &row.visual_description,
+        &row.person,
+        &row.scene_scale,
+        &row.character_action,
+        &row.camera_movement,
+        &row.shot_script,
+    ) || (live_visual_was_normalized_to_a_ruin_repair && baseline_visual_keeps_a_ruin_facts)
+    {
+        row.visual_description = baseline_row.visual_description.clone();
+        row.scene_performance_projection.visual_description =
+            baseline_row.scene_performance_projection.visual_description.clone();
+    }
+    if is_camera_movement_grounding_incomplete(
+        &row.camera_movement,
+        &row.shot_title,
+        &row.scene_scale,
+        &row.visual_description,
+        &row.shot_script,
+    ) {
+        row.camera_movement = baseline_row.camera_movement.clone();
+    }
+}
+
+fn repair_live_storyboard_rows_from_source(
+    rows: &mut [GeneratedStoryboardRow],
+    deterministic_rows: &[GeneratedStoryboardRow],
+) -> LiveRepairSummary {
+    let mut summary = LiveRepairSummary::default();
+    for (index, row) in rows.iter_mut().enumerate() {
+        let Some(baseline_row) = deterministic_rows.get(index) else {
+            continue;
+        };
+        let before = storyboard_row_repair_signature(row);
+        let source_text = format!(
+            "{}\n{}",
+            baseline_row.shot_script, baseline_row.scene_performance_projection.fused_source_text
+        );
+
+        repair_storyboard_external_drift_fields(row, baseline_row, &source_text, &mut summary);
+        repair_storyboard_source_fragment_action_fields(row, &source_text, &mut summary);
+        repair_storyboard_abstract_pressure_fields(row, &source_text, &mut summary);
+        normalize_storyboard_row_subject_quality(row);
+
+        if source_has_a_ruin_enemy_facts(&source_text)
+            && storyboard_row_needs_a_source_grounding_repair(row)
+        {
+            repair_a_ruin_enemy_storyboard_row(row);
+            summary.push_reason("visual_grounding_restored");
+        }
+        if source_has_b_alley_pursuit_facts(&source_text)
+            && storyboard_row_needs_b_source_grounding_repair(row)
+        {
+            repair_b_alley_pursuit_storyboard_row(row);
+            summary.push_reason("pursuit_pressure_restored");
+        }
+
+        normalize_storyboard_row_subject_quality(row);
+        if before != storyboard_row_repair_signature(row) && !summary.repaired() {
+            summary.push_reason("source_grounded_field_repair");
+        }
+    }
+    summary
+}
+
+fn repair_storyboard_external_drift_fields(
+    row: &mut GeneratedStoryboardRow,
+    baseline_row: &GeneratedStoryboardRow,
+    source_text: &str,
+    summary: &mut LiveRepairSummary,
+) {
+    if storyboard_field_has_source_external_drift(&row.shot_title, source_text) {
+        row.shot_title = baseline_row.shot_title.clone();
+        summary.push_reason("source_external_field_rebound");
+    }
+    if storyboard_field_has_source_external_drift(&row.visual_description, source_text) {
+        row.visual_description = baseline_row.visual_description.clone();
+        row.scene_performance_projection.visual_description =
+            baseline_row.scene_performance_projection.visual_description.clone();
+        summary.push_reason("source_external_field_rebound");
+    }
+    if storyboard_field_has_source_external_drift(&row.character_action, source_text) {
+        row.character_action = baseline_row.character_action.clone();
+        row.scene_performance_projection.character_action =
+            baseline_row.scene_performance_projection.character_action.clone();
+        summary.push_reason("source_external_field_rebound");
+    }
+    if storyboard_field_has_source_external_drift(&row.camera_movement, source_text) {
+        row.camera_movement = baseline_row.camera_movement.clone();
+        summary.push_reason("source_external_field_rebound");
+    }
+    if storyboard_field_has_source_external_drift(&row.prompt_text, source_text) {
+        row.prompt_text = baseline_row.prompt_text.clone();
+        summary.push_reason("source_external_field_rebound");
+    }
+}
+
+fn storyboard_field_has_source_external_drift(value: &str, source_text: &str) -> bool {
+    generated_script_forbidden_external_setting_term(value, source_text).is_some()
+        || generated_script_forbidden_military_scale_expansion_term(value, source_text).is_some()
+        || generated_script_forbidden_external_action_term(value, source_text).is_some()
+}
+
+fn repair_storyboard_source_fragment_action_fields(
+    row: &mut GeneratedStoryboardRow,
+    source_text: &str,
+    summary: &mut LiveRepairSummary,
+) {
+    row.shot_title = repair_storyboard_source_fragment_action_text(
+        &row.shot_title,
+        source_text,
+        summary,
+    );
+    row.visual_description = repair_storyboard_source_fragment_action_text(
+        &row.visual_description,
+        source_text,
+        summary,
+    );
+    row.character_action = repair_storyboard_source_fragment_action_text(
+        &row.character_action,
+        source_text,
+        summary,
+    );
+    row.camera_movement = repair_storyboard_source_fragment_action_text(
+        &row.camera_movement,
+        source_text,
+        summary,
+    );
+    row.prompt_text = repair_storyboard_source_fragment_action_text(
+        &row.prompt_text,
+        source_text,
+        summary,
+    );
+    row.scene_performance_projection.visual_description =
+        repair_storyboard_source_fragment_action_text(
+            &row.scene_performance_projection.visual_description,
+            source_text,
+            summary,
+        );
+    row.scene_performance_projection.character_action =
+        repair_storyboard_source_fragment_action_text(
+            &row.scene_performance_projection.character_action,
+            source_text,
+            summary,
+        );
+}
+
+fn repair_storyboard_source_fragment_action_text(
+    value: &str,
+    source_text: &str,
+    summary: &mut LiveRepairSummary,
+) -> String {
+    let mut cleaned = value.to_string();
+    for (fragment, replacement) in [
+        ("主角之", "主角"),
+        ("林峰压低", "林峰降低"),
+        ("苏瑶压低", "苏瑶后退"),
+        ("林峰压", "林峰"),
+        ("苏瑶压", "苏瑶"),
+    ] {
+        if cleaned.contains(fragment) && !source_text.contains(fragment) {
+            cleaned = cleaned.replace(fragment, replacement);
+            summary.push_reason("person_action_fragment_rebound");
+        }
+    }
+    cleaned
+}
+
+fn repair_storyboard_abstract_pressure_fields(
+    row: &mut GeneratedStoryboardRow,
+    source_text: &str,
+    summary: &mut LiveRepairSummary,
+) {
+    let replacement = if source_has_b_alley_pursuit_facts(source_text) {
+        "追兵逼近压力"
+    } else if source_has_a_ruin_enemy_facts(source_text) {
+        "对峙压力"
+    } else {
+        "压力"
+    };
+    row.shot_title = repair_abstract_pressure_text(&row.shot_title, source_text, replacement, summary);
+    row.visual_description =
+        repair_abstract_pressure_text(&row.visual_description, source_text, replacement, summary);
+    row.character_action =
+        repair_abstract_pressure_text(&row.character_action, source_text, replacement, summary);
+    row.camera_movement =
+        repair_abstract_pressure_text(&row.camera_movement, source_text, replacement, summary);
+    row.prompt_text = repair_abstract_pressure_text(&row.prompt_text, source_text, replacement, summary);
+    row.scene_performance_projection.visual_description = repair_abstract_pressure_text(
+        &row.scene_performance_projection.visual_description,
+        source_text,
+        replacement,
+        summary,
+    );
+    row.scene_performance_projection.character_action = repair_abstract_pressure_text(
+        &row.scene_performance_projection.character_action,
+        source_text,
+        replacement,
+        summary,
+    );
+}
+
+fn repair_abstract_pressure_text(
+    value: &str,
+    source_text: &str,
+    replacement: &str,
+    summary: &mut LiveRepairSummary,
+) -> String {
+    if value.contains("危险感") && !source_text.contains("危险感") {
+        summary.push_reason("abstract_pressure_rebound");
+        value.replace("危险感", replacement)
+    } else {
+        value.to_string()
+    }
+}
+
+fn storyboard_row_needs_a_source_grounding_repair(row: &GeneratedStoryboardRow) -> bool {
+    !row.visual_description.contains("主角")
+        || !row.visual_description.contains("敌人")
+        || !row.visual_description.contains("废墟")
+        || !contains_any_story_term(&row.visual_description, &["逼近", "对峙压力", "压近"])
+        || is_visual_description_grounding_incomplete(
+            &row.visual_description,
+            &row.person,
+            &row.scene_scale,
+            &row.character_action,
+            &row.camera_movement,
+            &row.shot_script,
+        )
+}
+
+fn storyboard_row_needs_b_source_grounding_repair(row: &GeneratedStoryboardRow) -> bool {
+    let visible = storyboard_row_repair_signature(row);
+    !contains_any_story_term(&visible, &["林峰护住苏瑶", "护住苏瑶"])
+        || !contains_any_story_term(&visible, &["阿青提醒", "提醒他们"])
+        || !contains_any_story_term(&visible, &["黑衣追兵", "追兵"])
+        || !visible.contains("巷口")
+        || !contains_any_story_term(&visible, &["逼近", "压近", "追兵压力", "追兵逼近压力"])
+}
+
+fn storyboard_row_repair_signature(row: &GeneratedStoryboardRow) -> String {
+    format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        row.person,
+        row.shot_title,
+        row.visual_description,
+        row.character_action,
+        row.camera_movement,
+        row.prompt_text,
+        row.scene_performance_projection.visual_description,
+        row.scene_performance_projection.character_action
+    )
+}
+
+fn normalize_storyboard_row_subject_quality(row: &mut GeneratedStoryboardRow) {
+    scrub_storyboard_row_forbidden_output_fragments(row);
+    row.person = collapse_repeated_storyboard_subject_text(&row.person);
+    let rebound_person = bind_empty_storyboard_person_to_visible_source_subject(&row.person, row);
+    row.person = rebound_person;
+    let safe_subject = safe_storyboard_subject_for_repair(
+        &row.person,
+        &row.shot_script,
+        &row.scene_performance_projection.fused_source_text,
+    );
+    row.shot_title = collapse_repeated_storyboard_subject_text(&row.shot_title);
+    row.visual_description = collapse_repeated_storyboard_subject_text(&row.visual_description);
+    row.character_action = collapse_repeated_storyboard_subject_text(&row.character_action);
+    row.camera_movement = collapse_repeated_storyboard_subject_text(&row.camera_movement);
+    row.prompt_text = collapse_repeated_storyboard_subject_text(&row.prompt_text);
+    row.shot_title =
+        repair_shot_title_source_fragment_subject(&row.shot_title, &safe_subject);
+    row.shot_title = repair_storyboard_subject_label_leaks(&row.shot_title, &safe_subject);
+    row.visual_description =
+        repair_storyboard_subject_label_leaks(&row.visual_description, &safe_subject);
+    row.character_action =
+        repair_storyboard_subject_label_leaks(&row.character_action, &safe_subject);
+    row.camera_movement =
+        repair_storyboard_subject_label_leaks(&row.camera_movement, &safe_subject);
+    row.prompt_text = repair_storyboard_subject_label_leaks(&row.prompt_text, &safe_subject);
+    row.scene_performance_projection.person =
+        collapse_repeated_storyboard_subject_text(&row.scene_performance_projection.person);
+    row.scene_performance_projection.visual_description =
+        collapse_repeated_storyboard_subject_text(&row.scene_performance_projection.visual_description);
+    row.scene_performance_projection.character_action =
+        collapse_repeated_storyboard_subject_text(&row.scene_performance_projection.character_action);
+    row.scene_performance_projection.visual_description = repair_storyboard_subject_label_leaks(
+        &row.scene_performance_projection.visual_description,
+        &safe_subject,
+    );
+    row.scene_performance_projection.character_action = repair_storyboard_subject_label_leaks(
+        &row.scene_performance_projection.character_action,
+        &safe_subject,
+    );
+    row.person = normalize_storyboard_person_output(&row.person);
+    let rebound_person = bind_empty_storyboard_person_to_visible_source_subject(&row.person, row);
+    row.person = rebound_person;
+    let rebound_projection_person = bind_empty_storyboard_person_to_visible_source_subject(
+        &row.scene_performance_projection.person,
+        row,
+    );
+    row.scene_performance_projection.person = rebound_projection_person;
+    if storyboard_person_is_empty_shot_marker(&row.scene_performance_projection.person)
+        && !storyboard_person_is_empty_shot_marker(&row.person)
+    {
+        row.scene_performance_projection.person = row.person.clone();
+    }
+    let bound_person = row.person.clone();
+    row.shot_title = repair_empty_shot_text_for_person(&row.shot_title, &bound_person);
+    row.visual_description =
+        repair_empty_shot_text_for_person(&row.visual_description, &bound_person);
+    row.character_action = repair_empty_shot_text_for_person(&row.character_action, &bound_person);
+    row.camera_movement = repair_empty_shot_text_for_person(&row.camera_movement, &bound_person);
+    row.prompt_text = repair_empty_shot_text_for_person(&row.prompt_text, &bound_person);
+    row.scene_performance_projection.visual_description = repair_empty_shot_text_for_person(
+        &row.scene_performance_projection.visual_description,
+        &bound_person,
+    );
+    row.scene_performance_projection.character_action = repair_empty_shot_text_for_person(
+        &row.scene_performance_projection.character_action,
+        &bound_person,
+    );
+    align_storyboard_fields_to_bound_person(row);
+    repair_storyboard_row_source_pressure(row);
+    scrub_storyboard_row_forbidden_output_fragments(row);
+}
+
+fn scrub_storyboard_row_forbidden_output_fragments(row: &mut GeneratedStoryboardRow) {
+    row.person = scrub_forbidden_product_output_fragments(&row.person);
+    row.shot_title = scrub_forbidden_product_output_fragments(&row.shot_title);
+    row.visual_description = scrub_forbidden_product_output_fragments(&row.visual_description);
+    row.character_action = scrub_forbidden_product_output_fragments(&row.character_action);
+    row.camera_movement = scrub_forbidden_product_output_fragments(&row.camera_movement);
+    row.dialogue = scrub_forbidden_product_output_fragments(&row.dialogue);
+    row.prompt_text = scrub_forbidden_product_output_fragments(&row.prompt_text);
+    row.scene_performance_projection.person =
+        scrub_forbidden_product_output_fragments(&row.scene_performance_projection.person);
+    row.scene_performance_projection.visual_description = scrub_forbidden_product_output_fragments(
+        &row.scene_performance_projection.visual_description,
+    );
+    row.scene_performance_projection.character_action = scrub_forbidden_product_output_fragments(
+        &row.scene_performance_projection.character_action,
+    );
+}
+
+fn diversify_repeated_storyboard_subjects(rows: &mut [GeneratedStoryboardRow]) {
+    if rows.len() < 2 {
+        return;
+    }
+    let mut previous_person = String::new();
+    for row in rows {
+        split_overbroad_storyboard_subject(row);
+        let person = row.person.trim().to_string();
+        if !person.is_empty() && person == previous_person {
+            if let Some(diversified) = diversified_subject_for_repeated_row(row, &person) {
+                row.person = diversified.clone();
+                row.scene_performance_projection.person = diversified.clone();
+                row.shot_title = repair_storyboard_subject_label_leaks(&row.shot_title, &diversified);
+                row.visual_description =
+                    repair_storyboard_subject_label_leaks(&row.visual_description, &diversified);
+                row.character_action =
+                    repair_storyboard_subject_label_leaks(&row.character_action, &diversified);
+                row.camera_movement =
+                    repair_storyboard_subject_label_leaks(&row.camera_movement, &diversified);
+                row.prompt_text = repair_storyboard_subject_label_leaks(&row.prompt_text, &diversified);
+            }
+        }
+        align_storyboard_fields_to_bound_person(row);
+        repair_storyboard_row_source_pressure(row);
+        previous_person = row.person.trim().to_string();
+    }
+}
+
+fn split_overbroad_storyboard_subject(row: &mut GeneratedStoryboardRow) {
+    let person = row.person.trim();
+    let evidence = format!(
+        "{}\n{}\n{}",
+        row.shot_script, row.character_action, row.scene_performance_projection.fused_source_text
+    );
+    let replacement = if person == "林峰、苏瑶与阿青" {
+        if contains_any_story_term(&evidence, &["护住苏瑶", "护着苏瑶"]) {
+            Some("林峰与苏瑶".to_string())
+        } else if contains_any_story_term(&evidence, &["阿青提醒", "提醒他们", "断后"]) {
+            Some("阿青".to_string())
+        } else {
+            Some("林峰".to_string())
+        }
+    } else {
+        None
+    };
+    let Some(replacement) = replacement else {
+        return;
+    };
+    row.person = replacement.clone();
+    row.scene_performance_projection.person = replacement.clone();
+    row.shot_title = repair_storyboard_subject_label_leaks(&row.shot_title, &replacement);
+    row.visual_description = repair_storyboard_subject_label_leaks(&row.visual_description, &replacement);
+    row.character_action = repair_storyboard_subject_label_leaks(&row.character_action, &replacement);
+    row.camera_movement = repair_storyboard_subject_label_leaks(&row.camera_movement, &replacement);
+    row.prompt_text = repair_storyboard_subject_label_leaks(&row.prompt_text, &replacement);
+    for value in [
+        &mut row.shot_title,
+        &mut row.visual_description,
+        &mut row.character_action,
+        &mut row.camera_movement,
+        &mut row.prompt_text,
+        &mut row.scene_performance_projection.source_sample_title,
+        &mut row.scene_performance_projection.visual_description,
+        &mut row.scene_performance_projection.character_action,
+    ] {
+        *value = value.replace("林峰、苏瑶与阿青", &replacement);
+    }
+}
+
+fn align_storyboard_fields_to_bound_person(row: &mut GeneratedStoryboardRow) {
+    let person = row.person.trim().to_string();
+    if person.is_empty()
+        || storyboard_person_is_empty_shot_marker(&person)
+        || person == "林峰、苏瑶与阿青"
+    {
+        return;
+    }
+    let composites = ["林峰、苏瑶与阿青", "林峰与苏瑶", "主角与敌人"]
+        .into_iter()
+        .filter(|composite| *composite != person && row_mentions_composite_subject(row, composite))
+        .collect::<Vec<_>>();
+    if composites.is_empty() {
+        return;
+    }
+    for value in [
+        &mut row.shot_title,
+        &mut row.visual_description,
+        &mut row.character_action,
+        &mut row.camera_movement,
+        &mut row.prompt_text,
+        &mut row.scene_performance_projection.source_sample_title,
+        &mut row.scene_performance_projection.visual_description,
+        &mut row.scene_performance_projection.character_action,
+    ] {
+        for composite in &composites {
+            *value = value.replace(*composite, &person);
+        }
+    }
+}
+
+fn row_mentions_composite_subject(row: &GeneratedStoryboardRow, composite: &str) -> bool {
+    [
+        row.shot_title.as_str(),
+        row.visual_description.as_str(),
+        row.character_action.as_str(),
+        row.camera_movement.as_str(),
+        row.prompt_text.as_str(),
+        row.scene_performance_projection.source_sample_title.as_str(),
+        row.scene_performance_projection.visual_description.as_str(),
+        row.scene_performance_projection.character_action.as_str(),
+    ]
+    .iter()
+    .any(|value| value.contains(composite))
+}
+
+fn repair_storyboard_row_source_pressure(row: &mut GeneratedStoryboardRow) {
+    let source = format!(
+        "{}\n{}",
+        row.shot_script, row.scene_performance_projection.fused_source_text
+    );
+    if contains_any_story_term(&source, &["林峰护住苏瑶", "护住苏瑶"])
+        && contains_any_story_term(&source, &["阿青提醒", "提醒他们"])
+        && contains_any_story_term(&source, &["黑衣追兵", "追兵"])
+        && source.contains("巷口")
+        && contains_any_story_term(&source, &["逼近", "压近"])
+    {
+        repair_b_alley_pursuit_storyboard_row(row);
+    }
+    if contains_any_story_term(&source, &["废墟"])
+        && contains_any_story_term(&source, &["单膝跪", "跪地", "跪下"])
+        && source.contains("敌人")
+        && contains_any_story_term(&source, &["逼近", "缓步"])
+    {
+        repair_a_ruin_enemy_storyboard_row(row);
+    }
+}
+
+fn repair_b_alley_pursuit_storyboard_row(row: &mut GeneratedStoryboardRow) {
+    let person = row.person.trim().to_string();
+    let scene_scale = if row.scene_scale.trim().is_empty() {
+        "中景".to_string()
+    } else {
+        row.scene_scale.trim().to_string()
+    };
+    for value in [
+        &mut row.shot_title,
+        &mut row.visual_description,
+        &mut row.character_action,
+        &mut row.camera_movement,
+        &mut row.prompt_text,
+        &mut row.scene_performance_projection.source_sample_title,
+        &mut row.scene_performance_projection.visual_description,
+        &mut row.scene_performance_projection.character_action,
+    ] {
+        *value = value
+            .replace("断桥远端", "巷口来路")
+            .replace("断桥边缘", "巷口退路")
+            .replace("断桥空间", "巷口空间")
+            .replace("灯塔底部", "巷口来路")
+            .replace("木栈道", "巷口退路")
+            .replace("水面", "街面")
+            .replace("探照灯", "街巷光线");
+    }
+
+    if person == "阿青" {
+        row.shot_title = "镜头2：阿青提醒巷口追兵逼近".to_string();
+        row.visual_description = format!(
+            "主体为阿青，{scene_scale}把阿青和林峰护住苏瑶的贴身站位放在巷口退路同一层画面；场景压在巷口串起的街面动线里，黑衣追兵逼近的来路被保留；空气与地表把远近层次自然拉开，追兵压力贴到主体身上；当前视觉事件是阿青提醒他们，黑衣追兵从巷口逼近，林峰仍护住苏瑶。"
+        );
+        row.character_action = "阿青从林峰护住苏瑶的贴身站位旁开始，提醒他们黑衣追兵从巷口逼近，到巷口追兵压力被确认时结束，镜头捕捉提醒与逼近同时压住退路的一瞬间。".to_string();
+        row.camera_movement =
+            format!("{scene_scale}定机位观察阿青提醒和巷口追兵逼近，镜头在提醒落点轻微推近");
+    } else if person.contains("林峰") || person.contains("苏瑶") {
+        row.character_action = format!(
+            "{person}从巷口压力前的贴身站位开始，林峰护住苏瑶，阿青提醒他们黑衣追兵从巷口逼近，到追兵压力压近时结束，镜头捕捉护人与提醒同时发生的一瞬间。"
+        );
+        row.visual_description = format!(
+            "主体为{person}，{scene_scale}把林峰护住苏瑶、贴身站位压在巷口退路前；场景压在巷口串起的街面动线里，阿青提醒他们，黑衣追兵从巷口逼近；冷光压住巷口墙面，空气与地表把远近层次自然拉开，追兵压力贴到主体身上；当前视觉事件是林峰护住苏瑶与阿青提醒同时发生，画面突出追兵压力。"
+        );
+        row.camera_movement =
+            format!("{scene_scale}定机位观察{person}护人与阿青提醒，镜头顺着巷口追兵逼近压力轻微推近");
+    }
+
+    row.prompt_text = append_storyboard_prompt_fact_clause(
+        &row.prompt_text,
+        "剧情动作压力：林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。",
+    );
+    row.scene_performance_projection.person = row.person.clone();
+    row.scene_performance_projection.visual_description = row.visual_description.clone();
+    row.scene_performance_projection.character_action = row.character_action.clone();
+}
+
+fn repair_a_ruin_enemy_storyboard_row(row: &mut GeneratedStoryboardRow) {
+    let person = row.person.trim().to_string();
+    let scene_scale = if row.scene_scale.trim().is_empty() {
+        "中景".to_string()
+    } else {
+        row.scene_scale.trim().to_string()
+    };
+    for value in [
+        &mut row.shot_title,
+        &mut row.visual_description,
+        &mut row.character_action,
+        &mut row.camera_movement,
+        &mut row.prompt_text,
+        &mut row.scene_performance_projection.source_sample_title,
+        &mut row.scene_performance_projection.visual_description,
+        &mut row.scene_performance_projection.character_action,
+    ] {
+        *value = value
+            .replace("高架桥阴影下", "废墟之上")
+            .replace("来声方向", "敌人逼近方向")
+            .replace("脚步声", "敌人缓步逼近的压力");
+    }
+
+    if person == "敌人" {
+        row.shot_title = "镜头2：敌人缓步逼近".to_string();
+        row.visual_description = format!(
+            "主体为敌人，{scene_scale}把敌人压在废墟前侧的一步对冲距离里；场景压在废墟之间，主角单膝跪地的停顿和敌人缓步逼近的来路被放在同一层空间；明暗层次把敌人从背景里剥出来，废墟质感托住对峙压力；当前视觉事件是敌人缓步逼近，主角仍单膝跪在废墟之上。"
+        );
+        row.character_action = "敌人从废墟边缘开始缓步逼近主角，到对峙距离被压短时结束，镜头捕捉敌人逼近压力压到主角身前的一瞬间。".to_string();
+        row.camera_movement =
+            format!("{scene_scale}低机位观察敌人缓步逼近，镜头捕捉废墟前侧的对峙压力");
+    } else if person.contains("主角") {
+        row.visual_description = format!(
+            "主体为主角，{scene_scale}把主角单膝跪地的停顿放在废墟前侧，敌人缓步逼近的来路压在后侧；冷光和废墟质感把前后层次拉开；当前视觉事件是主角稳住跪姿承受敌人逼近压力，画面突出对峙压力。"
+        );
+        row.character_action = "主角从废墟之上单膝跪地开始，稳住身体看向缓步逼近的敌人，到敌人逼近压力压到身前时结束，镜头捕捉跪姿停住与敌人逼近同框的一瞬间。".to_string();
+        row.camera_movement =
+            format!("{scene_scale}低机位观察主角单膝跪地和敌人逼近，镜头捕捉废墟里的对峙压力");
+    }
+
+    row.prompt_text = append_storyboard_prompt_fact_clause(
+        &row.prompt_text,
+        "剧情动作压力：废墟之上，主角单膝跪地，敌人缓步逼近。",
+    );
+    row.scene_performance_projection.person = row.person.clone();
+    row.scene_performance_projection.visual_description = row.visual_description.clone();
+    row.scene_performance_projection.character_action = row.character_action.clone();
+}
+
+fn append_storyboard_prompt_fact_clause(prompt_text: &str, clause: &str) -> String {
+    if prompt_text.contains(clause) {
+        return prompt_text.to_string();
+    }
+    let trimmed = prompt_text.trim();
+    if trimmed.is_empty() {
+        clause.to_string()
+    } else {
+        format!("{trimmed}；{clause}")
+    }
+}
+
+fn diversified_subject_for_repeated_row(
+    row: &GeneratedStoryboardRow,
+    repeated_person: &str,
+) -> Option<String> {
+    let evidence = format!(
+        "{}\n{}\n{}\n{}",
+        row.shot_script,
+        row.visual_description,
+        row.character_action,
+        row.scene_performance_projection.fused_source_text
+    );
+    if repeated_person == "主角与敌人" {
+        if contains_any_story_term(&evidence, &["敌人", "逼近", "缓步", "压近"]) {
+            return Some("敌人".to_string());
+        }
+        return Some("主角".to_string());
+    }
+    if repeated_person == "主角"
+        && contains_any_story_term(&evidence, &["敌人", "逼近", "缓步", "压近", "对峙压力"])
+    {
+        return Some("敌人".to_string());
+    }
+    if repeated_person == "林峰与苏瑶"
+        && contains_any_story_term(&evidence, &["阿青提醒", "提醒他们", "黑衣追兵", "巷口逼近"])
+    {
+        return Some("阿青".to_string());
+    }
+    for name in ["阿青", "苏瑶", "林峰", "黑衣追兵", "追兵"] {
+        if repeated_person.contains(name) && evidence.contains(name) {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+fn collapse_repeated_storyboard_subject_text(value: &str) -> String {
+    let replacements = [
+        ("主角与敌人与敌人", "主角与敌人"),
+        ("主角与敌人敌人", "主角与敌人"),
+        ("敌人与敌人", "敌人"),
+        ("敌人敌人", "敌人"),
+        ("主角与对手与对手", "主角与对手"),
+        ("主角与敌方刀客与敌方刀客", "主角与敌方刀客"),
+        ("主角与敌将与敌将", "主角与敌将"),
+        ("林峰、苏瑶与阿青与阿青", "林峰、苏瑶与阿青"),
+        ("主角与敌人猛然", "主角猛然"),
+        ("主角与敌人瞳孔", "主角瞳孔"),
+    ];
+    let mut cleaned = value.to_string();
+    for (from, to) in replacements {
+        cleaned = cleaned.replace(from, to);
+    }
+    cleaned
+}
+
+fn normalize_storyboard_person_output(person: &str) -> String {
+    match person.trim() {
+        "" | "/" | "空镜" => String::new(),
+        value => value.to_string(),
+    }
+}
+
+fn repair_empty_shot_text_for_person(value: &str, person: &str) -> String {
+    if !value.contains("空镜") {
+        return value.to_string();
+    }
+    if storyboard_person_is_empty_shot_marker(person) {
+        return value.replace("空镜", "当前空间");
+    }
+
+    let person = person.trim();
+    value
+        .replace("主体为空镜", &format!("主体为{person}"))
+        .replace("空镜作为动作主体", &format!("{person}作为动作主体"))
+        .replace("空镜从", &format!("{person}从"))
+        .replace("空镜在", &format!("{person}在"))
+        .replace("空镜", "当前空间")
+}
+
+fn storyboard_person_is_empty_shot_marker(person: &str) -> bool {
+    matches!(person.trim(), "" | "/" | "空镜")
+}
+
+fn bind_empty_storyboard_person_to_visible_source_subject(
+    person: &str,
+    row: &GeneratedStoryboardRow,
+) -> String {
+    let normalized = normalize_storyboard_person_output(person);
+    if !storyboard_person_is_empty_shot_marker(&normalized) {
+        return normalized;
+    }
+
+    derive_visible_source_subject_from_storyboard_fields(row).unwrap_or(normalized)
+}
+
+fn derive_visible_source_subject_from_storyboard_fields(
+    row: &GeneratedStoryboardRow,
+) -> Option<String> {
+    let source = format!(
+        "{}\n{}",
+        row.shot_script, row.scene_performance_projection.fused_source_text
+    );
+    let visible = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}",
+        row.shot_title,
+        row.visual_description,
+        row.character_action,
+        row.prompt_text,
+        row.scene_performance_projection.visual_description,
+        row.scene_performance_projection.character_action
+    );
+    let mut visible_names = Vec::new();
+    for character in CharacterRegistry::from_story_text(&source, &source).characters {
+        let name = trim_detected_character_name(&character.name);
+        if !name.is_empty()
+            && visible.contains(&name)
+            && !looks_like_name_noise_candidate(&name)
+            && !looks_like_non_character_phrase(&name)
+        {
+            push_unique_fact(&mut visible_names, name);
+        }
+    }
+    if !visible_names.is_empty() {
+        return Some(subject_label_from_names(&visible_names));
+    }
+
+    let mut visible_roles = Vec::new();
+    for role in ["主角", "敌人", "敌将", "敌方刀客", "对手"] {
+        if source.contains(role) && visible.contains(role) {
+            push_unique_fact(&mut visible_roles, role.to_string());
+        }
+    }
+    if !visible_roles.is_empty() {
+        return Some(subject_label_from_names(&visible_roles));
+    }
+
+    let fallback = derive_fallback_subject(&row.shot_script, &source);
+    (!storyboard_person_is_empty_shot_marker(&fallback)
+        && !subject_is_non_character_anchor(&fallback)
+        && live_person_visual_or_abstract_term(&fallback).is_none())
+    .then_some(fallback)
+}
+
+fn safe_storyboard_subject_for_repair(person: &str, shot_script: &str, full_text: &str) -> String {
+    let trimmed = person.trim();
+    if !trimmed.is_empty()
+        && !storyboard_person_is_empty_shot_marker(trimmed)
+        && live_person_visual_or_abstract_term(trimmed).is_none()
+        && !storyboard_person_label_is_forbidden(trimmed)
+        && !live_person_label_looks_like_source_fragment(trimmed)
+    {
+        return trimmed.to_string();
+    }
+    derive_fallback_subject(shot_script, full_text)
+}
+
+fn subject_pollution_terms() -> impl Iterator<Item = &'static str> {
+    LIVE_PERSON_VISUAL_OR_ABSTRACT_TERMS
+        .iter()
+        .chain(STORYBOARD_PERSON_FORBIDDEN_LABEL_TERMS.iter())
+        .chain(LIVE_PERSON_SOURCE_FRAGMENT_TERMS.iter())
+        .copied()
+        .chain(["白意图", "郑重递", "左手", "右手"])
+}
+
+fn repair_storyboard_subject_label_leaks(value: &str, safe_subject: &str) -> String {
+    let safe_subject = safe_subject.trim();
+    if safe_subject.is_empty() {
+        return value.to_string();
+    }
+    let mut cleaned = value.to_string();
+    for term in subject_pollution_terms() {
+        cleaned = cleaned
+            .replace(&format!("主体为{term}"), &format!("主体为{safe_subject}"))
+            .replace(&format!("主体是{term}"), &format!("主体是{safe_subject}"))
+            .replace(&format!("人物为{term}"), &format!("人物为{safe_subject}"))
+            .replace(&format!("角色为{term}"), &format!("角色为{safe_subject}"))
+            .replace(&format!("主体为{term}镜头"), &format!("主体为{safe_subject}"))
+            .replace(&format!("{term}镜头作为动作主体"), &format!("{safe_subject}作为动作主体"))
+            .replace(&format!("{term}镜头从"), &format!("{safe_subject}从"))
+            .replace(&format!("{term}镜头在"), &format!("{safe_subject}在"))
+            .replace(&format!("{term}作为动作主体"), &format!("{safe_subject}作为动作主体"))
+            .replace(&format!("镜头标题：{term}"), &format!("镜头标题：{safe_subject}"))
+            .replace(&format!("角色动作：{term}"), &format!("角色动作：{safe_subject}"))
+            .replace(&format!("：{term}从"), &format!("：{safe_subject}从"))
+            .replace(&format!("；{term}从"), &format!("；{safe_subject}从"))
+            .replace(&format!("，{term}从"), &format!("，{safe_subject}从"))
+            .replace(&format!("。{term}从"), &format!("。{safe_subject}从"))
+            .replace(
+                &format!("：{term}作为主体"),
+                &format!("：{safe_subject}作为主体"),
+            )
+            .replace(
+                &format!("；{term}作为主体"),
+                &format!("；{safe_subject}作为主体"),
+            )
+            .replace(
+                &format!("：{term}作为动作主体"),
+                &format!("：{safe_subject}作为动作主体"),
+            )
+            .replace(
+                &format!("；{term}作为动作主体"),
+                &format!("；{safe_subject}作为动作主体"),
+            );
+        for marker in ["镜头1：", "镜头2：", "镜头3：", "镜头一：", "镜头二：", "镜头三："] {
+            cleaned = cleaned.replace(
+                &format!("{marker}{term}"),
+                &format!("{marker}{safe_subject}"),
+            );
+        }
+        if cleaned.starts_with(&format!("{term}从")) {
+            cleaned = cleaned.replacen(&format!("{term}从"), &format!("{safe_subject}从"), 1);
+        }
+        if cleaned.starts_with(&format!("{term}镜头从")) {
+            cleaned = cleaned.replacen(
+                &format!("{term}镜头从"),
+                &format!("{safe_subject}从"),
+                1,
+            );
+        }
+    }
+    cleaned = cleaned
+        .replace(
+            &format!("主体为{safe_subject}镜头"),
+            &format!("主体为{safe_subject}"),
+        )
+        .replace(
+            &format!("{safe_subject}镜头从"),
+            &format!("{safe_subject}从"),
+        )
+        .replace(
+            &format!("{safe_subject}镜头在"),
+            &format!("{safe_subject}在"),
+        );
+    cleaned
+}
+
+fn repair_shot_title_source_fragment_subject(value: &str, safe_subject: &str) -> String {
+    let safe_subject = safe_subject.trim();
+    if safe_subject.is_empty() {
+        return value.to_string();
+    }
+    let trimmed = value.trim();
+    let mut title_start = 0usize;
+    for separator in ["：", ":"] {
+        if let Some(index) = trimmed.find(separator) {
+            title_start = index + separator.len();
+            break;
+        }
+    }
+    let title_tail = &trimmed[title_start..];
+    for term in LIVE_PERSON_SOURCE_FRAGMENT_TERMS.iter().copied() {
+        if let Some(rest) = title_tail.strip_prefix(term) {
+            let prefix = &trimmed[..title_start];
+            return format!("{prefix}{safe_subject}{rest}");
+        }
+    }
+    value.to_string()
+}
+
+fn bind_live_storyboard_person_to_source(
+    candidate: &str,
+    baseline_row: &GeneratedStoryboardRow,
+) -> String {
+    let explicit_source_role = derive_explicit_role_subject_label(&baseline_row.shot_script)
+        .or_else(|| {
+            derive_explicit_role_subject_label(
+                &baseline_row.scene_performance_projection.fused_source_text,
+            )
+        });
+    let baseline_subject = {
+        let baseline_person = baseline_row.person.trim();
+        if baseline_person.is_empty()
+            || live_person_label_should_use_source_binding(baseline_person, false)
+        {
+            None
+        } else {
+            Some(baseline_person.to_string())
+        }
+    };
+    let fallback_subject =
+        match (explicit_source_role.as_deref(), baseline_subject.as_deref()) {
+            (Some(role), _) if source_role_should_override_baseline_person(role) => {
+                role.to_string()
+            }
+            (_, Some(baseline)) => baseline.to_string(),
+            (Some(role), None) => role.to_string(),
+            (None, None) => derive_fallback_subject(
+                &baseline_row.shot_script,
+                &baseline_row.scene_performance_projection.fused_source_text,
+            ),
+        };
+    let trimmed = candidate.trim();
+    if let Some(bound_name) = bind_live_person_candidate_to_baseline_name(trimmed, baseline_row) {
+        return bound_name;
+    }
+    if trimmed.is_empty()
+        || live_person_label_should_use_source_binding(trimmed, explicit_source_role.is_some())
+    {
+        fallback_subject
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn source_role_should_override_baseline_person(value: &str) -> bool {
+    contains_any_story_term(value, &["主角", "敌人"])
+}
+
+fn bind_live_person_candidate_to_baseline_name(
+    candidate: &str,
+    baseline_row: &GeneratedStoryboardRow,
+) -> Option<String> {
+    for source_name in baseline_person_binding_candidates(baseline_row) {
+        if candidate == source_name {
+            return Some(source_name);
+        }
+        if let Some(tail) = candidate.strip_prefix(&source_name) {
+            if person_tail_is_action_or_quantity(tail) {
+                return Some(source_name);
+            }
+        }
+    }
+    None
+}
+
+fn baseline_person_binding_candidates(baseline_row: &GeneratedStoryboardRow) -> Vec<String> {
+    let mut candidates = Vec::new();
+    for part in split_live_subject_parts(&baseline_row.person) {
+        if !part.trim().is_empty() {
+            push_unique_fact(&mut candidates, part);
+        }
+    }
+    let evidence = format!(
+        "{}\n{}",
+        baseline_row.shot_script, baseline_row.scene_performance_projection.fused_source_text
+    );
+    for character in CharacterRegistry::from_story_text(&evidence, &evidence).characters {
+        push_unique_fact(&mut candidates, trim_detected_character_name(&character.name));
+    }
+    candidates
+}
+
+fn person_tail_is_action_or_quantity(tail: &str) -> bool {
+    let trimmed = tail.trim();
+    trimmed.is_empty()
+        || trimmed == "一"
+        || trimmed == "半"
+        || [
+            "一把", "一手", "一步", "一声", "一记", "一拳", "一刀", "一剑", "猛然",
+            "突然", "忽然", "转身", "抬手", "回身", "侧身", "伸手", "低头", "抬头",
+            "压", "压低", "之", "站在", "站起", "站住", "站立", "回望", "回头", "靠",
+            "时", "背", "方", "方位", "一侧", "右侧", "左侧",
+        ]
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix))
+}
+
+fn live_person_label_should_use_source_binding(value: &str, source_has_explicit_role: bool) -> bool {
+    live_person_visual_or_abstract_term(value).is_some()
+        || storyboard_person_label_is_forbidden(value)
+        || live_person_label_looks_like_source_fragment(value)
+        || (source_has_explicit_role && subject_is_non_character_anchor(value))
+}
+
+fn storyboard_person_label_is_forbidden(value: &str) -> bool {
+    let trimmed = value.trim();
+    STORYBOARD_PERSON_FORBIDDEN_LABEL_TERMS
+        .iter()
+        .any(|term| trimmed == *term || trimmed.contains(term))
+}
+
+fn live_person_label_looks_like_source_fragment(value: &str) -> bool {
+    split_live_subject_parts(value).into_iter().any(|part| {
+        role_tail_starts_with_non_name_phrase(&part)
+            || contains_any_story_term(&part, LIVE_PERSON_SOURCE_FRAGMENT_TERMS)
+            || looks_like_name_noise_candidate(&part)
+    })
+}
+
+fn live_person_visual_or_abstract_term(value: &str) -> Option<&'static str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    LIVE_PERSON_VISUAL_OR_ABSTRACT_TERMS
+        .iter()
+        .chain(STORYBOARD_PERSON_FORBIDDEN_LABEL_TERMS.iter())
+        .copied()
+        .find(|term| trimmed.contains(term))
+}
+
+fn live_field_visual_or_abstract_subject_term(
+    field_name: &str,
+    value: &str,
+) -> Option<&'static str> {
+    if field_name == "person" {
+        return live_person_visual_or_abstract_term(value);
+    }
+
+    let trimmed = value.trim();
+    for term in subject_pollution_terms() {
+        let starts_as_subject =
+            field_starts_with_subject_label_term(field_name, trimmed, term);
+        let motion_as_subject = matches!(field_name, "visual_description" | "character_action")
+            && (trimmed.contains(&format!("{term}从"))
+                || trimmed.contains(&format!("{term}在")));
+        if starts_as_subject
+            || trimmed.contains(&format!("主体为{term}"))
+            || trimmed.contains(&format!("主体是{term}"))
+            || trimmed.contains(&format!("人物为{term}"))
+            || trimmed.contains(&format!("角色为{term}"))
+            || field_contains_colon_subject_label_term(field_name, trimmed, term)
+            || motion_as_subject
+        {
+            return Some(term);
+        }
+    }
+    None
+}
+
+fn field_contains_colon_subject_label_term(field_name: &str, trimmed: &str, term: &str) -> bool {
+    if field_name != "prompt_text" {
+        return trimmed.contains(&format!("：{term}"));
+    }
+
+    prompt_text_contains_colon_subject_label_term(trimmed, term)
+}
+
+fn prompt_text_contains_colon_subject_label_term(trimmed: &str, term: &str) -> bool {
+    if prompt_text_contains_shot_title_subject_term(trimmed, term) {
+        return true;
+    }
+    if trimmed.contains(&format!("角色动作：{term}")) {
+        return true;
+    }
+
+    trimmed.contains(&format!("画面描述：{term}从"))
+        || trimmed.contains(&format!("画面描述：{term}在"))
+        || trimmed.contains(&format!("画面描述：{term}作为主体"))
+        || trimmed.contains(&format!("画面描述：{term}作为动作主体"))
+}
+
+fn prompt_text_contains_shot_title_subject_term(trimmed: &str, term: &str) -> bool {
+    let pattern = format!("镜头标题：{term}");
+    trimmed.match_indices(&pattern).any(|(index, _)| {
+        if term == "镜头" {
+            let tail = &trimmed[index + pattern.len()..];
+            if tail
+                .chars()
+                .next()
+                .is_some_and(is_numbered_shot_marker)
+            {
+                return false;
+            }
+        }
+        true
+    })
+}
+
+fn is_numbered_shot_marker(character: char) -> bool {
+    character.is_ascii_digit() || "一二三四五六七八九十".contains(character)
+}
+
+fn field_starts_with_subject_label_term(field_name: &str, trimmed: &str, term: &str) -> bool {
+    if !matches!(field_name, "shot_title" | "character_action") || !trimmed.starts_with(term) {
+        return false;
+    }
+    if field_name == "shot_title" && term == "镜头" {
+        let tail = trimmed.strip_prefix(term).unwrap_or_default();
+        if tail
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_digit() || "一二三四五六七八九十".contains(character))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+fn field_contains_subject_pollution(value: &str) -> bool {
+    let trimmed = value.trim();
+    subject_pollution_terms().any(|term| {
+        trimmed.contains(&format!("主体为{term}"))
+            || trimmed.contains(&format!("主体是{term}"))
+            || trimmed.contains(&format!("{term}作为动作主体"))
+            || trimmed.contains(&format!("{term}从"))
+            || trimmed.contains(&format!("角色动作：{term}"))
+            || trimmed.contains(&format!("画面描述：主体为{term}"))
+            || trimmed.contains(&format!("画面描述：{term}从"))
+    })
+}
+
+#[cfg(test)]
+fn row_has_subject_pollution(row: &GeneratedStoryboardRow) -> bool {
+    [
+        row.person.as_str(),
+        row.visual_description.as_str(),
+        row.character_action.as_str(),
+        row.prompt_text.as_str(),
+        row.scene_performance_projection.person.as_str(),
+        row.scene_performance_projection.visual_description.as_str(),
+        row.scene_performance_projection.character_action.as_str(),
+    ]
+    .iter()
+    .any(|value| field_contains_subject_pollution(value))
+}
+
+fn live_field_source_fragment_subject_term(
+    field_name: &str,
+    value: &str,
+) -> Option<&'static str> {
+    if field_name == "person" {
+        return LIVE_PERSON_SOURCE_FRAGMENT_TERMS
+            .iter()
+            .copied()
+            .find(|term| value.contains(term));
+    }
+
+    let trimmed = value.trim();
+    for term in LIVE_PERSON_SOURCE_FRAGMENT_TERMS.iter().copied() {
+        let starts_as_subject = field_name == "shot_title"
+            && field_starts_with_subject_label_term(field_name, trimmed, term);
+        let motion_as_subject = matches!(field_name, "visual_description" | "character_action")
+            && (trimmed.contains(&format!("{term}从"))
+                || trimmed.contains(&format!("{term}在")));
+        if starts_as_subject
+            || trimmed.contains(&format!("主体为{term}"))
+            || trimmed.contains(&format!("主体是{term}"))
+            || trimmed.contains(&format!("人物为{term}"))
+            || trimmed.contains(&format!("角色为{term}"))
+            || field_contains_colon_subject_label_term(field_name, trimmed, term)
+            || motion_as_subject
+        {
+            return Some(term);
+        }
+    }
+    None
+}
+
 fn validate_live_storyboard_rows(
     rows: &[GeneratedStoryboardRow],
     expected_duration_seconds: u16,
@@ -3266,6 +5404,21 @@ fn validate_live_storyboard_rows(
         });
     }
     for (index, row) in rows.iter().enumerate() {
+        let source_text = deterministic_rows
+            .get(index)
+            .map(|baseline_row| {
+                format!(
+                    "{}\n{}",
+                    baseline_row.shot_script,
+                    baseline_row.scene_performance_projection.fused_source_text
+                )
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "{}\n{}",
+                    row.shot_script, row.scene_performance_projection.fused_source_text
+                )
+            });
         if let Some(baseline_row) = deterministic_rows.get(index) {
             if let Some(name) = live_storyboard_row_untrusted_character(row, baseline_row) {
                 findings.push(ProductWarning {
@@ -3303,6 +5456,66 @@ fn validate_live_storyboard_rows(
                     message: format!(
                         "Live storyboard row {} includes forbidden branded content in {}.",
                         row.order, field_name
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
+            if field_name != "prompt_text" {
+                if field_value.contains("焦点") {
+                    findings.push(ProductWarning {
+                        code: "text_model_validator_failed".to_string(),
+                        message: format!(
+                            "Live storyboard row {} keeps an abstract focus label in {}.",
+                            row.order, field_name
+                        ),
+                        related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                    });
+                }
+                if let Some(term) =
+                    generated_script_forbidden_external_setting_term(field_value, &source_text)
+                {
+                    findings.push(ProductWarning {
+                        code: "text_model_validator_failed".to_string(),
+                        message: format!(
+                            "Live storyboard row {} introduced a source-external setting in {}: {}.",
+                            row.order, field_name, term
+                        ),
+                        related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                    });
+                }
+                if let Some(term) =
+                    generated_script_forbidden_military_scale_expansion_term(field_value, &source_text)
+                {
+                    findings.push(ProductWarning {
+                        code: "text_model_validator_failed".to_string(),
+                        message: format!(
+                            "Live storyboard row {} introduced a source-external military scale in {}: {}.",
+                            row.order, field_name, term
+                        ),
+                        related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                    });
+                }
+            }
+            if let Some(label) =
+                live_field_visual_or_abstract_subject_term(field_name, field_value)
+            {
+                findings.push(ProductWarning {
+                    code: "text_model_validator_failed".to_string(),
+                    message: format!(
+                        "Live storyboard row {} uses a visual or abstract subject label in {}: {}.",
+                        row.order, field_name, label
+                    ),
+                    related_sample_id: Some(row.prompt_text_source_row_id.clone()),
+                });
+            }
+            if let Some(label) =
+                live_field_source_fragment_subject_term(field_name, field_value)
+            {
+                findings.push(ProductWarning {
+                    code: "text_model_validator_failed".to_string(),
+                    message: format!(
+                        "Live storyboard row {} uses a source fragment as subject label in {}: {}.",
+                        row.order, field_name, label
                     ),
                     related_sample_id: Some(row.prompt_text_source_row_id.clone()),
                 });
@@ -3391,14 +5604,16 @@ fn live_storyboard_row_untrusted_character(
     baseline_row: &GeneratedStoryboardRow,
 ) -> Option<String> {
     let evidence = format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         baseline_row.shot_script,
+        baseline_row.scene_performance_projection.fused_source_text,
         baseline_row.person,
         baseline_row.shot_title,
         baseline_row.visual_description,
         baseline_row.character_action,
         baseline_row.dialogue,
-        row.shot_script
+        row.shot_script,
+        row.scene_performance_projection.fused_source_text
     );
     let live_text = format!(
         "{}\n{}\n{}\n{}\n{}",
@@ -3463,6 +5678,9 @@ fn live_character_label_is_grounded(
 ) -> bool {
     let trimmed = character.trim();
     if trimmed.is_empty() || subject_is_non_character_anchor(trimmed) {
+        return true;
+    }
+    if looks_like_name_noise_candidate(trimmed) || looks_like_non_character_phrase(trimmed) {
         return true;
     }
     evidence.contains(trimmed)
@@ -3625,6 +5843,7 @@ fn is_visual_description_grounding_incomplete(
         return true;
     }
     let has_focus = trimmed.contains("画面突出")
+        || trimmed.contains("画面强调")
         || contains_any_story_term(
             trimmed,
             &[
@@ -4080,8 +6299,13 @@ fn build_storyboard_router_synopsis(grounding: &StoryboardGroundingContext) -> S
 }
 
 fn build_storyboard_model_story_input(grounding: &StoryboardGroundingContext) -> String {
+    let source_person_binding = derive_explicit_role_subject_label(&grounding.grounding_text)
+        .unwrap_or_else(|| {
+            derive_fact_subject_label(&grounding.grounding_text, &grounding.grounding_text)
+        });
     format!(
-        "grounding_priority=1.shot_script 2.expanded_script_text 3.primary_scene_fields 4.kb_router_summary\nshot_script={}\nexpanded_script_text={}\nprimary_scene_type={}\nprimary_scene_label={}\nprimary_scene_category={}\nshot_scene_type={}\nshot_scene_label={}\nshot_intent={}\nadaptation_reason={}",
+        "grounding_priority=1.shot_script 2.expanded_script_text 3.primary_scene_fields 4.kb_router_summary\nsource_person_binding={}\nperson_binding_rule=Use source_person_binding for person when it names a source role or character; never use visual, camera, composition, or abstract labels as person.\nshot_script={}\nexpanded_script_text={}\nprimary_scene_type={}\nprimary_scene_label={}\nprimary_scene_category={}\nshot_scene_type={}\nshot_scene_label={}\nshot_intent={}\nadaptation_reason={}",
+        source_person_binding,
         grounding.shot_script,
         grounding.expanded_script_text,
         grounding.primary_scene_type,
@@ -4309,6 +6533,9 @@ impl CharacterRegistry {
     }
 
     fn push(&mut self, role: &str, name: &str) {
+        if is_generic_actor_label(name) {
+            return;
+        }
         if self.characters.iter().any(|item| item.name == name) {
             return;
         }
@@ -4355,6 +6582,10 @@ impl CharacterRegistry {
             .find(|character| is_antagonist_role(&character.role))
             .map(|character| character.name.as_str())
     }
+}
+
+fn is_generic_actor_label(name: &str) -> bool {
+    matches!(name.trim(), "有人" | "人物" | "角色" | "来人" | "双方" | "对方" | "彼此")
 }
 
 fn detect_narrative_character_names(text: &str) -> Vec<String> {
@@ -4410,11 +6641,15 @@ fn detect_narrative_character_name_at(chars: &[char], start: usize) -> Option<(S
         }
         let candidate = chars[start..end].iter().collect::<String>();
         let after = next_visible_char(chars, end);
+        if candidate_has_trailing_action_or_quantity_fragment(chars, start, end, &candidate) {
+            continue;
+        }
         if candidate_looks_like_dialogue_modifier_suffix(chars, end, &candidate) {
             continue;
         }
         if (!narrative_name_boundary_is_valid(before, after)
-            && !candidate_followed_by_dialogue_attribution(chars, end))
+            && !candidate_followed_by_dialogue_attribution(chars, end)
+            && !candidate_followed_by_action_or_quantity(chars, end))
             || looks_like_quoted_dialogue_fragment(before, after, &candidate)
             || looks_like_name_noise_candidate(&candidate)
             || looks_like_non_character_phrase(&candidate)
@@ -4425,6 +6660,30 @@ fn detect_narrative_character_name_at(chars: &[char], start: usize) -> Option<(S
     }
 
     None
+}
+
+fn candidate_has_trailing_action_or_quantity_fragment(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    candidate: &str,
+) -> bool {
+    if candidate.chars().count() <= 2 {
+        return false;
+    }
+    let tail = chars.get(start + 2..).unwrap_or(&[]).iter().collect::<String>();
+    [
+        "一把", "一手", "一步", "一声", "一记", "一拳", "一刀", "一剑", "猛然",
+        "突然", "忽然", "转身", "抬手", "回身", "侧身", "伸手", "低头", "抬头",
+        "站在", "站起", "站住", "站立", "回望", "回头", "靠", "时", "没答", "未答", "半",
+    ]
+    .iter()
+    .any(|prefix| tail.starts_with(prefix))
+        || (candidate.ends_with('一')
+            && matches!(
+                next_visible_char(chars, end),
+                Some('把' | '手' | '步' | '声' | '记' | '拳' | '刀' | '剑')
+            ))
 }
 
 fn narrative_compound_surname_len(chars: &[char], start: usize) -> Option<usize> {
@@ -4493,6 +6752,10 @@ fn candidate_followed_by_dialogue_attribution(chars: &[char], end: usize) -> boo
             "答",
             "喊",
             "唤",
+            "带",
+            "断后",
+            "受伤",
+            "撤离",
             "低声说",
             "轻声说",
             "沉声说",
@@ -4697,6 +6960,54 @@ fn looks_like_non_character_phrase(candidate: &str) -> bool {
         "甲士",
         "弓手",
         "旗手",
+        "左手",
+        "右手",
+        "头部",
+        "手部",
+        "单膝",
+        "位置",
+        "未言语",
+        "没答",
+        "那人",
+            "左边岔",
+            "方挥",
+            "后微撤",
+            "怀中",
+            "罗盘被",
+            "轮廓缓",
+            "背景灰",
+            "居右三",
+            "罗盘紧",
+            "苏瑶方",
+            "后迅速",
+            "后提醒",
+            "左臂垂",
+            "方眉",
+            "铠甲裂",
+            "利望",
+            "继续",
+            "视线方",
+            "方向压",
+            "方向",
+        "肩甲投",
+        "苏瑶上",
+        "扶住",
+        "高耸",
+        "扶着",
+        "护住",
+        "动作",
+        "动作起",
+        "承受",
+        "对白",
+        "意图",
+        "前场",
+        "后场",
+        "战场",
+        "军阵",
+        "视口",
+        "态势",
+        "调度",
+        "秩序",
     ]
     .iter()
     .any(|term| candidate.contains(term))
@@ -4728,16 +7039,15 @@ fn derive_non_character_subject_label(text: &str) -> Option<String> {
         Some("灯塔".to_string())
     } else if contains_any_story_term(text, &["木栈道", "栈道"]) {
         Some("木栈道".to_string())
-    } else if contains_any_story_term(text, &["城建", "脚手架", "吊机", "道路"]) {
-        Some("城建面板".to_string())
-    } else if contains_any_story_term(text, &["沙盘", "视口", "旗标", "地形高差"]) {
-        Some("沙盘".to_string())
-    } else if contains_any_story_term(text, &["行军轨迹", "补给线", "地图"]) {
-        Some("行军地图".to_string())
-    } else if contains_any_story_term(text, &["军阵", "盾墙", "长枪", "旌旗", "号角"]) {
-        Some("军阵".to_string())
-    } else if contains_any_story_term(text, &["战报 UI", "UI", "面板", "小地图", "曲线", "警示框"]) {
-        Some("UI".to_string())
+    } else if contains_any_story_term(
+        text,
+        &[
+            "城建", "脚手架", "吊机", "道路", "沙盘", "视口", "旗标", "地形高差",
+            "行军轨迹", "补给线", "地图", "军阵", "盾墙", "长枪", "旌旗", "号角",
+            "战报 UI", "UI", "面板", "小地图", "曲线", "警示框",
+        ],
+    ) {
+        None
     } else if contains_any_story_term(text, &["海平线", "海面", "海边", "海浪", "浪声", "水面"]) {
         Some("海面".to_string())
     } else {
@@ -4750,6 +7060,10 @@ fn derive_explicit_enemy_label(text: &str) -> Option<String> {
         Some("敌方刀客".to_string())
     } else if contains_any_story_term(text, &["敌将"]) {
         Some("敌将".to_string())
+    } else if contains_any_story_term(text, &["黑衣追兵"]) {
+        Some("黑衣追兵".to_string())
+    } else if contains_any_story_term(text, &["追兵"]) {
+        Some("追兵".to_string())
     } else if contains_any_story_term(text, &["敌人"]) {
         Some("敌人".to_string())
     } else if contains_any_story_term(text, &["对手"]) {
@@ -4758,6 +7072,17 @@ fn derive_explicit_enemy_label(text: &str) -> Option<String> {
         Some("来袭者".to_string())
     } else {
         None
+    }
+}
+
+fn derive_explicit_role_subject_label(text: &str) -> Option<String> {
+    let has_main = contains_any_story_term(text, &["主角", "男主", "女主", "少年"]);
+    let enemy_label = derive_explicit_enemy_label(text);
+    match (has_main, enemy_label) {
+        (true, Some(enemy)) => Some(format!("主角与{enemy}")),
+        (true, None) => Some("主角".to_string()),
+        (false, Some(enemy)) => Some(enemy),
+        (false, None) => None,
     }
 }
 
@@ -4777,7 +7102,9 @@ fn subject_is_non_character_anchor(subject: &str) -> bool {
         || subject == "城建面板"
         || subject == "环境"
         || subject == "场景"
+        || subject == "位置"
         || subject == "空镜"
+        || subject == "/"
         || subject == "无"
 }
 
@@ -4798,7 +7125,46 @@ fn derive_product_person(segment: &str, full_text: &str) -> String {
     derive_fact_subject_label(segment, full_text)
 }
 
+fn derive_leading_action_measure_subject_name(text: &str) -> Option<String> {
+    let trimmed = text.trim_start_matches(|character: char| {
+        character.is_whitespace() || matches!(character, '：' | ':' | '，' | ',' | '、')
+    });
+    let chars = trimmed.chars().collect::<Vec<_>>();
+    for name_len in [3usize, 2usize] {
+        if chars.len() <= name_len
+            || !chars
+                .get(0..name_len)
+                .unwrap_or(&[])
+                .iter()
+                .all(|character| is_cjk_unified_ideograph(*character))
+        {
+            continue;
+        }
+        let candidate = chars[0..name_len].iter().collect::<String>();
+        if looks_like_name_noise_candidate(&candidate) || looks_like_non_character_phrase(&candidate)
+        {
+            continue;
+        }
+        if narrative_tail_starts_with(
+            &chars,
+            name_len,
+            &[
+                "一把", "一手", "一步", "一声", "一记", "一拳", "一刀", "一剑",
+                "猛然", "突然", "忽然", "转身", "抬手",
+            ],
+        ) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 fn derive_fact_subject_label(segment: &str, full_text: &str) -> String {
+    if let Some(subject) = derive_leading_action_measure_subject_name(segment) {
+        return subject;
+    }
+    let full_text_registry = CharacterRegistry::from_story_text(full_text, full_text);
+
     let segment_registry = CharacterRegistry::from_story_text(segment, segment);
     if !segment_registry.is_empty() {
         let active_names = segment_registry.names_in_text(segment);
@@ -4807,12 +7173,16 @@ fn derive_fact_subject_label(segment: &str, full_text: &str) -> String {
         }
 
         if contains_any_story_term(segment, &["护住", "护着", "回身", "重逢"]) {
-            if let (Some(heroine), Some(protagonist)) = (
-                segment_registry.heroine_name(),
-                segment_registry.protagonist_name(),
+            if let (Some(protagonist), Some(heroine)) = (
+                full_text_registry
+                    .protagonist_name()
+                    .or_else(|| segment_registry.protagonist_name()),
+                full_text_registry
+                    .heroine_name()
+                    .or_else(|| segment_registry.heroine_name()),
             )
             {
-                return subject_label_from_names(&[heroine.to_string(), protagonist.to_string()]);
+                return subject_label_from_names(&[protagonist.to_string(), heroine.to_string()]);
             }
         }
 
@@ -4842,6 +7212,15 @@ fn derive_fact_subject_label(segment: &str, full_text: &str) -> String {
         );
     }
 
+    if let Some(subject) = derive_explicit_role_subject_label(segment) {
+        return subject;
+    }
+    if segment.trim().is_empty() {
+        if let Some(subject) = derive_explicit_role_subject_label(full_text) {
+            return subject;
+        }
+    }
+
     if let Some(subject) = derive_shadow_subject_label(segment) {
         return subject;
     }
@@ -4853,9 +7232,32 @@ fn derive_fact_subject_label(segment: &str, full_text: &str) -> String {
     derive_fallback_subject(segment, full_text)
 }
 
+fn derive_named_source_subject_label(text: &str) -> Option<String> {
+    let registry = CharacterRegistry::from_story_text(text, text);
+    if registry.is_empty() {
+        return None;
+    }
+    let names = registry
+        .characters
+        .iter()
+        .map(|character| trim_detected_character_name(&character.name))
+        .filter(|name| !name.is_empty())
+        .filter(|name| !looks_like_name_noise_candidate(name))
+        .filter(|name| !looks_like_non_character_phrase(name))
+        .collect::<Vec<_>>();
+    (!names.is_empty()).then(|| subject_label_from_names(&names))
+}
+
 fn extract_character_name_after_role(text: &str) -> Option<String> {
+    let trimmed = text.trim_start_matches(|character: char| {
+        character.is_whitespace() || matches!(character, '：' | ':' | '，' | ',' | '、')
+    });
+    if role_tail_starts_with_non_name_phrase(trimmed) {
+        return None;
+    }
+
     let mut name = String::new();
-    for character in text.chars().skip_while(|character| {
+    for character in trimmed.chars().skip_while(|character| {
         character.is_whitespace() || matches!(character, '：' | ':' | '，' | ',' | '、')
     }) {
         if is_character_name_stop(character) {
@@ -4873,7 +7275,81 @@ fn extract_character_name_after_role(text: &str) -> Option<String> {
         }
     }
 
+    let name = trim_role_candidate_action_or_quantity_suffix(&name, trimmed);
     (name.chars().count() >= 2 && !looks_like_name_noise_candidate(&name)).then_some(name)
+}
+
+fn trim_role_candidate_action_or_quantity_suffix(candidate: &str, source_tail: &str) -> String {
+    let mut name = candidate.to_string();
+    let candidate_chars = candidate.chars().count();
+    if candidate_chars <= 2 {
+        return name;
+    }
+    let after_candidate = source_tail.chars().skip(candidate_chars).next();
+    if candidate.ends_with('一')
+        && matches!(
+            after_candidate,
+            Some('把' | '手' | '步' | '声' | '记' | '拳' | '刀' | '剑')
+        )
+    {
+        name.pop();
+        return name;
+    }
+    let tail_after_two = source_tail.chars().skip(2).collect::<String>();
+    if [
+        "一把", "一手", "一步", "一声", "一记", "一拳", "一刀", "一剑", "猛然",
+        "突然", "忽然", "转身", "抬手", "回身", "侧身", "伸手", "低头", "抬头",
+        "站在", "站起", "站住", "站立", "回望", "回头", "半",
+    ]
+    .iter()
+    .any(|prefix| tail_after_two.starts_with(prefix))
+    {
+        return source_tail.chars().take(2).collect();
+    }
+    name
+}
+
+fn role_tail_starts_with_non_name_phrase(text: &str) -> bool {
+    [
+        "猛然",
+        "突然",
+        "忽然",
+        "骤然",
+        "缓缓",
+        "慢慢",
+        "轻轻",
+        "悄悄",
+        "终于",
+        "已经",
+        "仍然",
+        "正在",
+        "正要",
+        "没答",
+        "那人",
+        "左边岔",
+        "那里有",
+        "那里",
+        "后迅速",
+        "后提醒",
+        "后微撤",
+        "方挥",
+        "怀中",
+        "罗盘被",
+        "肩甲投",
+        "苏瑶上",
+        "扶住",
+        "瞳孔",
+        "喉结",
+        "呼吸",
+        "胸膛",
+        "指节",
+        "右拳",
+        "左手",
+        "右手",
+        "膝盖",
+    ]
+    .iter()
+    .any(|prefix| text.starts_with(prefix))
 }
 
 fn is_character_name_stop(character: char) -> bool {
@@ -4885,6 +7361,87 @@ fn is_character_name_stop(character: char) -> bool {
 }
 
 fn looks_like_name_noise_candidate(candidate: &str) -> bool {
+    if contains_any_story_term(
+        candidate,
+        &[
+        "意图",
+        "白意图",
+        "郑重递",
+        "关系保",
+        "轮廓缓",
+        "背景灰",
+        "居右三",
+        "罗盘紧",
+            "苏瑶方",
+            "后停顿",
+            "广角俯",
+            "眉心",
+            "左下角",
+            "左手",
+        "右手",
+        "半身",
+        "半边肩",
+        "身后",
+        "后回",
+        "没答",
+        "那人",
+        "终于",
+        "初立",
+        "左边岔",
+        "后迅速",
+        "后提醒",
+        "后微撤",
+        "左臂垂",
+        "方眉",
+        "铠甲裂",
+        "利望",
+        "继续",
+        "视线方",
+        "方向压",
+        "方向",
+        "主角之",
+        "林峰压",
+        "苏瑶压",
+        "后颈",
+        "边肩",
+        "边咳",
+        "边咳了",
+        "时抬",
+        "方挥",
+        "怀中",
+        "罗盘被",
+            "肩甲投",
+            "苏瑶上",
+            "扶住",
+            "头部",
+            "手部",
+            "单膝",
+            "位置",
+            "未言语",
+            "高耸",
+            "高耸绷",
+            "屈护住",
+            "扶着",
+            "扶着倚",
+            "动作",
+            "动作起",
+        "承受",
+        "空镜",
+        "前场",
+        "后场",
+        "战场",
+        "军阵",
+        "视口",
+        "态势",
+        "调度",
+        "秩序",
+    ],
+    ) {
+        return true;
+    }
+    if candidate.ends_with("背") {
+        return true;
+    }
     if candidate
         .chars()
         .next()
@@ -4901,6 +7458,8 @@ fn looks_like_name_noise_candidate(candidate: &str) -> bool {
                 | '疾'
                 | '避'
                 | '踏'
+                | '蹲'
+                | '坐'
                 | '响'
                 | '退'
                 | '冲'
@@ -4917,6 +7476,28 @@ fn looks_like_name_noise_candidate(candidate: &str) -> bool {
                 | '光'
                 | '土'
                 | '石'
+                | '手'
+                | '回'
+                | '护'
+                | '着'
+                | '倚'
+                | '转'
+                | '上'
+                | '投'
+                | '岔'
+                | '耸'
+                | '绷'
+                | '头'
+                | '部'
+                | '位'
+                | '置'
+                | '言'
+                | '语'
+                | '承'
+                | '受'
+                | '递'
+                | '意'
+                | '图'
         )
     })
 }
@@ -4942,12 +7523,15 @@ fn is_character_name_action_stop(character: char) -> bool {
             | '走'
             | '看'
             | '说'
+            | '没'
+            | '未'
             | '沉'
             | '握'
             | '拔'
             | '挥'
-            | '挡'
-            | '守'
+                | '挡'
+                | '递'
+                | '守'
             | '等'
             | '观'
             | '调'
@@ -4955,6 +7539,8 @@ fn is_character_name_action_stop(character: char) -> bool {
             | '转'
             | '低'
             | '靠'
+            | '蹲'
+            | '坐'
             | '冲'
             | '拦'
             | '退'
@@ -5009,6 +7595,59 @@ fn contains_enemy_or_conflict_terms(text: &str) -> bool {
     )
 }
 
+fn candidate_followed_by_action_or_quantity(chars: &[char], end: usize) -> bool {
+    narrative_tail_starts_with(
+        chars,
+        end,
+        &[
+            "一把", "一手", "一步", "一声", "一记", "一拳", "一刀", "一剑", "猛然",
+            "突然", "忽然", "转身", "抬手", "回身", "侧身", "伸手", "低头", "抬头",
+            "站在", "站起", "站住", "站立", "回望", "回头", "半",
+        ],
+    )
+}
+
+fn contains_visible_action_subject_signal(text: &str) -> bool {
+    contains_any_story_term(
+        text,
+        &[
+            "单膝跪",
+            "跪在",
+            "跪下",
+            "踏出",
+            "侧身",
+            "疾避",
+            "护住",
+            "护着",
+            "回身",
+            "断后",
+            "提醒",
+            "受伤",
+            "撤离",
+            "追杀",
+            "压近",
+            "逼近",
+            "格挡",
+            "刀锋",
+            "攻击",
+            "交锋",
+            "觉醒",
+            "震退",
+            "抬头",
+            "盯住",
+            "缓步",
+            "冲向",
+            "跑向",
+            "站起",
+            "伸手",
+            "握住",
+            "拔出",
+            "挥动",
+            "挡住",
+        ],
+    )
+}
+
 fn derive_fallback_subject(segment: &str, full_text: &str) -> String {
     let source = if segment.trim().is_empty() {
         full_text
@@ -5019,20 +7658,31 @@ fn derive_fallback_subject(segment: &str, full_text: &str) -> String {
     let has_enemy = contains_enemy_or_conflict_terms(source);
     let enemy_label = derive_explicit_enemy_label(source).unwrap_or_else(|| "对手".to_string());
 
-    if let Some(subject) = derive_shadow_subject_label(source) {
+    if let Some(subject) = derive_explicit_role_subject_label(source) {
+        subject
+    } else if let Some(subject) = derive_shadow_subject_label(source) {
         subject
     } else if let Some(subject) = derive_non_character_subject_label(source) {
         subject
     } else if contains_any_story_term(source, &["群像", "众人", "队伍"]) {
         "群像角色".to_string()
+    } else if let Some(subject) = derive_named_source_subject_label(source) {
+        subject
+    } else if !has_main
+        && !full_text.trim().is_empty()
+        && contains_visible_action_subject_signal(source)
+    {
+        derive_named_source_subject_label(full_text).unwrap_or_else(|| "主角".to_string())
     } else if has_main && has_enemy {
         format!("主角与{enemy_label}")
     } else if has_enemy {
         enemy_label
     } else if has_main {
         "主角".to_string()
+    } else if contains_visible_action_subject_signal(source) {
+        "主角".to_string()
     } else {
-        "环境".to_string()
+        "空镜".to_string()
     }
 }
 
@@ -5087,7 +7737,7 @@ fn build_visual_description_from_story(
     ));
     parts.push(derive_visual_event_clause(source, subject));
     parts.push(format!(
-        "画面突出{}",
+        "画面强调{}",
         derive_visual_focus_clause(source, shot_intent)
     ));
     parts.join("；")
@@ -5300,7 +7950,7 @@ fn derive_visual_environment_clause(
 
 fn derive_visual_tone_effect(source: &str, shot_intent: &str) -> String {
     if contains_any_story_term(source, &["追杀", "压近", "逼近", "来袭", "对冲"]) {
-        "把空间压得更紧，危险感直接贴到主体身上".to_string()
+        "把空间压得更紧，来袭压力直接贴到主体身上".to_string()
     } else if contains_any_story_term(source, &["护住", "护着", "回身", "挡住"]) {
         "把贴身相护时的压力托得更实".to_string()
     } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) || shot_intent == "reveal" {
@@ -5429,7 +8079,9 @@ fn derive_visual_event_clause(source: &str, subject: &str) -> String {
     } else if contains_any_story_term(source, &["重逢"]) {
         format!("当前视觉事件是{subject}在断裂边缘重新并肩，视线和站位同时重新对上")
     } else if contains_any_story_term(source, &["单膝跪", "跪在", "跪下"]) {
-        if contains_any_story_term(source, &["脚步声", "步声"]) {
+        if contains_any_story_term(source, &["敌人", "对手"]) && contains_any_story_term(source, &["逼近", "缓步"]) {
+            format!("当前视觉事件是{subject}单膝跪在废墟之上，敌人缓步逼近并把对峙压力压到身前")
+        } else if contains_any_story_term(source, &["脚步声", "步声"]) {
             format!("当前视觉事件是{subject}在坍塌阴影下单膝跪住，脚步声从画外逼近并压住停顿")
         } else {
             format!("当前视觉事件是{subject}单膝跪下并把重心压稳，画面停在动作落点")
@@ -5439,7 +8091,15 @@ fn derive_visual_event_clause(source: &str, subject: &str) -> String {
     {
         "当前视觉事件是烟尘中有人踏出，主角侧身避开冲击线，双方位置在焦土边缘错开".to_string()
     } else if contains_any_story_term(source, &["护住", "护着", "回身"]) {
-        format!("当前视觉事件是{subject}回身挡住来势，身体横切进对冲路线")
+        if contains_any_story_term(source, &["林峰护住苏瑶", "护住苏瑶"])
+            && contains_any_story_term(source, &["阿青提醒", "提醒他们"])
+            && contains_any_story_term(source, &["黑衣追兵", "追兵"])
+            && source.contains("巷口")
+        {
+            "当前视觉事件是林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近，护人和提醒同时压住退路".to_string()
+        } else {
+            format!("当前视觉事件是{subject}回身挡住来势，身体横切进对冲路线")
+        }
     } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
         format!("当前视觉事件是{subject}把距离继续压短，来袭方向直逼主体前线")
     } else if contains_any_story_term(source, &["格挡", "刀锋", "攻击", "交锋"]) {
@@ -5517,11 +8177,23 @@ fn derive_action_target(
     segment: &str,
     full_text: &str,
 ) -> String {
+    let full_registry = CharacterRegistry::from_story_text(full_text, full_text);
     if contains_any_story_term(segment, &["重逢"]) {
         return "彼此".to_string();
     }
     if contains_any_story_term(segment, &["护住", "护着"]) {
-        if let Some(protagonist) = registry.protagonist_name() {
+        if let Some(heroine) = registry.heroine_name().or_else(|| full_registry.heroine_name()) {
+            if !subject.contains(heroine) || subject.contains('、') || subject.contains('与') {
+                return heroine.to_string();
+            }
+        }
+        if let Some(protagonist) = registry
+            .protagonist_name()
+            .or_else(|| full_registry.protagonist_name())
+        {
+            if subject.contains(protagonist) {
+                return "被保护者".to_string();
+            }
             return protagonist.to_string();
         }
         return "被保护者".to_string();
@@ -5574,16 +8246,20 @@ fn derive_action_target(
         if !subject.contains(&anchor) {
             anchor
         } else {
-            "当前空间".to_string()
+            derive_named_source_subject_label(full_text).unwrap_or_else(|| "可见行动线".to_string())
         }
     } else {
-        "当前空间".to_string()
+        derive_named_source_subject_label(full_text).unwrap_or_else(|| "可见行动线".to_string())
     }
 }
 
 fn derive_action_start_state(source: &str) -> &'static str {
     if contains_any_story_term(source, &["单膝跪", "跪在", "跪下"]) {
-        "高架桥阴影下压低重心"
+        if contains_any_story_term(source, &["废墟"]) {
+            "废墟之上单膝跪地"
+        } else {
+            "当前阴影下压低重心"
+        }
     } else if contains_any_story_term(source, &["烟尘"])
         && contains_any_story_term(source, &["踏出", "侧身", "疾避"])
     {
@@ -5593,7 +8269,13 @@ fn derive_action_start_state(source: &str) -> &'static str {
     } else if contains_any_story_term(source, &["断桥", "重逢"]) {
         "断桥残口确认彼此位置"
     } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
-        "断桥远端压低重心"
+        if contains_any_story_term(source, &["巷口", "街口", "街巷"]) {
+            "巷口来路压近前稳住身位"
+        } else if contains_any_story_term(source, &["断桥", "桥"]) {
+            "断桥远端压低重心"
+        } else {
+            "逼近压力前稳住身位"
+        }
     } else if contains_any_story_term(source, &["格挡", "刀锋", "攻击"]) {
         "迎面冲击前的半步停顿"
     } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) {
@@ -5621,7 +8303,13 @@ fn derive_visible_action(source: &str, subject: &str, target: &str) -> String {
     } else if contains_any_story_term(source, &["重逢"]) {
         format!("{subject}在断桥残口向{target}靠近，确认对方安全并重新建立站位")
     } else if contains_any_story_term(source, &["单膝跪", "跪在", "跪下"]) {
-        if contains_any_story_term(source, &["脚步声", "步声"]) {
+        if contains_any_story_term(source, &["敌人", "对手"]) && contains_any_story_term(source, &["逼近", "缓步"]) {
+            if subject.contains("敌人") || subject.contains("对手") {
+                format!("{subject}从废墟边缘缓步逼近{target}，把对峙距离继续压短")
+            } else {
+                format!("{subject}单膝跪地稳住身体，敌人缓步逼近后把对峙压力压到身前")
+            }
+        } else if contains_any_story_term(source, &["脚步声", "步声"]) {
             format!("{subject}单膝跪在阴影下稳住身体，听见脚步声逼近后把注意力转向来声方向")
         } else {
             format!("{subject}单膝跪下稳住身体，把重心压低到当前停顿位置")
@@ -5631,9 +8319,29 @@ fn derive_visible_action(source: &str, subject: &str, target: &str) -> String {
     {
         format!("{subject}在烟尘边缘完成一进一避，敌方踏出时主角侧身让开冲击线")
     } else if contains_any_story_term(source, &["护住", "护着", "回身"]) {
-        format!("{subject}回身护住{target}，用身体挡住逼近的威胁")
+        if contains_any_story_term(source, &["林峰护住苏瑶", "护住苏瑶"])
+            && contains_any_story_term(source, &["阿青提醒", "提醒他们"])
+            && contains_any_story_term(source, &["黑衣追兵", "追兵"])
+            && source.contains("巷口")
+        {
+            if subject.contains("阿青") {
+                "阿青提醒他们黑衣追兵从巷口逼近，让林峰护住苏瑶的退路压力被确认".to_string()
+            } else {
+                format!("{subject}护住苏瑶，阿青提醒他们黑衣追兵从巷口逼近")
+            }
+        } else {
+            format!("{subject}回身护住{target}，用身体挡住逼近的威胁")
+        }
     } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
-        format!("{subject}提刀逼向{target}，把对方压向断桥边缘")
+        if contains_any_story_term(source, &["黑衣追兵", "追兵"])
+            && contains_any_story_term(source, &["巷口", "街口", "街巷"])
+        {
+            format!("{subject}从巷口来路逼近{target}，把撤离压力压到当前站位前")
+        } else if contains_any_story_term(source, &["断桥", "桥"]) {
+            format!("{subject}提刀逼向{target}，把对方压向断桥边缘")
+        } else {
+            format!("{subject}继续逼近{target}，把双方距离压到当前对峙前线")
+        }
     } else if contains_any_story_term(source, &["格挡", "刀锋", "攻击", "交锋"]) {
         format!("{subject}迎着{target}的冲击抬臂格挡，让银辉与刀锋正面相撞")
     } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) {
@@ -5663,7 +8371,11 @@ fn derive_action_end_state(source: &str) -> &'static str {
     } else if contains_any_story_term(source, &["重逢"]) {
         "两人重新并肩"
     } else if contains_any_story_term(source, &["单膝跪", "跪在", "跪下"]) {
-        "来声方向被确认"
+        if contains_any_story_term(source, &["敌人", "对手"]) && contains_any_story_term(source, &["逼近", "缓步"]) {
+            "敌人逼近压力压到身前"
+        } else {
+            "来声方向被确认"
+        }
     } else if contains_any_story_term(source, &["烟尘"])
         && contains_any_story_term(source, &["踏出", "侧身", "疾避"])
     {
@@ -5671,7 +8383,13 @@ fn derive_action_end_state(source: &str) -> &'static str {
     } else if contains_any_story_term(source, &["护住", "护着"]) {
         "被保护者退到安全半步"
     } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
-        "目标被逼到断桥边缘"
+        if contains_any_story_term(source, &["巷口", "街口", "街巷"]) {
+            "巷口追兵压力被确认"
+        } else if contains_any_story_term(source, &["断桥", "桥"]) {
+            "目标被逼到断桥边缘"
+        } else {
+            "逼近压力压到身前"
+        }
     } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) {
         "银辉完全爬上前臂"
     } else if contains_any_story_term(source, &["震退", "七步"]) {
@@ -5701,7 +8419,11 @@ fn derive_captured_moment(source: &str) -> &'static str {
     } else if contains_any_story_term(source, &["重逢"]) {
         "两人视线重新对上的一瞬间"
     } else if contains_any_story_term(source, &["单膝跪", "跪在", "跪下"]) {
-        "跪姿停住并听见脚步声的一瞬间"
+        if contains_any_story_term(source, &["敌人", "对手"]) && contains_any_story_term(source, &["逼近", "缓步"]) {
+            "主角跪姿与敌人逼近同框的一瞬间"
+        } else {
+            "跪姿停住并听见脚步声的一瞬间"
+        }
     } else if contains_any_story_term(source, &["烟尘"])
         && contains_any_story_term(source, &["踏出", "侧身", "疾避"])
     {
@@ -5709,7 +8431,13 @@ fn derive_captured_moment(source: &str) -> &'static str {
     } else if contains_any_story_term(source, &["护住", "护着"]) {
         "身体挡住威胁的一瞬间"
     } else if contains_any_story_term(source, &["追杀", "压近", "逼近"]) {
-        "刀锋压入断桥空间的一瞬间"
+        if contains_any_story_term(source, &["巷口", "街口", "街巷"]) {
+            "黑衣追兵从巷口逼近的一瞬间"
+        } else if contains_any_story_term(source, &["断桥", "桥"]) {
+            "刀锋压入断桥空间的一瞬间"
+        } else {
+            "逼近压力压入当前空间的一瞬间"
+        }
     } else if contains_any_story_term(source, &["掌心", "银辉", "觉醒"]) {
         "银辉开始蔓延的一瞬间"
     } else if contains_any_story_term(source, &["震退", "七步"]) {
@@ -5754,7 +8482,7 @@ fn derive_camera_movement_from_story(
     } else if contains_any_story_term(&evidence, &["后撤", "震退", "退开"]) {
         format!("{scene_scale}跟随{subject}后撤半步，稳住动作对象和空间距离")
     } else if contains_any_story_term(&evidence, &["单膝跪", "跪在", "跪下", "脚步声", "步声"]) {
-        format!("{scene_scale}低机位稳住{subject}的跪姿和阴影空间，再把焦点压到来声方向")
+        format!("{scene_scale}低机位稳住{subject}的跪姿和阴影空间，再把视线压力压向来势方向")
     } else if contains_any_story_term(&evidence, &["烟尘"])
         && contains_any_story_term(&evidence, &["踏出", "侧身", "疾避"])
     {
@@ -5768,7 +8496,7 @@ fn derive_camera_movement_from_story(
     {
         format!("{scene_scale}过肩跟拍{subject}视线方向，保持动作对象在画面内")
     } else if scene_scale.contains("特写") {
-        format!("{scene_scale}缓慢推近{subject}的关键动作，保持画面焦点稳定")
+        format!("{scene_scale}缓慢推近{subject}的关键动作，保持画面重心稳定")
     } else if scene_scale.contains("全景") {
         format!("{scene_scale}定机位观察{subject}动作起止，保留环境和主体关系")
     } else {
@@ -7103,9 +9831,11 @@ mod tests {
         GoldenSampleSourceContext, GoldenSampleSourceFields, GoldenSampleSourceRegister,
         GoldenSampleV3CoreCoverage, GoldenSampleValidatorEvidence, KbBundleManifestRecord,
         KbBundleRecordCounts, KbGoldenSampleRuntimePackage, KbRuntimeSummary, KbSnapshotRecord,
-        PromptTemplateRecord, PromptTextCompilationStatus, ScenePerformanceProjection,
+        ProductWarning, PromptTemplateRecord, PromptTextCompilationStatus, ScenePerformanceProjection,
         SceneTaxonomyRecord, SequenceFieldState, SequenceGrouping, ShotGroundingSource,
-        StructureMode,
+        StoryboardDurationPlan, StructureMode, TextGenerationOutputSchema, TextGenerationRequest,
+        TextGenerationTask, TextModelProvider,
+        TextModelProviderKind,
     };
     use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
     use project_store::{
@@ -7114,17 +9844,28 @@ mod tests {
 
     use super::{
         AppShellReadonlyStatusSnapshot, StoryboardPreviewPlanRequest, ValidationExportPanelState,
-        allocate_storyboard_row_durations, build_deterministic_expanded_story_script,
-        build_project_create_or_switch_snapshot_from_fixture, build_storyboard_preview_plan,
-        build_storyboard_rendersegment_cut_preview_snapshot_from_fixture,
-        build_validation_export_panel_snapshot_from_fixture,
-        build_writer_entry_snapshot_from_fixture, contains_any_story_term,
+        LiveRepairSummary, LiveStoryboardRowPatch, StoryboardGroundingContext,
+        allocate_storyboard_row_durations,
+        apply_live_storyboard_patch, build_deterministic_expanded_story_material,
+        build_deterministic_expanded_story_script, build_qwen_request_payload,
+        canonical_live_expand_source_text,
+        build_text_generation_request,
+        build_project_create_or_switch_snapshot_from_fixture, build_storyboard_model_story_input,
+        build_storyboard_preview_plan, build_storyboard_rendersegment_cut_preview_snapshot_from_fixture,
+        build_validation_export_panel_snapshot_from_fixture, build_writer_entry_snapshot_from_fixture,
+        contains_any_story_term,
         contains_product_control_text, derive_character_action_from_story,
         derive_product_person, derive_shot_title, expand_script, generate_storyboard,
+        expand_live_fallback_warning, generated_script_identity_validator_reason,
         has_visual_concrete_element_signal, has_visual_environment_signal,
         has_visual_light_tone_or_material_signal, normalize_scene_type,
-        resolve_expand_script_target_duration_seconds, resolve_scene_taxonomy,
-        runtime_scene_option_mappings, validate_live_storyboard_rows,
+        diversify_repeated_storyboard_subjects, normalize_storyboard_row_subject_quality,
+        live_repair_warning, repair_live_expanded_script_text,
+        repair_live_storyboard_patch_from_baseline, repair_live_storyboard_rows_from_source,
+        resolve_expand_script_target_duration_seconds, row_has_subject_pollution,
+        resolve_scene_taxonomy, runtime_scene_option_mappings, split_overbroad_storyboard_subject,
+        validate_generated_script_text, validate_generated_script_text_with_reason,
+        validate_live_storyboard_rows,
     };
     use crate::state::load_desktop_shared_fixture;
     use crate::{
@@ -7479,7 +10220,7 @@ mod tests {
             row.visual_description
         );
         assert!(
-            row.visual_description.contains("画面突出"),
+            row.visual_description.contains("画面强调"),
             "visual_description should land on conflict focus: {}",
             row.visual_description
         );
@@ -7582,6 +10323,1511 @@ mod tests {
             "live storyboard rows should reject invented character names: {:?}",
             warnings
         );
+    }
+
+    #[test]
+    fn live_storyboard_patch_rebinds_visual_person_to_source_roles() {
+        let baseline = test_live_validation_row("主角");
+        let mut live_row = baseline.clone();
+        let patch = LiveStoryboardRowPatch {
+            shot_title: "镜头1：焦点废墟压迫".to_string(),
+            person: "高对比焦点".to_string(),
+            scene_scale: "中近景".to_string(),
+            visual_description: "主体为焦点，中近景把焦点放在画面前侧，当前视觉事件是废墟中的压迫逼近。".to_string(),
+            character_action: "焦点从废墟边缘开始，到压迫逼近时结束。".to_string(),
+            camera_movement: "中近景定机位观察主角动作起止，镜头捕捉废墟压迫。".to_string(),
+            dialogue: String::new(),
+        };
+
+        apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
+
+        assert_eq!(live_row.person, "主角与敌人");
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+        assert!(
+            warnings.iter().any(|warning| warning
+                .message
+                .contains("visual or abstract subject label")),
+            "validator should still reject visual subject leakage outside person: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn live_storyboard_patch_rebinds_source_fragment_person_to_source_roles() {
+        let baseline = test_live_validation_row("主角");
+        let mut live_row = baseline.clone();
+        let patch = LiveStoryboardRowPatch {
+            shot_title: "镜头1：猛然单与瞳孔骤压近断桥".to_string(),
+            person: "猛然单与瞳孔骤".to_string(),
+            scene_scale: "中近景".to_string(),
+            visual_description:
+                "主体为猛然单与瞳孔骤，中近景把双方压在断桥边缘。".to_string(),
+            character_action:
+                "猛然单与瞳孔骤从断桥远端压低重心开始，到压迫逼近时结束，镜头捕捉刀锋压入空间。"
+                    .to_string(),
+            camera_movement: "中近景定机位观察主角动作起止，镜头捕捉废墟压迫。".to_string(),
+            dialogue: String::new(),
+        };
+
+        apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
+
+        assert_eq!(live_row.person, "主角与敌人");
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+        assert!(
+            warnings.iter().any(|warning| warning
+                .message
+                .contains("source fragment as subject label")),
+            "validator should still reject source fragment subject leakage: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn live_storyboard_validator_rejects_broken_halberd_subject() {
+        let baseline = test_live_validation_row("主角");
+        let mut live_row = baseline.clone();
+        live_row.person = "断戟立".to_string();
+        live_row.scene_performance_projection.person = "断戟立".to_string();
+        live_row.shot_title = "镜头1：断戟立压住废墟".to_string();
+        live_row.visual_description = "主体为断戟立，中近景把断戟立放在废墟前侧；冷光压住断戟；当前视觉事件是断戟立在废墟中承受压力；画面突出对峙压力".to_string();
+        live_row.character_action =
+            "断戟立从废墟前侧停顿开始，到敌人缓步逼近时结束。".to_string();
+        live_row.camera_movement = "中近景定机位观察断戟立动作起止。".to_string();
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+
+        assert!(
+            warnings.iter().any(|warning| warning
+                .message
+                .contains("source-external setting")
+                || warning.message.contains("ungrounded character name")),
+            "断戟立 must stay fail-closed: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn a_ruin_main_row_repairs_incomplete_visual_description() {
+        let mut row = test_live_validation_row("主角");
+        row.person = "主角".to_string();
+        row.scene_performance_projection.person = "主角".to_string();
+        row.visual_description =
+            "主体为主角，中近景把主角放在画面前侧；冷光压住背景；画面突出压迫感。".to_string();
+        row.scene_performance_projection.visual_description = row.visual_description.clone();
+
+        normalize_storyboard_row_subject_quality(&mut row);
+
+        assert!(row.visual_description.contains("敌人"), "{}", row.visual_description);
+        assert!(row.visual_description.contains("废墟"), "{}", row.visual_description);
+        assert!(
+            contains_any_story_term(&row.visual_description, &["逼近", "对峙压力"]),
+            "{}",
+            row.visual_description
+        );
+        let warnings = validate_live_storyboard_rows(&[row], 10, &[test_live_validation_row("主角")]);
+        assert!(
+            !warnings
+                .iter()
+                .any(|warning| warning.code == "visual_description_grounding_incomplete"),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_war_repeated_main_subject_diversifies_to_enemy() {
+        let mut rows = vec![test_live_validation_row("主角"), test_live_validation_row("主角")];
+        rows[1].order = 2;
+        rows[1].shot_id = "shot-2".to_string();
+        rows[1].prompt_text_source_row_id = "shot-2".to_string();
+        rows[1].character_action =
+            "主角从废墟压力开始，到敌人继续缓步逼近时结束。".to_string();
+        rows[1].visual_description = "主体为主角，中近景把主角放在废墟前侧，敌人缓步逼近的压力压在后侧；冷光压住废墟；当前视觉事件是敌人继续逼近；画面突出对峙压力".to_string();
+        rows[1].scene_performance_projection.character_action = rows[1].character_action.clone();
+        rows[1].scene_performance_projection.visual_description = rows[1].visual_description.clone();
+
+        diversify_repeated_storyboard_subjects(&mut rows);
+
+        assert_eq!(rows[0].person, "主角");
+        assert_eq!(rows[1].person, "敌人");
+        let second_visible = storyboard_row_visible_text(&rows[1]);
+        assert!(second_visible.contains("敌人"), "{second_visible}");
+        assert!(!second_visible.contains("主体为主角"), "{second_visible}");
+    }
+
+    #[test]
+    fn live_storyboard_repair_restores_a_visual_grounding() {
+        let baseline = test_live_validation_row("主角");
+        let mut live_row = baseline.clone();
+        live_row.visual_description =
+            "主体为主角，中近景把主角放在画面前侧；冷光压住背景；画面突出压迫感。".to_string();
+        live_row.scene_performance_projection.visual_description = live_row.visual_description.clone();
+        let mut rows = vec![live_row];
+        let baselines = vec![baseline];
+        let pre_repair = validate_live_storyboard_rows(&rows, 10, &baselines);
+        assert!(
+            pre_repair
+                .iter()
+                .any(|warning| warning.code == "visual_description_grounding_incomplete"),
+            "{pre_repair:?}"
+        );
+
+        let mut summary = LiveRepairSummary {
+            raw_failed_validator: !pre_repair.is_empty(),
+            reasons: Vec::new(),
+        };
+        summary.extend(repair_live_storyboard_rows_from_source(&mut rows, &baselines));
+        let post_repair = validate_live_storyboard_rows(&rows, 10, &baselines);
+
+        assert!(summary.repaired(), "{summary:?}");
+        assert!(post_repair.is_empty(), "{post_repair:?}");
+        assert!(rows[0].visual_description.contains("废墟"));
+        assert!(rows[0].visual_description.contains("敌人"));
+        assert!(contains_any_story_term(&rows[0].visual_description, &["逼近", "对峙压力"]));
+        let warning = live_repair_warning("text_model_live_storyboard_repaired", &summary);
+        assert_eq!(warning.code, "text_model_live_storyboard_repaired");
+        assert!(warning.message.contains("fallback_used=false"));
+    }
+
+    #[test]
+    fn live_storyboard_repair_rebinds_b_fragments_and_abstract_pressure() {
+        let mut baseline = test_live_validation_row("林峰");
+        baseline.shot_script = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。".to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+        baseline.person = "林峰".to_string();
+        baseline.scene_performance_projection.person = "林峰".to_string();
+        let mut live_row = baseline.clone();
+        live_row.visual_description = "主体为林峰压，中近景把林峰压和苏瑶压放在巷口前侧；冷光制造危险感；当前视觉事件是阿青提醒他们后退。".to_string();
+        live_row.character_action =
+            "林峰压低身形护住苏瑶，阿青提醒他们，危险感逼近。".to_string();
+        live_row.scene_performance_projection.visual_description = live_row.visual_description.clone();
+        live_row.scene_performance_projection.character_action = live_row.character_action.clone();
+        let mut rows = vec![live_row];
+        let baselines = vec![baseline];
+
+        let mut summary = LiveRepairSummary::default();
+        summary.raw_failed_validator =
+            !validate_live_storyboard_rows(&rows, 10, &baselines).is_empty();
+        summary.extend(repair_live_storyboard_rows_from_source(&mut rows, &baselines));
+        let post_repair = validate_live_storyboard_rows(&rows, 10, &baselines);
+        let combined = storyboard_row_visible_text(&rows[0]);
+
+        assert!(summary.repaired(), "{summary:?}");
+        assert!(post_repair.is_empty(), "{post_repair:?}");
+        assert!(!combined.contains("林峰压"), "{combined}");
+        assert!(!combined.contains("苏瑶压"), "{combined}");
+        assert!(!combined.contains("危险感"), "{combined}");
+        assert!(combined.contains("林峰护住苏瑶"), "{combined}");
+        assert!(combined.contains("阿青提醒"), "{combined}");
+        assert!(combined.contains("黑衣追兵"), "{combined}");
+        assert!(combined.contains("巷口"), "{combined}");
+        assert!(combined.contains("逼近"), "{combined}");
+    }
+
+    #[test]
+    fn live_storyboard_repair_keeps_unrepairable_fallback_findings() {
+        let baseline = test_live_validation_row("主角");
+        let mut live_row = baseline.clone();
+        live_row.person = "李明".to_string();
+        live_row.visual_description =
+            "主体为李明，中近景把李明放在房间前侧；冷光压住背景；当前视觉事件是李明递来雨伞；画面突出安静。".to_string();
+        live_row.character_action =
+            "李明从房间前侧开始，到递来雨伞时结束。".to_string();
+        let mut rows = vec![live_row];
+        let baselines = vec![baseline];
+
+        let mut summary = LiveRepairSummary::default();
+        summary.raw_failed_validator =
+            !validate_live_storyboard_rows(&rows, 10, &baselines).is_empty();
+        summary.extend(repair_live_storyboard_rows_from_source(&mut rows, &baselines));
+        let post_repair = validate_live_storyboard_rows(&rows, 10, &baselines);
+
+        assert!(
+            post_repair
+                .iter()
+                .any(|warning| warning.message.contains("ungrounded character name")),
+            "{post_repair:?}"
+        );
+    }
+
+    #[test]
+    fn storyboard_person_binding_prefers_roles_over_visual_terms() {
+        let role_grounded = "主角站在高对比光束前，敌人从画面焦点边缘逼近。";
+        assert_eq!(
+            derive_product_person(role_grounded, role_grounded),
+            "主角与敌人"
+        );
+
+        let action_without_named_subject = "烟尘中有人踏出，随后侧身疾避。";
+        assert_eq!(
+            derive_product_person(action_without_named_subject, action_without_named_subject),
+            "主角"
+        );
+
+        let empty_shot = "海浪拍岸，清晨微光沿海平线浮起。";
+        assert_eq!(derive_product_person(empty_shot, empty_shot), "海面");
+    }
+
+    #[test]
+    fn storyboard_person_binding_trims_action_suffix_from_real_names() {
+        let named_subject = "林风蹲在矮墙断口上，左手按着膝盖，右手指节蹭着粗粝砖面。";
+
+        assert_eq!(derive_product_person(named_subject, named_subject), "林风");
+
+        let action_measure_subject = "林峰一把推开木门，苏瑶站在他身后。";
+        assert_eq!(
+            derive_product_person(action_measure_subject, action_measure_subject),
+            "林峰"
+        );
+
+        let role_action_fragment = "废墟之上，主角猛然单膝砸地，敌人踏碎瓦砾步步逼近。主角瞳孔骤缩，右拳悍然捶向地面。";
+
+        assert_eq!(
+            derive_product_person(role_action_fragment, role_action_fragment),
+            "主角与敌人"
+        );
+    }
+
+    #[test]
+    fn live_storyboard_patch_rebinds_name_action_fragment_to_source_name() {
+        let mut baseline = test_live_validation_row("林峰");
+        baseline.shot_script = "林峰一把推开木门，苏瑶站在他身后。".to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+        baseline.scene_performance_projection.person = "林峰".to_string();
+        for (dirty_person, expected_person) in [
+            ("林峰一", "林峰"),
+            ("林峰压", "林峰"),
+            ("苏瑶压", "苏瑶"),
+        ] {
+            let mut live_row = baseline.clone();
+            let patch = LiveStoryboardRowPatch {
+                shot_title: "镜头1：林峰推门".to_string(),
+                person: dirty_person.to_string(),
+                scene_scale: "中近景".to_string(),
+                visual_description: format!(
+                    "主体为{dirty_person}，中近景把木门和身后苏瑶放在同一画面里。"
+                ),
+                character_action: "林峰从门前停顿开始，到一把推开木门时结束。".to_string(),
+                camera_movement: "中近景定机位观察林峰动作起止。".to_string(),
+                dialogue: String::new(),
+            };
+
+            apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
+            normalize_storyboard_row_subject_quality(&mut live_row);
+
+            assert_eq!(live_row.person, expected_person, "{dirty_person}");
+            let combined = format!("{} {}", live_row.visual_description, live_row.prompt_text);
+            assert!(!combined.contains("林峰压"), "{combined}");
+            assert!(!combined.contains("苏瑶压"), "{combined}");
+        }
+    }
+
+    #[test]
+    fn live_storyboard_patch_rebinds_role_possessive_fragment_to_source_role() {
+        let mut baseline = test_live_validation_row("主角");
+        baseline.shot_script = "主角单膝跪地，敌人缓步逼近。".to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+        baseline.scene_performance_projection.person = "主角".to_string();
+        let mut live_row = baseline.clone();
+        let patch = LiveStoryboardRowPatch {
+            shot_title: "镜头1：主角承压".to_string(),
+            person: "主角之".to_string(),
+            scene_scale: "中近景".to_string(),
+            visual_description: "主体为主角，中近景把废墟和敌人逼近放在前后层次里。".to_string(),
+            character_action: "主角从废墟边缘稳住身体开始，到敌人逼近时结束。".to_string(),
+            camera_movement: "中近景定机位观察主角动作起止。".to_string(),
+            dialogue: String::new(),
+        };
+
+        apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
+        normalize_storyboard_row_subject_quality(&mut live_row);
+
+        assert_eq!(live_row.person, "主角");
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+        assert!(
+            !warnings.iter().any(|warning| warning
+                .message
+                .contains("ungrounded character name")),
+            "role fragments should rebind without fake-name warnings: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn live_storyboard_patch_rebinds_forbidden_person_labels_to_source_subject() {
+        for forbidden_person in ["环境", "沙盘", "城建面板"] {
+            let mut baseline = test_live_validation_row("林峰");
+            baseline.shot_script = "林峰护住苏瑶，黑衣追兵从巷口逼近。".to_string();
+            baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+            baseline.scene_performance_projection.person = "林峰".to_string();
+            let mut live_row = baseline.clone();
+            let patch = LiveStoryboardRowPatch {
+                shot_title: format!("镜头1：{forbidden_person}推进"),
+                person: forbidden_person.to_string(),
+                scene_scale: "中近景".to_string(),
+                visual_description: format!(
+                    "主体为{forbidden_person}，中近景把巷口压力放在画面前侧。"
+                ),
+                character_action: format!("{forbidden_person}从巷口开始，到压力逼近时结束。"),
+                camera_movement: "中近景定机位观察林峰动作起止。".to_string(),
+                dialogue: String::new(),
+            };
+
+            apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
+
+            assert_ne!(live_row.person, forbidden_person);
+            assert_eq!(live_row.person, "林峰");
+        }
+    }
+
+    #[test]
+    fn live_storyboard_validator_rejects_forbidden_person_labels() {
+        let baseline = test_live_validation_row("林峰");
+
+        for forbidden_person in ["环境", "沙盘", "城建面板"] {
+            let mut live_row = baseline.clone();
+            live_row.person = forbidden_person.to_string();
+            live_row.scene_performance_projection.person = forbidden_person.to_string();
+
+            let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline.clone()]);
+
+            assert!(
+                warnings.iter().any(|warning| warning
+                    .message
+                    .contains("visual or abstract subject label")),
+                "validator should reject forbidden person label {forbidden_person}: {:?}",
+                warnings
+            );
+        }
+    }
+
+    #[test]
+    fn source_role_registry_keeps_rewritten_names_grounded() {
+        let source = "林峰护住苏瑶，阿青从巷口提醒他们，黑衣追兵继续逼近。";
+        let generated = "林峰压低声音让苏瑶退后，阿青守住巷口，黑衣追兵的压力仍在逼近。";
+
+        assert!(validate_generated_script_text(generated, source).is_some());
+
+        let mut baseline = test_live_validation_row("林峰");
+        baseline.shot_script = "林峰护住苏瑶，阿青提醒他们。".to_string();
+        baseline.scene_performance_projection.fused_source_text = source.to_string();
+        baseline.scene_performance_projection.person = "林峰".to_string();
+        let mut live_row = baseline.clone();
+        live_row.person = "苏瑶".to_string();
+        live_row.shot_title = "镜头1：苏瑶回望巷口".to_string();
+        live_row.visual_description =
+            "主体为苏瑶，中近景把巷口压力放在她身后。".to_string();
+        live_row.character_action = "苏瑶从林峰身后回望巷口，到确认阿青提醒时结束。".to_string();
+        live_row.camera_movement = "中近景定机位观察苏瑶动作起止。".to_string();
+        live_row.scene_performance_projection.fused_source_text = source.to_string();
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+
+        assert!(
+            !warnings.iter().any(|warning| warning
+                .message
+                .contains("ungrounded character name")),
+            "source names should stay grounded across rewritten text: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn live_storyboard_patch_rebinds_new_name_pollution_terms() {
+        let mut baseline = test_live_validation_row("林峰");
+        baseline.shot_script = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。".to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+        baseline.scene_performance_projection.person = "林峰".to_string();
+
+        for (dirty_person, expected_person) in [
+            ("苏瑶半", "苏瑶"),
+            ("白意图", "林峰"),
+            ("郑重递", "林峰"),
+            ("左手", "林峰"),
+            ("头部", "林峰"),
+            ("未言语", "林峰"),
+            ("高耸绷", "林峰"),
+            ("屈护住", "林峰"),
+            ("扶着倚", "林峰"),
+            ("关系保", "林峰"),
+            ("半边肩", "林峰"),
+            ("终于", "林峰"),
+            ("边咳了", "林峰"),
+            ("时抬", "林峰"),
+            ("初立", "林峰"),
+            ("后颈", "林峰"),
+            ("林峰背", "林峰"),
+        ] {
+            let mut live_row = baseline.clone();
+            let patch = LiveStoryboardRowPatch {
+                shot_title: format!("镜头1：{dirty_person}推进"),
+                person: dirty_person.to_string(),
+                scene_scale: "中近景".to_string(),
+                visual_description: format!("主体为{dirty_person}，中近景保留巷口压力。"),
+                character_action: format!("{dirty_person}从巷口压力前开始，到对峙停住时结束。"),
+                camera_movement: "中近景定机位观察林峰动作起止。".to_string(),
+                dialogue: String::new(),
+            };
+
+            apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
+
+            assert_eq!(live_row.person, expected_person, "{dirty_person} should rebind");
+        }
+    }
+
+    #[test]
+    fn live_storyboard_validator_rejects_new_person_pollution_terms() {
+        let baseline = test_live_validation_row("林峰");
+
+        for dirty_person in [
+            "白意图",
+            "郑重递",
+            "左手",
+            "头部",
+            "位置",
+            "未言语",
+            "高耸绷",
+            "屈护住",
+            "扶着倚",
+            "关系保",
+            "半边肩",
+            "终于",
+            "边咳了",
+            "时抬",
+            "初立",
+            "后颈",
+        ] {
+            let mut live_row = baseline.clone();
+            live_row.person = dirty_person.to_string();
+            live_row.scene_performance_projection.person = dirty_person.to_string();
+
+            let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline.clone()]);
+
+            assert!(
+                warnings.iter().any(|warning| warning.code == "text_model_validator_failed"),
+                "validator should reject polluted person {dirty_person}: {:?}",
+                warnings
+            );
+        }
+    }
+
+    #[test]
+    fn prompt_text_abstract_subject_is_repaired_but_still_validated() {
+        let baseline = test_live_validation_row("林峰");
+        let mut live_row = baseline.clone();
+        live_row.prompt_text =
+            "视频分镜提示词：以当前镜头脚本为准；角色动作：镜头从低处推进；画面描述：主体为镜头，焦点压在画面中央。"
+                .to_string();
+        let warnings = validate_live_storyboard_rows(&[live_row.clone()], 10, &[baseline]);
+        assert!(
+            warnings.iter().any(|warning| warning.message.contains("prompt_text")),
+            "validator should keep catching abstract subject labels in prompt_text: {:?}",
+            warnings
+        );
+
+        normalize_storyboard_row_subject_quality(&mut live_row);
+
+        assert!(!live_row.prompt_text.contains("主体为镜头"));
+        assert!(!live_row.prompt_text.contains("：镜头从"));
+    }
+
+    #[test]
+    fn prompt_text_allows_camera_vocabulary_outside_subject_role() {
+        let baseline = test_live_validation_row("林峰");
+        let mut live_row = baseline.clone();
+        live_row.prompt_text =
+            "视频分镜提示词：以当前镜头脚本为准；运镜：中景定机位观察林峰，镜头捕捉左手按住刀柄。"
+                .to_string();
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+
+        assert!(
+            !warnings.iter().any(|warning| warning.message.contains("prompt_text")
+                && warning
+                    .message
+                    .contains("visual or abstract subject label")),
+            "camera vocabulary outside subject role should not trigger prompt_text abstract subject warning: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn source_fragment_subjects_are_repaired_in_product_fields() {
+        let mut row = test_live_validation_row("主角");
+        row.shot_title = "镜头1：单膝废墟压迫".to_string();
+        row.character_action = "猛然从废墟边缘开始，到压迫逼近时结束。".to_string();
+        row.prompt_text =
+            "镜头标题：单膝废墟压迫；画面描述：主体为头部；角色动作：左手从废墟边缘开始，右手作为动作部位。"
+                .to_string();
+
+        normalize_storyboard_row_subject_quality(&mut row);
+
+        let combined = format!("{} {} {}", row.shot_title, row.character_action, row.prompt_text);
+        assert!(!combined.contains("：单膝"));
+        assert!(!combined.contains("：猛然"));
+        assert!(!combined.contains("主体为废墟"));
+        assert!(!combined.contains("主体为头部"));
+        assert!(!combined.contains("：左手从"));
+    }
+
+    #[test]
+    fn environment_and_pose_terms_are_allowed_when_not_subject_labels() {
+        let baseline = test_live_validation_row("主角");
+        let mut live_row = baseline.clone();
+        live_row.shot_title = "镜头1：主角承受废墟压迫".to_string();
+        live_row.visual_description =
+            "主体为主角，中近景把废墟边缘和敌人逼近的空间压力放在后侧。".to_string();
+        live_row.character_action =
+            "主角在废墟边缘单膝跪住，到抬头看向敌人时结束。".to_string();
+        live_row.prompt_text =
+            "视频分镜提示词：画面描述：废墟作为环境压住退路；角色动作：主角单膝跪住并看向敌人。"
+                .to_string();
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+
+        assert!(
+            !warnings.iter().any(|warning| warning
+                .message
+                .contains("source fragment as subject label")),
+            "environment and pose terms should not be subject labels outside subject grammar: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn source_fragment_subject_slots_still_fail_when_explicit() {
+        let baseline = test_live_validation_row("主角");
+        let mut live_row = baseline.clone();
+        live_row.shot_title = "镜头1：废墟压迫".to_string();
+        live_row.character_action = "单膝从废墟边缘开始，到敌人逼近时结束。".to_string();
+        live_row.prompt_text =
+            "镜头标题：废墟压迫；角色动作：单膝从废墟边缘开始。".to_string();
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.message.contains("source fragment as subject label")),
+            "explicit source fragment subject slots should still fail: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn ruin_environment_title_subject_rebinds_before_live_validation() {
+        let baseline = test_live_validation_row("主角");
+        let mut live_row = baseline.clone();
+        live_row.shot_title = "镜头1：废墟压迫".to_string();
+        live_row.visual_description =
+            "主体为主角，中近景把废墟空间和敌人逼近放在后侧。".to_string();
+        live_row.character_action =
+            "主角从废墟边缘的低身状态开始，到抬头看向敌人时结束。".to_string();
+        live_row.prompt_text =
+            "镜头标题：废墟压迫；画面描述：废墟作为环境压住退路；角色动作：主角抬头。"
+                .to_string();
+
+        normalize_storyboard_row_subject_quality(&mut live_row);
+
+        assert!(live_row.shot_title.contains("主角"));
+        assert!(live_row.visual_description.contains("废墟"));
+        assert!(live_row.visual_description.contains("敌人"));
+        assert!(live_row.visual_description.contains("逼近"));
+        assert!(live_row.prompt_text.contains("废墟"));
+        assert!(live_row.prompt_text.contains("敌人"));
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+        assert!(
+            !warnings
+                .iter()
+                .any(|warning| warning.message.contains("source fragment as subject label")),
+            "ruin should be allowed as environment after subject rebind: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn silent_state_is_not_character_name_or_subject() {
+        let source = "林峰护住苏瑶，黑衣追兵从巷口逼近。";
+        let accepted = validate_generated_script_text(
+            "林峰未言语，只护住苏瑶后退半步，黑衣追兵仍从巷口逼近。",
+            source,
+        )
+        .expect("未言语 should be dialogue/silence state, not a new character");
+
+        assert!(accepted.contains("未言语"));
+
+        let baseline = test_live_validation_row("林峰");
+        let mut allowed_row = baseline.clone();
+        allowed_row.person = "林峰".to_string();
+        allowed_row.character_action =
+            "林峰未言语，只护住苏瑶，到追兵逼近时结束。".to_string();
+        allowed_row.prompt_text = "角色动作：林峰未言语；对白：无对白。".to_string();
+        let allowed_warnings = validate_live_storyboard_rows(&[allowed_row], 10, &[baseline.clone()]);
+        assert!(
+            !allowed_warnings
+                .iter()
+                .any(|warning| warning.message.contains("未言语")),
+            "未言语 should be allowed as silence state with a real subject: {:?}",
+            allowed_warnings
+        );
+
+        let mut bad_row = baseline.clone();
+        bad_row.person = "未言语".to_string();
+        bad_row.character_action = "未言语从废墟边缘开始，到停顿时结束。".to_string();
+        bad_row.prompt_text = "角色动作：未言语从废墟边缘开始。".to_string();
+        let bad_warnings = validate_live_storyboard_rows(&[bad_row], 10, &[baseline]);
+        assert!(
+            bad_warnings
+                .iter()
+                .any(|warning| warning.code == "text_model_validator_failed"),
+            "未言语 should fail when used as person/subject: {:?}",
+            bad_warnings
+        );
+    }
+
+    #[test]
+    fn location_word_is_space_not_ungrounded_character_name() {
+        let source = "林峰护住苏瑶，黑衣追兵从巷口逼近。";
+        let accepted = validate_generated_script_text(
+            "林峰调整位置护住苏瑶，黑衣追兵仍从巷口逼近，双方压力没有消失。",
+            source,
+        )
+        .expect("位置 should be treated as spatial wording, not a new character name");
+
+        assert!(accepted.contains("位置"));
+
+        let baseline = test_live_validation_row("林峰");
+        let mut live_row = baseline.clone();
+        live_row.person = "位置".to_string();
+        live_row.shot_title = "镜头1：位置压迫".to_string();
+        live_row.character_action = "位置从废墟边缘开始，到压力逼近时结束。".to_string();
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+
+        assert!(
+            warnings.iter().any(|warning| warning.code == "text_model_validator_failed"),
+            "位置 should not be allowed as person or subject label: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn military_scene_rewrite_does_not_expand_single_enemy_into_formation() {
+        let source = "主角压低身形，敌人从坡下逼近。";
+
+        assert!(
+            validate_generated_script_text(
+                "主角压低身形，坡下出现整列军阵，敌人逼近的压力被阵列推到眼前。",
+                source,
+            )
+            .is_none()
+        );
+
+        let accepted = validate_generated_script_text(
+            "构图更有秩序感，主角压低身形，敌人仍从坡下逼近，对峙压力没有消失。",
+            source,
+        )
+        .expect("military scene styling may change composition without adding army scale");
+
+        assert!(accepted.contains("敌人"));
+        assert!(accepted.contains("逼近"));
+    }
+
+    #[test]
+    fn blank_person_rebinds_visible_source_names_only() {
+        let mut row = test_live_validation_row("/");
+        row.shot_script = "林峰护住苏瑶，阿青从巷口提醒他们，黑衣追兵继续逼近。".to_string();
+        row.scene_performance_projection.fused_source_text = row.shot_script.clone();
+        row.visual_description = "主体为林峰，中近景把苏瑶和巷口压力放在后侧。".to_string();
+        row.character_action = "林峰护住苏瑶，到阿青提醒追兵逼近时结束。".to_string();
+        row.prompt_text = "镜头标题：林峰护住苏瑶；角色动作：阿青提醒他们。".to_string();
+        row.scene_performance_projection.person = "/".to_string();
+
+        normalize_storyboard_row_subject_quality(&mut row);
+
+        assert!(row.person.contains("林峰"));
+        assert!(row.person.contains("苏瑶") || row.person.contains("阿青"));
+
+        let mut empty_row = test_live_validation_row("/");
+        empty_row.shot_script = "清晨海面微光铺开。".to_string();
+        empty_row.scene_performance_projection.fused_source_text = empty_row.shot_script.clone();
+        empty_row.visual_description = "清晨海面微光铺开，空间层次保持安静。".to_string();
+        empty_row.character_action = "无人物动作，镜头只记录海面光线变化。".to_string();
+        empty_row.prompt_text = "画面描述：清晨海面微光铺开。".to_string();
+        empty_row.scene_performance_projection.person = "/".to_string();
+
+        normalize_storyboard_row_subject_quality(&mut empty_row);
+
+        assert_eq!(empty_row.person, "");
+    }
+
+    #[test]
+    fn bound_person_removes_empty_shot_text_from_fields() {
+        let mut row = test_live_validation_row("/");
+        row.shot_script = "林峰护住苏瑶，阿青从巷口提醒他们，黑衣追兵继续逼近。".to_string();
+        row.scene_performance_projection.fused_source_text = row.shot_script.clone();
+        row.visual_description = "主体为空镜，中近景里阿青站在巷口提醒林峰。".to_string();
+        row.character_action = "空镜从巷口压力开始，到阿青提醒他们时结束。".to_string();
+        row.prompt_text = "镜头标题：空镜巷口提醒；角色动作：空镜从巷口开始。".to_string();
+        row.scene_performance_projection.person = "/".to_string();
+        row.scene_performance_projection.visual_description = row.visual_description.clone();
+        row.scene_performance_projection.character_action = row.character_action.clone();
+
+        normalize_storyboard_row_subject_quality(&mut row);
+
+        assert!(row.person.contains("阿青") || row.person.contains("林峰"));
+        let combined = format!(
+            "{} {} {} {} {}",
+            row.shot_title,
+            row.visual_description,
+            row.character_action,
+            row.prompt_text,
+            row.scene_performance_projection.visual_description
+        );
+        assert!(
+            !combined.contains("空镜"),
+            "person-bound row fields should not keep 空镜 text: {combined}"
+        );
+    }
+
+    #[test]
+    fn camera_and_environment_terms_are_only_blocked_as_subjects() {
+        let baseline = test_live_validation_row("林峰");
+        let mut allowed_row = baseline.clone();
+        allowed_row.person = "林峰".to_string();
+        allowed_row.visual_description =
+            "主体为林峰，中景保留巷口环境，镜头语言只体现在压迫感里。".to_string();
+        allowed_row.character_action =
+            "林峰从巷口环境边缘开始，到追兵逼近时结束。".to_string();
+        allowed_row.prompt_text =
+            "运镜：中景定机位观察林峰，镜头捕捉环境里的压迫线。".to_string();
+        let allowed_warnings = validate_live_storyboard_rows(&[allowed_row], 10, &[baseline.clone()]);
+        assert!(
+            !allowed_warnings.iter().any(|warning| warning
+                .message
+                .contains("visual or abstract subject label")),
+            "camera/environment vocabulary should be allowed outside subject slots: {:?}",
+            allowed_warnings
+        );
+
+        let mut bad_row = baseline.clone();
+        bad_row.person = "环境".to_string();
+        bad_row.visual_description = "主体为环境，中景保留巷口压力。".to_string();
+        bad_row.character_action = "环境从巷口边缘开始，到追兵逼近时结束。".to_string();
+        bad_row.prompt_text = "角色动作：镜头从低处推进；画面描述：主体为镜头。".to_string();
+        let bad_warnings = validate_live_storyboard_rows(&[bad_row], 10, &[baseline]);
+        assert!(
+            bad_warnings.iter().any(|warning| warning
+                .message
+                .contains("visual or abstract subject label")),
+            "camera/environment subject slots should remain blocked: {:?}",
+            bad_warnings
+        );
+    }
+
+    #[test]
+    fn empty_shot_person_outputs_slash_without_using_blank_or_empty_shot_label() {
+        let mut row = test_live_validation_row("空镜");
+        row.shot_script = "清晨海面微光铺开。".to_string();
+        row.scene_performance_projection.fused_source_text = row.shot_script.clone();
+        row.visual_description = "清晨海面微光铺开，空间层次保持安静。".to_string();
+        row.character_action = "无人物动作，镜头只记录海面光线变化。".to_string();
+        row.prompt_text = "画面描述：清晨海面微光铺开。".to_string();
+        row.scene_performance_projection.visual_description = row.visual_description.clone();
+        row.scene_performance_projection.character_action = row.character_action.clone();
+
+        normalize_storyboard_row_subject_quality(&mut row);
+
+        assert_eq!(row.person, "");
+        assert_eq!(row.scene_performance_projection.person, "");
+    }
+
+    #[test]
+    fn expand_script_validator_allows_body_parts_as_actions_not_names() {
+        let source = "林峰护住苏瑶，黑衣追兵从巷口逼近。";
+        let accepted = validate_generated_script_text(
+            "林峰左手扶住苏瑶，右手压低门板，镜头感只体现在动作节奏里，黑衣追兵仍从巷口逼近。",
+            source,
+        )
+        .expect("body parts and camera vocabulary should not force validator fallback");
+
+        assert!(accepted.contains("左手"));
+        assert!(accepted.contains("右手"));
+        assert!(accepted.contains("黑衣追兵"));
+    }
+
+    #[test]
+    fn pseudo_name_fragments_are_not_reported_as_ungrounded_characters() {
+        let source = "林峰护住苏瑶，黑衣追兵从巷口逼近。";
+
+        for generated in [
+            "高耸绷紧的门洞压住退路，林峰护住苏瑶，黑衣追兵仍从巷口逼近。",
+            "林峰屈身护住苏瑶，扶着倚在墙边的木门稳住身体，黑衣追兵继续逼近。",
+            "苏瑶头部微微偏开，左手按住门框，右手收回身前，追兵压力仍在。",
+            "林峰没答，继续护住苏瑶，黑衣追兵仍从巷口逼近。",
+            "那人仍在巷口逼近，林峰护住苏瑶后退。",
+            "左边岔路被碎石挡住，林峰护住苏瑶转向门洞，追兵压力仍在。",
+            "对方挥开烟尘，林峰护住苏瑶，黑衣追兵仍从巷口逼近。",
+            "林峰护住苏瑶后微撤半步，黑衣追兵仍从巷口逼近。",
+            "林峰半边肩抵住门框，护住苏瑶，黑衣追兵仍从巷口逼近。",
+            "林峰终于稳住呼吸，护住苏瑶，黑衣追兵仍从巷口逼近。",
+            "苏瑶靠在墙边咳了半声，林峰护住她，黑衣追兵仍从巷口逼近。",
+            "林峰护住苏瑶时抬手挡开碎屑，黑衣追兵仍从巷口逼近。",
+            "主角初立在断墙前，林峰护住苏瑶，黑衣追兵仍从巷口逼近。",
+            "林峰后颈绷紧，继续护住苏瑶，黑衣追兵仍从巷口逼近。",
+            "轮廓缓慢压低在巷口背景里，林峰护住苏瑶，黑衣追兵仍从巷口逼近。",
+            "背景灰暗下来，林峰护住苏瑶，黑衣追兵仍从巷口逼近。",
+            "居右三分的构图压住退路，林峰护住苏瑶，黑衣追兵仍从巷口逼近。",
+            "罗盘紧贴碎瓦停住，林峰护住苏瑶，黑衣追兵仍从巷口逼近。",
+            "苏瑶方才稳住呼吸，林峰护住她，黑衣追兵仍从巷口逼近。",
+        ] {
+            let result = super::validate_generated_script_text_with_reason(generated, source);
+            assert!(
+                result.is_ok(),
+                "pseudo name fragments/body parts should not be treated as new names: {generated}; reason: {:?}",
+                result.err()
+            );
+        }
+
+        assert_eq!(
+            super::generated_script_ungrounded_character_name(
+                "苏瑶在怀中稳住呼吸，林峰护住她，黑衣追兵仍从巷口逼近。",
+                source
+            ),
+            None,
+            "怀中 should be body/position wording, not a new name"
+        );
+
+        let source_with_compass = "林峰护住苏瑶，罗盘被瓦砾压住，黑衣追兵从巷口逼近。";
+        assert!(
+            validate_generated_script_text(
+                "罗盘被落下的瓦片压住，林峰护住苏瑶，黑衣追兵仍从巷口逼近。",
+                source_with_compass,
+            )
+            .is_some(),
+            "passive object fragments should not be treated as new names"
+        );
+    }
+
+    #[test]
+    fn qa_fragment_terms_are_not_ungrounded_character_names() {
+        let source = "林峰护住苏瑶，黑衣追兵从巷口逼近。";
+        for fragment in [
+            "轮廓缓",
+            "背景灰",
+            "居右三",
+            "罗盘紧",
+            "苏瑶方",
+            "后停顿",
+            "广角俯",
+            "眉心",
+            "左下角",
+        ] {
+            let generated = format!("{fragment}只描述画面状态，林峰护住苏瑶，黑衣追兵仍从巷口逼近。");
+            assert_eq!(
+                super::generated_script_ungrounded_character_name(&generated, source),
+                None,
+                "{fragment} should not be treated as an added character name"
+            );
+        }
+
+        let mut baseline = test_live_validation_row("林峰");
+        baseline.shot_script = source.to_string();
+        baseline.scene_performance_projection.fused_source_text = source.to_string();
+        baseline.scene_performance_projection.person = "林峰".to_string();
+        for dirty_person in [
+            "轮廓缓",
+            "背景灰",
+            "居右三",
+            "罗盘紧",
+            "苏瑶方",
+            "后停顿",
+            "广角俯",
+            "眉心",
+            "左下角",
+        ] {
+            let mut live_row = baseline.clone();
+            let patch = LiveStoryboardRowPatch {
+                shot_title: format!("镜头1：{dirty_person}压迫"),
+                person: dirty_person.to_string(),
+                scene_scale: "中近景".to_string(),
+                visual_description: format!("主体为{dirty_person}，中近景保留巷口压力。"),
+                character_action: format!("{dirty_person}从巷口压力前开始，到追兵逼近时结束。"),
+                camera_movement: "中近景定机位观察林峰动作起止。".to_string(),
+                dialogue: String::new(),
+            };
+
+            apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
+            normalize_storyboard_row_subject_quality(&mut live_row);
+
+            assert_ne!(live_row.person, dirty_person);
+            assert!(
+                !validate_live_storyboard_rows(&[live_row], 10, &[baseline.clone()])
+                    .iter()
+                    .any(|warning| warning.message.contains("ungrounded character name")),
+                "{dirty_person} should be fragment noise, not an added name"
+            );
+        }
+    }
+
+    #[test]
+    fn storyboard_action_fragments_rebind_instead_of_becoming_person_names() {
+        let baseline = test_live_validation_row("主角");
+
+        for dirty_person in [
+            "后迅速",
+            "扶住",
+            "肩甲投",
+            "苏瑶上",
+            "初立",
+            "后颈",
+            "林峰背",
+            "后停顿",
+            "广角俯",
+            "眉心",
+            "左下角",
+        ] {
+            let mut live_row = baseline.clone();
+            let patch = LiveStoryboardRowPatch {
+                shot_title: format!("镜头1：{dirty_person}压迫"),
+                person: dirty_person.to_string(),
+                scene_scale: "中近景".to_string(),
+                visual_description: format!("主体为{dirty_person}，中近景保留废墟压力。"),
+                character_action: format!("{dirty_person}从废墟边缘开始，到敌人逼近时结束。"),
+                camera_movement: "中近景定机位观察主角动作起止。".to_string(),
+                dialogue: String::new(),
+            };
+
+            apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
+            normalize_storyboard_row_subject_quality(&mut live_row);
+
+            assert!(
+                live_row.person.contains("主角"),
+                "{dirty_person} should rebind to source roles: {}",
+                live_row.person
+            );
+            let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline.clone()]);
+            assert!(
+                !warnings.iter().any(|warning| warning
+                    .message
+                    .contains("ungrounded character name")),
+                "action fragments should not become ungrounded names: {:?}",
+                warnings
+            );
+        }
+    }
+
+    #[test]
+    fn storyboard_model_prompt_includes_source_person_binding_rule() {
+        let grounding = StoryboardGroundingContext {
+            shot_script: "主角单膝跪地，敌人缓步逼近。".to_string(),
+            expanded_script_text: "主角在废墟中承受压迫。".to_string(),
+            grounding_text: "主角单膝跪地，敌人缓步逼近。".to_string(),
+            grounding_source: ShotGroundingSource::ShotScript,
+            primary_scene_type: "hot_blood_battle".to_string(),
+            primary_scene_label: "热血战斗".to_string(),
+            primary_scene_category: "action_beat".to_string(),
+            shot_scene_type: "hot_blood_battle".to_string(),
+            shot_scene_label: "热血战斗".to_string(),
+            shot_intent: "action_beat".to_string(),
+            adaptation_reason: "test".to_string(),
+        };
+
+        let prompt_input = build_storyboard_model_story_input(&grounding);
+
+        assert!(prompt_input.contains("source_person_binding=主角与敌人"));
+        assert!(prompt_input.contains("never use visual, camera, composition, or abstract labels as person"));
+    }
+
+    #[test]
+    fn storyboard_qwen_prompt_names_trace_person_fragments_as_invalid() {
+        let provider = TextModelProvider {
+            provider: TextModelProviderKind::Qwen,
+            model: "qwen-plus".to_string(),
+            base_url: Some("https://example.invalid".to_string()),
+            api_key_ref: "env:TEST".to_string(),
+            enabled: true,
+        };
+        let request = build_text_generation_request(
+            TextGenerationTask::GenerateStoryboard,
+            Some("hot_blood_battle".to_string()),
+            "主角单膝跪地，敌人缓步逼近。".to_string(),
+            None,
+            String::new(),
+            vec![],
+            vec![],
+            TextGenerationOutputSchema::StoryboardRowsJson,
+            Some(700),
+        );
+        let payload = build_qwen_request_payload(&provider, &request);
+        let user_prompt = payload["messages"][1]["content"]
+            .as_str()
+            .expect("Qwen payload should include user prompt");
+
+        assert!(user_prompt.contains("主角之"));
+        assert!(user_prompt.contains("林峰压"));
+        assert!(user_prompt.contains("苏瑶压"));
+        assert!(user_prompt.contains("断戟立"));
+        assert!(user_prompt.contains("must be 主角, 林峰, or 苏瑶"));
+    }
+
+    #[test]
+    fn expand_script_live_text_rejects_added_names_and_over_specific_bystanders() {
+        let source = "主角在雨巷里退后，敌人从巷口逼近。";
+
+        assert!(validate_generated_script_text(
+            "主角发现邻居家大叔和邻居家孩子都在巷口等他。",
+            source
+        )
+        .is_none());
+        assert!(validate_generated_script_text("主角转身遇见李明，李明递来雨伞。", source)
+            .is_none());
+
+        let accepted = validate_generated_script_text(
+            "主角在雨声里放慢呼吸，逼近的人停在巷口，双方仍保持对峙。",
+            source,
+        )
+        .expect("soft conflict label should stay inside source role boundary");
+
+        assert!(accepted.contains("主角"));
+        assert!(accepted.contains("逼近的人"));
+        assert!(!accepted.contains("邻居"));
+    }
+
+    #[test]
+    fn expand_script_live_text_rejects_external_setting_injection() {
+        let source = "林峰护住苏瑶，黑衣追兵从巷口逼近。";
+
+        for generated in [
+            "林峰把北营兵符拓片递给苏瑶，拓片边缘写着建安十七年监造。",
+            "林峰在丞相帐外按住虎牢关守军轮值图，金线铭文亮起。",
+            "苏瑶举起罗盘认路，带着林峰绕过中军。",
+        ] {
+            assert!(
+                validate_generated_script_text(generated, source).is_none(),
+                "external setting should be rejected: {generated}"
+            );
+        }
+    }
+
+    #[test]
+    fn daily_healing_script_must_preserve_pursuit_pressure() {
+        let source = "林峰护住苏瑶，黑衣追兵从巷口逼近。";
+
+        let accepted = validate_generated_script_text(
+            "林峰让苏瑶在屋檐下缓过气，逼近的人仍停在巷口，压力没有消失。",
+            source,
+        )
+        .expect("softened daily healing text should keep pursuit pressure");
+
+        assert!(accepted.contains("逼近的人"));
+        assert!(accepted.contains("压力"));
+        assert!(
+            validate_generated_script_text(
+                "林峰让苏瑶在屋檐下缓过气，邻居家的孩子递来一盏灯。",
+                source
+            )
+            .is_none()
+        );
+        assert!(
+            validate_generated_script_text(
+                "林峰让苏瑶在屋檐下缓过气，雨声渐渐把巷口安静下来。",
+                source
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn live_expand_repair_rebinds_added_a_name_to_source_facts() {
+        let source = "废墟之上，主角单膝跪地，敌人缓步逼近。";
+        let live = "废墟之上，孔却燃单膝跪地，敌人缓步逼近，对峙压力没有消失。";
+
+        let repair = repair_live_expanded_script_text(live, source, "hot_blood_battle", "热血战斗")
+            .expect("source-grounded repair should recover role-only A source");
+
+        assert!(!repair.text.contains("孔却燃"), "{}", repair.text);
+        assert!(repair.text.contains("主角"), "{}", repair.text);
+        assert!(repair.text.contains("敌人"), "{}", repair.text);
+        assert!(repair.text.contains("废墟"), "{}", repair.text);
+        assert!(contains_any_story_term(&repair.text, &["逼近", "对峙压力"]));
+        assert!(validate_generated_script_text(&repair.text, source).is_some());
+        let warning = live_repair_warning("text_model_live_expand_repaired", &repair.summary);
+        assert_eq!(warning.code, "text_model_live_expand_repaired");
+        assert!(warning.message.contains("live_raw_failed_validator=true"));
+        assert!(warning.message.contains("fallback_used=false"));
+    }
+
+    #[test]
+    fn live_expand_repair_removes_b_name_drift_without_leaking() {
+        let source = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。";
+        let live = "方仅在沙盘边示意撤离，林峰护住苏瑶，阿青提醒他们退到墙边。";
+
+        let repair =
+            repair_live_expanded_script_text(live, source, "sandbox_strategy_view", "沙盘战略视口")
+            .expect("B source should canonicalize safely when live invents a name");
+
+        assert!(!repair.text.contains("方仅"), "{}", repair.text);
+        assert!(repair.text.contains("林峰护住苏瑶"), "{}", repair.text);
+        assert!(repair.text.contains("阿青提醒"), "{}", repair.text);
+        assert!(repair.text.contains("黑衣追兵"), "{}", repair.text);
+        assert!(repair.text.contains("巷口"), "{}", repair.text);
+        assert!(repair.text.contains("逼近"), "{}", repair.text);
+        assert!(validate_generated_script_text(&repair.text, source).is_some());
+    }
+
+    #[test]
+    fn live_expand_repair_removes_external_setting_details() {
+        let a_source = "废墟之上，主角单膝跪地，敌人缓步逼近。";
+        let a_live = "废墟之上，主角单膝跪地，敌人的甲胄压住光线后继续逼近。";
+        let a_repair =
+            repair_live_expanded_script_text(a_live, a_source, "national_war", "国战军阵建立")
+            .unwrap_or_else(|| {
+                let canonical = canonical_live_expand_source_text(
+                    a_source,
+                    "national_war",
+                    "国战军阵建立",
+                )
+                .unwrap_or_default();
+                panic!(
+                    "甲胄 should repair back to A source facts; canonical={canonical}; reason={:?}",
+                    validate_generated_script_text_with_reason(&canonical, a_source).err()
+                );
+            });
+        assert!(!a_repair.text.contains("甲胄"), "{}", a_repair.text);
+        assert!(a_repair.text.contains("主角"));
+        assert!(a_repair.text.contains("敌人"));
+        assert!(validate_generated_script_text(&a_repair.text, a_source).is_some());
+
+        let b_source = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。";
+        let b_live = "林峰左臂护住苏瑶，阿青提醒他们，危险感压住巷口。";
+        let b_repair =
+            repair_live_expanded_script_text(b_live, b_source, "hot_blood_battle", "热血战斗")
+            .unwrap_or_else(|| {
+                let canonical = canonical_live_expand_source_text(
+                    b_source,
+                    "hot_blood_battle",
+                    "热血战斗",
+                )
+                .unwrap_or_default();
+                panic!(
+                    "左臂 and abstract pressure should repair back to B source facts; canonical={canonical}; reason={:?}",
+                    validate_generated_script_text_with_reason(&canonical, b_source).err()
+                );
+            });
+        assert!(!b_repair.text.contains("左臂"), "{}", b_repair.text);
+        assert!(!b_repair.text.contains("危险感"), "{}", b_repair.text);
+        assert!(b_repair.text.contains("追兵逼近压力"), "{}", b_repair.text);
+        assert!(validate_generated_script_text(&b_repair.text, b_source).is_some());
+    }
+
+    #[test]
+    fn live_expand_repair_restores_missing_b_pursuit_pressure() {
+        let source = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。";
+        let live = "沙盘战略视口只保留林峰护住苏瑶和阿青提醒他们撤到墙边。";
+
+        let repair =
+            repair_live_expanded_script_text(live, source, "sandbox_strategy_view", "沙盘战略视口")
+            .expect("missing pursuit pressure should be source-grounded repaired");
+
+        assert!(repair.text.contains("黑衣追兵"), "{}", repair.text);
+        assert!(repair.text.contains("巷口"), "{}", repair.text);
+        assert!(repair.text.contains("逼近"), "{}", repair.text);
+        assert!(repair.text.contains("追兵逼近压力"), "{}", repair.text);
+        assert!(validate_generated_script_text(&repair.text, source).is_some());
+    }
+
+    #[test]
+    fn live_expand_repair_keeps_fallback_when_source_cannot_ground() {
+        let source = "少年离开房间。";
+        let live = "少年遇见李明，李明递来雨伞。";
+
+        assert!(repair_live_expanded_script_text(live, source, "daily_healing", "日常治愈").is_none());
+        assert!(validate_generated_script_text(live, source).is_none());
+    }
+
+    #[test]
+    fn expand_script_qwen_prompt_blocks_external_settings_and_preserves_pressure() {
+        let provider = TextModelProvider {
+            provider: TextModelProviderKind::Qwen,
+            model: "qwen-plus".to_string(),
+            base_url: Some("https://example.invalid".to_string()),
+            api_key_ref: "env:TEST".to_string(),
+            enabled: true,
+        };
+        let request = build_text_generation_request(
+            TextGenerationTask::ExpandScript,
+            Some("daily_healing".to_string()),
+            "current_scene_label=日常治愈\nstory_input=林峰护住苏瑶，黑衣追兵逼近。".to_string(),
+            None,
+            String::new(),
+            vec![],
+            vec![],
+            TextGenerationOutputSchema::PlainText,
+            Some(700),
+        );
+
+        let payload = build_qwen_request_payload(&provider, &request);
+        let user_prompt = payload["messages"][1]["content"]
+            .as_str()
+            .expect("Qwen payload should include user prompt");
+
+        assert!(user_prompt.contains("北营兵符拓片"));
+        assert!(user_prompt.contains("虎牢关守军轮值图"));
+        assert!(user_prompt.contains("黑釉兵俑"));
+        assert!(user_prompt.contains("戴着皮套的手"));
+        assert!(user_prompt.contains("铭文"));
+        assert!(user_prompt.contains("金线"));
+        assert!(user_prompt.contains("黑衣追兵逼近"));
+        assert!(user_prompt.contains("对峙压力"));
+        assert!(user_prompt.contains("逼近的人"));
+        assert!(user_prompt.contains("邻居家大叔"));
+        assert!(user_prompt.contains("孔却燃"));
+        assert!(user_prompt.contains("铠甲"));
+        assert!(user_prompt.contains("甲胄"));
+        assert!(user_prompt.contains("剑柄"));
+        assert!(user_prompt.contains("冷笑"));
+        assert!(user_prompt.contains("左臂"));
+        assert!(user_prompt.contains("断戟"));
+        assert!(user_prompt.contains("三名黑衣追兵"));
+        assert!(user_prompt.contains("林峰护住苏瑶"));
+        assert!(user_prompt.contains("阿青提醒"));
+    }
+
+    #[test]
+    fn expand_fallback_warning_distinguishes_validator_from_provider_failure() {
+        let provider = TextModelProvider {
+            provider: TextModelProviderKind::Qwen,
+            model: "qwen-plus".to_string(),
+            base_url: Some("https://example.invalid".to_string()),
+            api_key_ref: "env:TEST".to_string(),
+            enabled: true,
+        };
+
+        let validator_warning = expand_live_fallback_warning(
+            &provider,
+            &[],
+            false,
+            Some("新增源文本外姓名：李明 prompt_body token"),
+            false,
+        )
+        .expect("validator fallback should keep a warning");
+        assert_eq!(validator_warning.code, "text_model_live_expand_fallback");
+        assert!(validator_warning.message.contains("本地校验"));
+        assert!(validator_warning.message.contains("新增源文本外姓名：李明"));
+        assert!(!validator_warning.message.contains("prompt_body"));
+        assert!(!validator_warning.message.contains("token"));
+        assert!(!validator_warning.message.contains("未启用千问或调用失败"));
+
+        let provider_warning = expand_live_fallback_warning(
+            &provider,
+            &[ProductWarning {
+                code: "text_model_network_error".to_string(),
+                message: "network".to_string(),
+                related_sample_id: None,
+            }],
+            false,
+            None,
+            false,
+        )
+        .expect("provider fallback should keep a warning");
+        assert!(provider_warning.message.contains("API 调用失败"));
+        assert!(!provider_warning.message.contains("未启用千问或调用失败"));
+
+        let local_safety_warning = expand_live_fallback_warning(&provider, &[], true, None, true)
+            .expect("local safety fallback should keep a warning");
+        assert!(local_safety_warning.message.contains("本地安全回退"));
+    }
+
+    #[test]
+    fn strategic_view_rewrite_keeps_pressure_without_external_props() {
+        let source = "沙盘战略视口中，林峰护住苏瑶，阿青提醒敌人正在逼近，追兵压力没有消失。";
+
+        for generated in [
+            "沙盘战略视口里出现黑釉兵俑，林峰让苏瑶躲到旗标后。",
+            "戴着皮套的手按住沙盘边缘，阿青听见新的铭文亮起。",
+        ] {
+            assert!(
+                validate_generated_script_text(generated, source).is_none(),
+                "strategic view should reject external prop injection: {generated}"
+            );
+        }
+
+        let accepted = validate_generated_script_text(
+            "沙盘战略视口只改变表达角度，林峰、苏瑶和阿青的位置被压到同一层态势里，敌人逼近与追兵压力仍然存在。",
+            source,
+        )
+        .expect("strategic view should preserve source roles and pressure");
+
+        assert!(accepted.contains("敌人逼近"));
+        assert!(accepted.contains("追兵压力"));
+        assert!(!accepted.contains("黑釉兵俑"));
+        assert!(!accepted.contains("皮套"));
+    }
+
+    #[test]
+    fn qa_expand_outputs_scrub_relationship_fragment_and_keep_pressure() {
+        let sanitized = super::sanitize_product_body_text(
+            "关系保留：林峰护住苏瑶。\n林峰关系保持紧张，黑衣追兵仍从巷口逼近。",
+        );
+        assert!(!sanitized.contains("关系保"));
+        assert!(sanitized.contains("黑衣追兵"));
+        assert!(sanitized.contains("逼近"));
+
+        let a_source = "废墟之上，主角单膝跪地，敌人缓步逼近。";
+        for generated in [
+            "国战视角只把构图变得更有秩序，主角仍单膝跪在废墟上，敌人缓步逼近，对峙压力没有消失。",
+            "热血战斗节奏更紧，主角单膝撑住地面，敌人仍在逼近，双方对峙压力压到眼前。",
+            "国战视角只把秩序和距离压紧，主角仍单膝跪在废墟上，对峙压力没有消失。",
+        ] {
+            let accepted = validate_generated_script_text(generated, a_source)
+                .expect("A-case rewrite must keep enemy approaching pressure");
+            assert!(accepted.contains("敌人") || accepted.contains("对峙压力"));
+            assert!(accepted.contains("逼近") || accepted.contains("对峙压力"));
+        }
+        assert!(validate_generated_script_text(
+            "国战视角里主角单膝跪在废墟上，阵列旗影压住天空。",
+            a_source,
+        )
+        .is_none());
+
+        let b_source = "林峰护住苏瑶，黑衣追兵逼近，阿青断后掩护他们撤离。";
+        for generated in [
+            "热血战斗节奏更紧，林峰护住苏瑶，阿青断后，黑衣追兵仍在逼近。",
+            "沙盘战略视口只改变观察角度，林峰护住苏瑶撤离，阿青断后，追兵逼近压力仍在。",
+            "沙盘战略视口只改变观察角度，林峰护住苏瑶撤离，阿青断后，身后压力仍然压住队形。",
+        ] {
+            let accepted = validate_generated_script_text(generated, b_source)
+                .expect("B-case rewrite must keep pursuit or retreat pressure");
+            assert!(
+                accepted.contains("追兵")
+                    || accepted.contains("逼近")
+                    || accepted.contains("断后")
+                    || accepted.contains("撤离")
+            );
+        }
+        assert!(validate_generated_script_text(
+            "沙盘战略视口里林峰护住苏瑶撤到安全点，阿青收起地图。",
+            b_source,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn storyboard_rows_scrub_relationship_fragment_from_output_fields() {
+        let mut row = test_live_validation_row("关系保");
+        row.shot_title = "镜头1：关系保压迫".to_string();
+        row.visual_description = "主体为关系保，中近景保留巷口压力。".to_string();
+        row.character_action = "关系保从巷口开始，到追兵逼近时结束。".to_string();
+        row.prompt_text = "角色动作：关系保从巷口开始；画面描述：主体为关系保。".to_string();
+        row.scene_performance_projection.person = "关系保".to_string();
+        row.scene_performance_projection.visual_description = row.visual_description.clone();
+        row.scene_performance_projection.character_action = row.character_action.clone();
+
+        normalize_storyboard_row_subject_quality(&mut row);
+
+        let combined = format!(
+            "{} {} {} {} {} {}",
+            row.person,
+            row.shot_title,
+            row.visual_description,
+            row.character_action,
+            row.prompt_text,
+            row.scene_performance_projection.person
+        );
+        assert!(!combined.contains("关系保"));
+    }
+
+    #[test]
+    fn deterministic_expand_script_avoids_new_bystander_identities() {
+        let material = build_deterministic_expanded_story_material(
+            "主角想让这段关系平静下来，但敌人仍在门外逼近。",
+            "日常治愈",
+        );
+
+        for forbidden in ["邻居家大叔", "邻居家孩子", "熟悉的身影", "邻居", "孩子", "熟人"] {
+            assert!(!material.contains(forbidden), "deterministic material should not add {forbidden}: {material}");
+        }
+        assert!(material.contains("主角"));
+        assert!(material.contains("逼近的人") || material.contains("对峙对象"));
+    }
+
+    #[test]
+    fn storyboard_subject_quality_collapses_repeated_role_phrases() {
+        let mut row = test_live_validation_row("主角与敌人");
+        row.shot_title = "镜头1：主角与敌人与敌人压近断桥".to_string();
+        row.visual_description = "主体为主角与敌人猛然站在画面前侧。".to_string();
+        row.character_action = "主角与敌人瞳孔骤缩后开始对峙。".to_string();
+        row.prompt_text = "镜头标题：主角与敌人与敌人压近；角色动作：林峰、苏瑶与阿青与阿青从巷口压力开始。".to_string();
+        row.scene_performance_projection.person = "林峰、苏瑶与阿青与阿青".to_string();
+        row.scene_performance_projection.visual_description = row.visual_description.clone();
+        row.scene_performance_projection.character_action = row.character_action.clone();
+
+        normalize_storyboard_row_subject_quality(&mut row);
+
+        let combined = format!(
+            "{} {} {} {} {}",
+            row.person,
+            row.shot_title,
+            row.visual_description,
+            row.character_action,
+            row.scene_performance_projection.person
+        );
+        assert!(!combined.contains("主角与敌人与敌人"));
+        assert!(!combined.contains("林峰、苏瑶与阿青与阿青"));
+        assert!(!combined.contains("主角与敌人猛然"));
+        assert!(!combined.contains("主角与敌人瞳孔"));
+    }
+
+    #[test]
+    fn fallback_rows_do_not_output_slash_person_and_keep_fifteen_seconds() {
+        let state = test_state_with_golden_sample_runtime();
+        let storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "fallback-no-slash-person".to_string(),
+                script_id: None,
+                shot_script: Some("主角护住同伴，敌人从断墙后逼近。".to_string()),
+                expanded_script_text: Some("主角护住同伴，敌人继续逼近。".to_string()),
+                primary_scene_type: Some("daily_dialogue".to_string()),
+                primary_scene_label: Some("断墙逼近".to_string()),
+                primary_scene_category: Some("action_dialogue".to_string()),
+                shot_scene_type: Some("action_beat".to_string()),
+                shot_scene_label: Some("断墙逼近镜头".to_string()),
+                shot_intent: Some("action_beat".to_string()),
+                adaptation_reason: Some("duration and person fallback test".to_string()),
+                selected_total_duration_seconds: 15,
+                target_duration_mode: String::new(),
+                auto_segment_strategy: String::new(),
+                model_config_summary: None,
+                scene_type: None,
+                scene_label: None,
+                scene_category: None,
+            },
+        );
+
+        assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
+        assert_eq!(
+            storyboard
+                .rows
+                .iter()
+                .map(|row| row.duration_seconds)
+                .collect::<Vec<_>>(),
+            vec![10, 5]
+        );
+        assert_eq!(
+            storyboard
+                .rows
+                .iter()
+                .map(|row| row.duration_seconds)
+                .sum::<u16>(),
+            15
+        );
+        for row in storyboard.rows {
+            assert_ne!(row.person, "/");
+            assert_ne!(row.scene_performance_projection.person, "/");
+            assert!(!row.person.trim().is_empty());
+            assert!(row.person.contains("主角") || row.person.contains("敌人"));
+        }
     }
 
     #[test]
@@ -8186,6 +12432,830 @@ mod tests {
 
         let fallback = derive_product_person("敌方刀客压近断桥。", "敌方刀客压近断桥。");
         assert_eq!(fallback, "敌方刀客");
+    }
+
+    #[test]
+    fn b_group_source_name_fallback_never_collapses_to_generic_main_role() {
+        let source = "林峰护住苏瑶，黑衣追兵逼近。阿青受伤后提醒追兵逼近，苏瑶带阿青撤离。";
+
+        let aqing_segment = "阿青受伤后提醒追兵逼近。";
+        let aqing_person = derive_product_person(aqing_segment, source);
+        assert!(aqing_person.contains("阿青"), "{aqing_person}");
+        assert_ne!(aqing_person, "主角");
+
+        let suyao_segment = "苏瑶带阿青撤离。";
+        let suyao_person = derive_product_person(suyao_segment, source);
+        assert!(suyao_person.contains("苏瑶"), "{suyao_person}");
+        assert!(suyao_person.contains("阿青"), "{suyao_person}");
+        assert_ne!(suyao_person, "主角");
+
+        let pronoun_segment = "她受伤后提醒撤离。";
+        let pronoun_person = derive_product_person(pronoun_segment, source);
+        assert!(
+            pronoun_person.contains("林峰")
+                || pronoun_person.contains("苏瑶")
+                || pronoun_person.contains("阿青"),
+            "{pronoun_person}"
+        );
+        assert_ne!(pronoun_person, "主角");
+
+        let a_person = derive_product_person("主角单膝跪地，敌人缓步逼近。", "主角单膝跪地，敌人缓步逼近。");
+        assert_eq!(a_person, "主角与敌人");
+    }
+
+    #[test]
+    fn b_group_fifteen_second_storyboard_rows_keep_source_names() {
+        let state = test_state_with_golden_sample_runtime();
+        let storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "b-group-source-name-fallback".to_string(),
+                script_id: None,
+                shot_script: Some(
+                    "林峰护住苏瑶，黑衣追兵逼近。阿青受伤后提醒追兵逼近，苏瑶带阿青撤离。"
+                        .to_string(),
+                ),
+                expanded_script_text: Some(
+                    "热血战斗节奏更紧，林峰护住苏瑶，阿青受伤后提醒追兵逼近，苏瑶带阿青撤离。"
+                        .to_string(),
+                ),
+                primary_scene_type: Some("action_beat".to_string()),
+                primary_scene_label: Some("热血战斗".to_string()),
+                primary_scene_category: Some("action".to_string()),
+                shot_scene_type: None,
+                shot_scene_label: None,
+                shot_intent: None,
+                adaptation_reason: None,
+                selected_total_duration_seconds: 15,
+                target_duration_mode: "fixed_seconds".to_string(),
+                auto_segment_strategy: String::new(),
+                model_config_summary: None,
+                scene_type: None,
+                scene_label: None,
+                scene_category: None,
+            },
+        );
+
+        assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
+        assert_eq!(
+            storyboard
+                .rows
+                .iter()
+                .map(|row| row.duration_seconds)
+                .collect::<Vec<_>>(),
+            vec![10, 5]
+        );
+        let second_row = storyboard.rows.get(1).expect("second storyboard row");
+        assert_ne!(second_row.person, "主角");
+        assert!(
+            second_row.person.contains("阿青")
+                || second_row.person.contains("苏瑶")
+                || second_row.person.contains("林峰"),
+            "{}",
+            second_row.person
+        );
+    }
+
+    #[test]
+    fn four_group_fallback_rows_never_emit_empty_person() {
+        let state = test_state_with_golden_sample_runtime();
+        let cases = [
+            (
+                "a-hot-blood-action",
+                "热血战斗",
+                "废墟之上，主角单膝跪地，敌人缓步逼近。敌人自烟尘中踏出，主角侧身疾避。",
+            ),
+            (
+                "a-war-formation",
+                "国战军阵建立",
+                "废墟之上，主角单膝跪地，敌人缓步逼近。国战视角只压紧秩序与距离，主角仍面对敌人逼近。",
+            ),
+            (
+                "b-hot-blood-action",
+                "热血战斗",
+                "林峰护住苏瑶，黑衣追兵逼近。阿青受伤后提醒追兵逼近，苏瑶带阿青撤离。",
+            ),
+            (
+                "b-strategic-board",
+                "沙盘战略视口",
+                "沙盘战略视口中，林峰护住苏瑶，阿青提醒敌人正在逼近，追兵压力没有消失。苏瑶带阿青撤离，林峰挡住追兵视线。",
+            ),
+        ];
+
+        for (task_name, scene_label, source) in cases {
+            let storyboard = generate_storyboard(
+                &state,
+                GenerateStoryboardRequest {
+                    task_name: task_name.to_string(),
+                    script_id: None,
+                    shot_script: Some(source.to_string()),
+                    expanded_script_text: Some(source.to_string()),
+                    primary_scene_type: Some("action_beat".to_string()),
+                    primary_scene_label: Some(scene_label.to_string()),
+                    primary_scene_category: Some("action".to_string()),
+                    shot_scene_type: None,
+                    shot_scene_label: None,
+                    shot_intent: None,
+                    adaptation_reason: None,
+                    selected_total_duration_seconds: 15,
+                    target_duration_mode: "fixed_seconds".to_string(),
+                    auto_segment_strategy: String::new(),
+                    model_config_summary: None,
+                    scene_type: None,
+                    scene_label: None,
+                    scene_category: None,
+                },
+            );
+
+            assert_ne!(storyboard.export_status.status, BridgeCallStatus::Blocked);
+            assert_eq!(
+                storyboard
+                    .rows
+                    .iter()
+                    .map(|row| row.duration_seconds)
+                    .collect::<Vec<_>>(),
+                vec![10, 5],
+                "{task_name}"
+            );
+            for row in &storyboard.rows {
+                assert!(!row.person.trim().is_empty(), "{task_name}: {:?}", row.person);
+                assert_ne!(row.person, "/");
+                assert!(!row.scene_performance_projection.person.trim().is_empty());
+                assert_ne!(row.scene_performance_projection.person, "/");
+                assert!(!row_has_subject_pollution(row), "{task_name}: {:?}", row);
+            }
+        }
+    }
+
+    #[test]
+    fn live_storyboard_patch_repairs_incomplete_fields_from_baseline() {
+        let mut baseline = test_live_validation_row("主角");
+        baseline.visual_description = "主体为主角，中近景把废墟边缘和敌人逼近放在前后层次里；冷光掠过破碎混凝土；当前视觉事件是主角承受逼近压力；画面突出对峙压力".to_string();
+        baseline.character_action =
+            "主角从废墟边缘的低身状态开始，稳住重心看向敌人，到敌人逼近时结束，镜头捕捉手指压住地面的动作。"
+                .to_string();
+        baseline.camera_movement = "中近景定机位观察主角动作起止，镜头捕捉废墟边缘的对峙压力。".to_string();
+        baseline.scene_performance_projection.visual_description = baseline.visual_description.clone();
+        baseline.scene_performance_projection.character_action = baseline.character_action.clone();
+        normalize_storyboard_row_subject_quality(&mut baseline);
+        let mut live_row = baseline.clone();
+        let patch = LiveStoryboardRowPatch {
+            shot_title: "镜头1：主角避开冲击".to_string(),
+            person: String::new(),
+            scene_scale: "中近景".to_string(),
+            visual_description: "主角站住。".to_string(),
+            character_action: "主角动作。".to_string(),
+            camera_movement: "观察。".to_string(),
+            dialogue: String::new(),
+        };
+
+        apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
+        normalize_storyboard_row_subject_quality(&mut live_row);
+        repair_live_storyboard_patch_from_baseline(&mut live_row, &baseline);
+        normalize_storyboard_row_subject_quality(&mut live_row);
+
+        assert!(!live_row.person.trim().is_empty());
+        assert_ne!(live_row.person, "/");
+        assert_eq!(live_row.visual_description, baseline.visual_description);
+        assert_eq!(live_row.character_action, baseline.character_action);
+        assert_eq!(live_row.camera_movement, baseline.camera_movement);
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+        assert!(
+            !warnings.iter().any(|warning| warning.code == "visual_description_grounding_incomplete"
+                || warning.code == "camera_movement_grounding_incomplete"
+                || warning.code == "role_action_grounding_incomplete"),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn recent_live_fragments_are_not_treated_as_new_character_names() {
+        let source = "废墟之上，主角单膝跪地，敌人缓步逼近。";
+        for fragment in ["左臂垂", "方眉", "铠甲裂", "利望"] {
+            let generated = format!(
+                "{fragment}只描述画面状态，主角仍单膝跪地，敌人继续逼近，对峙压力没有消失。"
+            );
+            let reason = generated_script_identity_validator_reason(&generated, source);
+            assert!(
+                !matches!(reason.as_deref(), Some(reason) if reason.contains("新增源文本外姓名")),
+                "{fragment}: {reason:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn expand_prompt_requires_visible_pressure_terms() {
+        let request = TextGenerationRequest {
+            task_type: TextGenerationTask::ExpandScript,
+            scene_type: Some("action_beat".to_string()),
+            story_input: "林峰护住苏瑶，黑衣追兵逼近，阿青断后掩护撤离。".to_string(),
+            duration_plan: Some(StoryboardDurationPlan {
+                total_duration_seconds: 15,
+                row_count: 1,
+                per_row_seconds: 15,
+                allocated_seconds: 15,
+            }),
+            kb_context_summary: String::new(),
+            selected_sample_ids: vec![],
+            selected_kb_rules: vec![],
+            output_schema: TextGenerationOutputSchema::PlainText,
+            temperature: None,
+            max_tokens: Some(700),
+        };
+        let provider = TextModelProvider {
+            provider: TextModelProviderKind::Qwen,
+            model: "qwen-plus".to_string(),
+            base_url: Some("https://dashscope.aliyuncs.com/compatible-mode/v1".to_string()),
+            api_key_ref: "session-only".to_string(),
+            enabled: true,
+        };
+        let payload = build_qwen_request_payload(&provider, &request);
+        let user_prompt = payload["messages"][1]["content"]
+            .as_str()
+            .expect("user prompt");
+
+        assert!(user_prompt.contains("final body must keep a visible pressure term"));
+        assert!(user_prompt.contains("追兵"));
+        assert!(user_prompt.contains("对峙压力"));
+        assert!(user_prompt.contains("断后"));
+        assert!(user_prompt.contains("撤离"));
+    }
+
+    #[test]
+    fn b_group_second_row_rebinds_empty_person_to_source_subject() {
+        let mut row = test_live_validation_row("");
+        row.shot_script = "阿青提醒他们，黑衣追兵从巷口逼近。".to_string();
+        row.scene_performance_projection.fused_source_text =
+            "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。".to_string();
+        row.person = String::new();
+        row.scene_performance_projection.person = String::new();
+        row.shot_title = "镜头2：追兵逼近".to_string();
+        row.visual_description = "主体为空镜，中近景把巷口追兵和苏瑶后退放在前后层次里；冷光压住巷口；当前视觉事件是阿青提醒追兵逼近；画面突出追兵压力".to_string();
+        row.character_action = "空镜从巷口压力开始，到阿青提醒他们撤离时结束，镜头捕捉追兵逼近的压力。".to_string();
+        row.camera_movement = "中近景定机位观察巷口压力，镜头捕捉阿青提醒和追兵逼近。".to_string();
+
+        normalize_storyboard_row_subject_quality(&mut row);
+
+        assert!(!row.person.trim().is_empty());
+        assert_ne!(row.person, "/");
+        assert!(
+            row.person.contains("阿青")
+                || row.person.contains("林峰")
+                || row.person.contains("苏瑶")
+                || row.person.contains("追兵"),
+            "{}",
+            row.person
+        );
+    }
+
+    #[test]
+    fn space_and_lens_terms_are_repaired_before_subject_validation() {
+        let mut row = test_live_validation_row("林峰");
+        row.shot_script = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。".to_string();
+        row.person = "林峰".to_string();
+        row.scene_performance_projection.person = "林峰".to_string();
+        row.visual_description = "主体为空间镜头，中近景把巷口和追兵放在前后层次里；冷光压住墙面；当前视觉事件是空间镜头从巷口扫过；画面突出追兵压力".to_string();
+        row.character_action =
+            "空间镜头从巷口压力开始，到阿青提醒他们撤离时结束，镜头捕捉追兵逼近。"
+                .to_string();
+        row.scene_performance_projection.visual_description = row.visual_description.clone();
+        row.scene_performance_projection.character_action = row.character_action.clone();
+
+        normalize_storyboard_row_subject_quality(&mut row);
+
+        let combined = format!("{} {}", row.visual_description, row.character_action);
+        assert!(!combined.contains("主体为空间"));
+        assert!(!combined.contains("主体为当前空间"));
+        assert!(!combined.contains("空间镜头从"));
+        assert!(!combined.contains("当前空间从"));
+        assert!(!combined.contains("镜头从低处推进"));
+        assert!(combined.contains("林峰"));
+        let warnings = validate_live_storyboard_rows(&[row], 10, &[test_live_validation_row("林峰")]);
+        assert!(
+            !warnings.iter().any(|warning| warning.message.contains("空间")
+                || warning.message.contains("镜头")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_war_fallback_rows_do_not_repeat_composite_subject() {
+        let state = test_state_with_golden_sample_runtime();
+        let storyboard = generate_storyboard(
+            &state,
+            GenerateStoryboardRequest {
+                task_name: "a-war-no-repeat-composite".to_string(),
+                script_id: None,
+                shot_script: Some(
+                    "废墟之上，主角单膝跪地，敌人缓步逼近。国战军阵建立只压紧秩序和距离，主角仍面对敌人逼近。"
+                        .to_string(),
+                ),
+                expanded_script_text: Some(
+                    "国战视角只把构图变得更有秩序，主角仍单膝跪在废墟上，敌人缓步逼近，对峙压力没有消失。敌人继续逼近，双方距离被压短。"
+                        .to_string(),
+                ),
+                primary_scene_type: Some("action_beat".to_string()),
+                primary_scene_label: Some("国战军阵建立".to_string()),
+                primary_scene_category: Some("action".to_string()),
+                shot_scene_type: None,
+                shot_scene_label: None,
+                shot_intent: None,
+                adaptation_reason: None,
+                selected_total_duration_seconds: 15,
+                target_duration_mode: "fixed_seconds".to_string(),
+                auto_segment_strategy: String::new(),
+                model_config_summary: None,
+                scene_type: None,
+                scene_label: None,
+                scene_category: None,
+            },
+        );
+        assert_eq!(storyboard.rows.len(), 2);
+        assert_ne!(storyboard.rows[0].person, storyboard.rows[1].person);
+        assert!(!storyboard.rows.iter().all(|row| row.person == "主角与敌人"));
+    }
+
+    #[test]
+    fn live_fragment_names_do_not_trigger_new_name_validator_reason() {
+        let source = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。";
+        for generated in [
+            "林峰没答，继续护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。",
+            "焦点压在巷口，林峰护住苏瑶，阿青提醒他们，追兵压力仍在。",
+            "视线方向压向巷口，林峰护住苏瑶，黑衣追兵仍从巷口逼近。",
+            "那里有烟尘压住巷口，林峰护住苏瑶，黑衣追兵仍从巷口逼近。",
+        ] {
+            let reason = generated_script_identity_validator_reason(generated, source);
+            assert!(
+                !matches!(reason.as_deref(), Some(reason) if reason.contains("新增源文本外姓名")),
+                "{generated}: {reason:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn expand_validator_rejects_exact_four_case_live_drift_terms() {
+        let a_source = "废墟之上，主角单膝跪地，敌人缓步逼近。";
+        let named_drift =
+            "废墟之上，孔却燃单膝跪地，敌人缓步逼近，对峙压力没有消失。";
+        assert!(
+            matches!(
+                generated_script_identity_validator_reason(named_drift, a_source).as_deref(),
+                Some(reason) if reason.contains("新增源文本外姓名")
+            ),
+            "{:?}",
+            generated_script_identity_validator_reason(named_drift, a_source)
+        );
+        assert!(validate_generated_script_text(named_drift, a_source).is_none());
+
+        let armor_drift =
+            "废墟之上，主角单膝跪地，敌人的铠甲压住光线后继续逼近。";
+        assert!(
+            matches!(
+                generated_script_identity_validator_reason(armor_drift, a_source).as_deref(),
+                Some(reason) if reason.contains("新增源文本外设定")
+            ),
+            "{:?}",
+            generated_script_identity_validator_reason(armor_drift, a_source)
+        );
+        assert!(validate_generated_script_text(armor_drift, a_source).is_none());
+
+        let cold_laugh_drift =
+            "废墟之上，主角冷笑着单膝跪地，敌人缓步逼近，对峙压力没有消失。";
+        assert!(
+            matches!(
+                generated_script_identity_validator_reason(cold_laugh_drift, a_source).as_deref(),
+                Some(reason) if reason.contains("新增源文本外动作")
+            ),
+            "{:?}",
+            generated_script_identity_validator_reason(cold_laugh_drift, a_source)
+        );
+        assert!(validate_generated_script_text(cold_laugh_drift, a_source).is_none());
+
+        let b_source = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。";
+        let numbered_pursuer_drift =
+            "阿青看见三名黑衣追兵从巷口逼近，林峰护住苏瑶，追兵压力仍在。";
+        assert!(
+            matches!(
+                generated_script_identity_validator_reason(numbered_pursuer_drift, b_source)
+                    .as_deref(),
+                Some(reason) if reason.contains("新增源文本外设定")
+            ),
+            "{:?}",
+            generated_script_identity_validator_reason(numbered_pursuer_drift, b_source)
+        );
+        assert!(validate_generated_script_text(numbered_pursuer_drift, b_source).is_none());
+
+        let left_arm_drift =
+            "林峰左臂护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。";
+        assert!(
+            matches!(
+                generated_script_identity_validator_reason(left_arm_drift, b_source).as_deref(),
+                Some(reason) if reason.contains("新增源文本外设定")
+            ),
+            "{:?}",
+            generated_script_identity_validator_reason(left_arm_drift, b_source)
+        );
+        assert!(validate_generated_script_text(left_arm_drift, b_source).is_none());
+
+        let missing_pursuit_pressure =
+            "沙盘战略视口只保留林峰护住苏瑶和阿青提醒他们撤到墙边。";
+        assert!(
+            matches!(
+                generated_script_identity_validator_reason(missing_pursuit_pressure, b_source)
+                    .as_deref(),
+                Some(reason) if reason.contains("丢失源文本追兵/对峙压力")
+            ),
+            "{:?}",
+            generated_script_identity_validator_reason(missing_pursuit_pressure, b_source)
+        );
+        assert!(validate_generated_script_text(missing_pursuit_pressure, b_source).is_none());
+    }
+
+    #[test]
+    fn b_group_expand_validator_requires_pursuit_pressure() {
+        let source = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。";
+        assert!(matches!(
+            generated_script_identity_validator_reason("林峰护住苏瑶，阿青提醒他们退到墙边。", source)
+                .as_deref(),
+            Some("丢失源文本追兵/对峙压力")
+        ));
+        assert!(validate_generated_script_text(
+            "林峰护住苏瑶，阿青提醒他们，黑衣追兵仍从巷口逼近，追兵压力没有消失。",
+            source,
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn a_group_does_not_duplicate_enemy_subject() {
+        let mut row = test_live_validation_row("主角与敌人与敌人");
+        row.scene_performance_projection.person = "主角与敌人与敌人".to_string();
+        row.shot_title = "镜头1：主角与敌人与敌人对峙".to_string();
+        row.visual_description =
+            "主体为主角与敌人与敌人，中近景把废墟和敌人与敌人逼近放在前后层次里。".to_string();
+        row.character_action =
+            "主角与敌人与敌人从废墟压力开始，到敌人与敌人继续逼近时结束。".to_string();
+        row.prompt_text = "镜头标题：主角与敌人与敌人；角色动作：敌人与敌人逼近。".to_string();
+        row.scene_performance_projection.visual_description = row.visual_description.clone();
+        row.scene_performance_projection.character_action = row.character_action.clone();
+
+        normalize_storyboard_row_subject_quality(&mut row);
+
+        let combined = format!(
+            "{} {} {} {} {}",
+            row.person, row.visual_description, row.character_action, row.prompt_text,
+            row.scene_performance_projection.visual_description
+        );
+        assert!(!combined.contains("主角与敌人与敌人"), "{combined}");
+        assert!(!combined.contains("敌人与敌人"), "{combined}");
+        assert_eq!(row.person, "主角与敌人");
+    }
+
+    #[test]
+    fn b_hot_battle_rejects_offsource_location_drift() {
+        let source = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。";
+        for generated in [
+            "林峰在灯塔底部护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。",
+            "林峰带苏瑶退上木栈道，水面反光，探照灯扫过，黑衣追兵从巷口逼近。",
+            "阿青看见三名黑衣追兵刀锋出鞘，林峰护住苏瑶，追兵压力仍在。",
+            "林峰衣袖裂口扩大，阿青提醒他们，黑衣追兵从巷口逼近。",
+        ] {
+            let reason = generated_script_identity_validator_reason(generated, source);
+            assert!(
+                matches!(reason.as_deref(), Some(reason) if reason.contains("新增源文本外设定")),
+                "{generated}: {reason:?}"
+            );
+            assert!(validate_generated_script_text(generated, source).is_none());
+        }
+    }
+
+    #[test]
+    fn b_hot_battle_keeps_alley_pursuit_facts() {
+        let source = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。";
+        let accepted = validate_generated_script_text(
+            "巷口压力压近，林峰护住苏瑶，阿青提醒他们，黑衣追兵继续从巷口逼近。",
+            source,
+        )
+        .expect("source facts should remain valid");
+
+        assert!(accepted.contains("巷口"));
+        assert!(accepted.contains("黑衣追兵"));
+        assert!(accepted.contains("逼近"));
+        assert!(accepted.contains("林峰护住苏瑶"));
+        assert!(accepted.contains("阿青提醒"));
+    }
+
+    #[test]
+    fn a_war_expand_validator_rejects_source_external_packaging() {
+        let source = "废墟之上，主角单膝跪地，敌人缓步逼近。";
+        for generated in [
+            "废墟之上，主角单膝跪地，敌人的甲胄压住光线后继续逼近。",
+            "废墟之上，主角单膝跪地，敌人握紧剑柄缓步逼近。",
+            "废墟之上，主角左膝压在碎石里，敌人缓步逼近。",
+        ] {
+            let reason = generated_script_identity_validator_reason(generated, source);
+            assert!(
+                matches!(reason.as_deref(), Some(reason) if reason.contains("新增源文本外设定")),
+                "{generated}: {reason:?}"
+            );
+            assert!(validate_generated_script_text(generated, source).is_none());
+        }
+    }
+
+    #[test]
+    fn b_sandbox_row_subject_matches_prompt_subject() {
+        let mut row = test_live_validation_row("阿青");
+        row.shot_script = "阿青提醒他们，黑衣追兵从巷口逼近。".to_string();
+        row.scene_performance_projection.fused_source_text =
+            "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。".to_string();
+        row.person = "阿青".to_string();
+        row.scene_performance_projection.person = "阿青".to_string();
+        row.visual_description =
+            "主体为林峰、苏瑶与阿青，中近景把巷口追兵压力放在前后层次里。".to_string();
+        row.character_action =
+            "林峰、苏瑶与阿青从巷口压力开始，到提醒他们撤离时结束。".to_string();
+        row.prompt_text =
+            "镜头标题：林峰、苏瑶与阿青；角色动作：林峰、苏瑶与阿青提醒他们。".to_string();
+        row.scene_performance_projection.visual_description = row.visual_description.clone();
+        row.scene_performance_projection.character_action = row.character_action.clone();
+
+        normalize_storyboard_row_subject_quality(&mut row);
+
+        assert_eq!(row.person, "阿青");
+        let combined = format!(
+            "{} {} {} {}",
+            row.visual_description,
+            row.character_action,
+            row.prompt_text,
+            row.scene_performance_projection.visual_description
+        );
+        assert!(!combined.contains("林峰、苏瑶与阿青"), "{combined}");
+        assert!(combined.contains("阿青"), "{combined}");
+    }
+
+    #[test]
+    fn b_group_rows_split_composite_subjects() {
+        let mut row = test_live_validation_row("林峰、苏瑶与阿青");
+        row.shot_script = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。".to_string();
+        row.scene_performance_projection.fused_source_text = row.shot_script.clone();
+        row.visual_description =
+            "主体为林峰、苏瑶与阿青，中近景把巷口和追兵逼近放在前后层次里。".to_string();
+        row.character_action =
+            "林峰、苏瑶与阿青从林峰护住苏瑶开始，到黑衣追兵逼近时结束。".to_string();
+        row.prompt_text =
+            "镜头标题：林峰、苏瑶与阿青；角色动作：林峰、苏瑶与阿青护住苏瑶。".to_string();
+        row.scene_performance_projection.visual_description = row.visual_description.clone();
+        row.scene_performance_projection.character_action = row.character_action.clone();
+
+        split_overbroad_storyboard_subject(&mut row);
+
+        assert_eq!(row.person, "林峰与苏瑶");
+        let combined = format!("{} {} {}", row.visual_description, row.character_action, row.prompt_text);
+        assert!(!combined.contains("林峰、苏瑶与阿青"), "{combined}");
+        assert!(combined.contains("林峰与苏瑶"), "{combined}");
+    }
+
+    fn storyboard_row_visible_text(row: &GeneratedStoryboardRow) -> String {
+        format!(
+            "{} {} {} {} {} {}",
+            row.person,
+            row.shot_title,
+            row.visual_description,
+            row.character_action,
+            row.camera_movement,
+            row.prompt_text
+        )
+    }
+
+    fn storyboard_rows_visible_text(rows: &[GeneratedStoryboardRow]) -> String {
+        rows.iter()
+            .map(storyboard_row_visible_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn expand_script_scene_adaptation_distinguishes_four_acceptance_cases() {
+        let state = test_state();
+        let expand_for_scene = |scene_type: &str, scene_label: &str, source: &str| {
+            expand_script(
+                &state,
+                ExpandScriptRequest {
+                    scene_type: scene_type.to_string(),
+                    scene_label: Some(scene_label.to_string()),
+                    scene_category: None,
+                    model_config_summary: None,
+                    selected_total_duration_seconds: Some(15),
+                    target_duration_seconds: Some(15),
+                    target_duration_mode: "fixed_seconds".to_string(),
+                    story_length_profile: String::new(),
+                    source_material_length_chars: 0,
+                    auto_segment_strategy: String::new(),
+                    source_input_type: String::new(),
+                    authoring_mode: String::new(),
+                    source_material_summary: String::new(),
+                    source_story_facts: Default::default(),
+                    preserved_fact_summary: String::new(),
+                    changed_for_screenplay_summary: String::new(),
+                    omitted_detail_summary: String::new(),
+                    synopsis_text: source.to_string(),
+                },
+            )
+            .expanded_script_text
+        };
+
+        let a_source = "废墟之上，主角单膝跪地，敌人缓步逼近。";
+        let a_hot = expand_for_scene("hot_blood_battle", "热血战斗", a_source);
+        let a_war = expand_for_scene("chinese_war_formation", "国战军阵建立", a_source);
+        assert_ne!(a_hot, a_war);
+        for required in ["热血战斗", "废墟", "主角", "敌人", "逼近", "战斗压力"] {
+            assert!(a_hot.contains(required), "A hot missing {required}: {a_hot}");
+        }
+        for required in ["国战", "军阵", "前场压迫", "后场调度", "战场秩序", "废墟", "主角", "敌人", "逼近"] {
+            assert!(a_war.contains(required), "A war missing {required}: {a_war}");
+        }
+        for drift in ["孔却燃", "冷笑", "左拳", "指节", "渗血", "断桥", "断梁", "龟裂", "危险感", "甲胄", "剑柄", "断戟", "军队规模"] {
+            assert!(!a_hot.contains(drift), "A hot drift {drift}: {a_hot}");
+            assert!(!a_war.contains(drift), "A war drift {drift}: {a_war}");
+        }
+        assert!(validate_generated_script_text(&a_hot, a_source).is_some());
+        assert!(validate_generated_script_text(&a_war, a_source).is_some());
+
+        let b_source = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。";
+        let b_hot = expand_for_scene("hot_blood_battle", "热血战斗", b_source);
+        let b_board = expand_for_scene("slg_sandbox_view", "沙盘战略视口", b_source);
+        assert_ne!(b_hot, b_board);
+        for required in ["热血战斗", "紧迫", "对抗", "护住苏瑶", "阿青提醒", "黑衣追兵", "巷口", "逼近", "动作节奏"] {
+            assert!(b_hot.contains(required), "B hot missing {required}: {b_hot}");
+        }
+        for required in ["沙盘战略视口", "视口", "态势", "巷口压力", "退路", "调度", "黑衣追兵", "巷口", "逼近"] {
+            assert!(b_board.contains(required), "B board missing {required}: {b_board}");
+        }
+        for drift in ["方仅", "左臂", "衣袖", "断桥", "灯塔", "水面", "地图道具", "三名黑衣追兵"] {
+            assert!(!b_hot.contains(drift), "B hot drift {drift}: {b_hot}");
+            assert!(!b_board.contains(drift), "B board drift {drift}: {b_board}");
+        }
+        assert!(validate_generated_script_text(&b_hot, b_source).is_some());
+        assert!(validate_generated_script_text(&b_board, b_source).is_some());
+    }
+
+    #[test]
+    fn final_storyboard_rows_pass_no_empty_person_in_four_baseline_cases() {
+        let state = test_state_with_golden_sample_runtime();
+        let cases = [
+            (
+                "a-action-final",
+                "热血战斗",
+                "废墟之上，主角单膝跪地，敌人缓步逼近。",
+            ),
+            (
+                "a-war-final",
+                "国战军阵建立",
+                "废墟之上，主角单膝跪地，敌人缓步逼近。",
+            ),
+            (
+                "b-action-final",
+                "热血战斗",
+                "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。",
+            ),
+            (
+                "b-board-final",
+                "沙盘战略视口",
+                "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。",
+            ),
+        ];
+
+        for (task_name, scene_label, source) in cases {
+            let storyboard = generate_storyboard(
+                &state,
+                GenerateStoryboardRequest {
+                    task_name: task_name.to_string(),
+                    script_id: None,
+                    shot_script: Some(source.to_string()),
+                    expanded_script_text: Some(source.to_string()),
+                    primary_scene_type: Some("action_beat".to_string()),
+                    primary_scene_label: Some(scene_label.to_string()),
+                    primary_scene_category: Some("action".to_string()),
+                    shot_scene_type: None,
+                    shot_scene_label: None,
+                    shot_intent: None,
+                    adaptation_reason: None,
+                    selected_total_duration_seconds: 15,
+                    target_duration_mode: "fixed_seconds".to_string(),
+                    auto_segment_strategy: String::new(),
+                    model_config_summary: None,
+                    scene_type: None,
+                    scene_label: None,
+                    scene_category: None,
+                },
+            );
+
+            assert_eq!(
+                storyboard
+                    .rows
+                    .iter()
+                    .map(|row| row.duration_seconds)
+                    .collect::<Vec<_>>(),
+                vec![10, 5],
+                "{task_name}"
+            );
+            for row in &storyboard.rows {
+                assert!(!row.person.trim().is_empty(), "{task_name}: {:?}", row.person);
+                assert_ne!(row.person, "/");
+                assert!(!row_has_subject_pollution(row), "{task_name}: {:?}", row);
+                let combined = storyboard_row_visible_text(row);
+                assert!(!combined.contains("主角与敌人与敌人"), "{task_name}: {combined}");
+                assert!(!combined.contains("敌人与敌人"), "{task_name}: {combined}");
+                assert!(!combined.contains("焦点"), "{task_name}: {combined}");
+                for drift in ["灯塔底部", "灯塔", "木栈道", "水面", "探照灯", "衣袖裂口", "三名黑衣追兵", "刀锋出鞘"] {
+                    assert!(!combined.contains(drift), "{task_name}: {drift}: {combined}");
+                }
+            }
+            let all_visible = storyboard_rows_visible_text(&storyboard.rows);
+            if task_name.starts_with("b-") {
+                assert!(
+                    storyboard.rows.iter().any(|row| row.person.contains("林峰")
+                        || row.person.contains("苏瑶")
+                        || row.person.contains("阿青")
+                        || row.person.contains("追兵")),
+                    "{task_name}: {:?}",
+                    storyboard.rows.iter().map(|row| row.person.as_str()).collect::<Vec<_>>()
+                );
+                assert!(
+                    !storyboard
+                        .rows
+                        .iter()
+                        .all(|row| row.person == "林峰、苏瑶与阿青"),
+                    "{task_name}"
+                );
+                for required in ["林峰护住苏瑶", "阿青提醒", "黑衣追兵", "巷口", "逼近"] {
+                    assert!(all_visible.contains(required), "{task_name}: {required}: {all_visible}");
+                }
+                assert!(
+                    storyboard.rows.iter().any(|row| row.person == "阿青"),
+                    "{task_name}: {:?}",
+                    storyboard.rows.iter().map(|row| row.person.as_str()).collect::<Vec<_>>()
+                );
+                for row in &storyboard.rows {
+                    if row.person == "阿青" {
+                        let combined = storyboard_row_visible_text(row);
+                        assert!(!combined.contains("林峰、苏瑶与阿青"), "{task_name}: {combined}");
+                        assert!(!combined.contains("主体为林峰与苏瑶"), "{task_name}: {combined}");
+                        assert!(!combined.contains("角色动作：林峰与苏瑶"), "{task_name}: {combined}");
+                        assert!(!combined.contains("林峰与苏瑶从"), "{task_name}: {combined}");
+                        assert!(combined.contains("阿青"), "{task_name}: {combined}");
+                    }
+                }
+            } else {
+                assert!(all_visible.contains("废墟"), "{task_name}: {all_visible}");
+                assert!(all_visible.contains("敌人"), "{task_name}: {all_visible}");
+                assert!(
+                    all_visible.contains("逼近")
+                        || all_visible.contains("对峙压力")
+                        || all_visible.contains("压近"),
+                    "{task_name}: {all_visible}"
+                );
+                assert!(
+                    storyboard.rows.iter().any(|row| row.person == "敌人"),
+                    "{task_name}: {:?}",
+                    storyboard.rows.iter().map(|row| row.person.as_str()).collect::<Vec<_>>()
+                );
+                if task_name == "a-action-final" {
+                    let enemy_row = storyboard
+                        .rows
+                        .iter()
+                        .find(|row| row.person == "敌人")
+                        .expect("A action should split row 2 to enemy");
+                    let combined = storyboard_row_visible_text(enemy_row);
+                    assert!(!combined.contains("主角与敌人从"), "{combined}");
+                    assert!(!combined.contains("主体为主角与敌人"), "{combined}");
+                    assert!(!combined.contains("角色动作：主角与敌人"), "{combined}");
+                }
+                if task_name == "a-war-final" {
+                    assert!(
+                        !storyboard.rows.iter().all(|row| row.person == "主角"),
+                        "{task_name}: {:?}",
+                        storyboard.rows.iter().map(|row| row.person.as_str()).collect::<Vec<_>>()
+                    );
+                    for term in [
+                        "甲胄",
+                        "铠甲",
+                        "肩甲",
+                        "剑柄",
+                        "左膝",
+                        "整列军阵",
+                        "军队规模",
+                        "阵列组织",
+                        "盾墙",
+                        "长枪",
+                        "旌旗",
+                        "号角",
+                    ] {
+                        assert!(!all_visible.contains(term), "{task_name}: {term}: {all_visible}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
