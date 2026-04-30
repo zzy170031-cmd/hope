@@ -1793,7 +1793,37 @@ textarea {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
+  flex-wrap: nowrap;
+}
+
+.text-dialog .edit-dialog__header-actions .toolbar-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.text-dialog .edit-dialog__header-actions .toolbar-button--compact {
+  min-width: 96px;
+}
+
+.text-dialog__scene-chip {
+  display: inline-flex;
+  flex: 0 0 190px;
+  max-width: 190px;
+  min-width: 0;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid rgba(93, 214, 220, 0.55);
+  border-radius: var(--radius-sm);
+  background: #f7ffff;
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .edit-grid {

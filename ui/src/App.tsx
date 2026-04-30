@@ -24,6 +24,7 @@ import type {
   ExportBundleResponse,
   ExportStoryboardBankResponse,
   FinalizedStoryboardShotResult,
+  GenerateStoryboardRequest,
   GenerateStoryboardResponse,
   GeneratedStoryboardRow,
   ModelConfigSummary,
@@ -39,6 +40,58 @@ import type {
 } from "./types";
 
 type HeaderPanel = "none" | "docs" | "api";
+type GenerateStoryboardRequestWithTargetDuration = GenerateStoryboardRequest & {
+  target_duration_seconds: number;
+};
+
+type HopeQaCommand = "expand_script" | "generate_storyboard";
+
+interface HopeQaTraceWarning {
+  source: string;
+  code: string;
+  message: string;
+}
+
+interface HopeQaTraceRow {
+  order: number;
+  person: string;
+  visual_description: string;
+  character_action: string;
+  camera_movement: string;
+  prompt_text: string;
+  duration_seconds: number;
+}
+
+interface HopeQaTraceRowDiff {
+  row: number;
+  field: keyof HopeQaTraceRow;
+  response: string | number;
+  ui: string | number;
+}
+
+interface HopeQaTrace {
+  version: number;
+  command: HopeQaCommand;
+  captured_at_ms: number;
+  status: string;
+  warning_codes: string[];
+  warnings: HopeQaTraceWarning[];
+  fallback_reason: string;
+  validator_reason: string;
+  response_rows_count: number;
+  ui_rows_count: number;
+  backend_rows_hash: string;
+  response_rows_hash: string;
+  ui_rows_hash: string;
+  rows_match: boolean;
+  response_rows: HopeQaTraceRow[];
+  ui_rows: HopeQaTraceRow[];
+  row_diffs: HopeQaTraceRowDiff[];
+}
+
+interface HopeQaWindow extends Window {
+  __hopeQaTrace?: HopeQaTrace;
+}
 
 interface Option<T extends string> {
   value: T;
@@ -196,6 +249,8 @@ interface SourceInputAnalysis {
 }
 
 const DEFAULT_STORYBOARD_PAGE_SIZE = 5;
+const QA_TRACE_VERSION = 1;
+const QA_TRACE_FIELD_LIMIT = 1200;
 const STORYBOARD_PAGE_SIZE_OPTIONS = [2, 3, 4, 5, 6, 10, 20];
 const DURATION_OPTIONS = [5, 10, 15, 30, 45, 60];
 const TASK_DRAFT_DURATION_HINT = "时长只用于当前任务的生成与导出标记，不会自动改写正文。";
@@ -211,6 +266,18 @@ const DEFAULT_PROJECT_ID = "project-week3-001";
 const STORYBOARD_DURATION_SOURCE = "storyboard_duration_plan.allocated_row_duration_seconds";
 const EMPTY_PROMPT_TEXT_PLACEHOLDER = "分镜提示词未生成，等待主线镜头校准";
 const EMPTY_CAMERA_MOVEMENT_PLACEHOLDER = "运镜未完整生成，等待主线运镜 grounding";
+const EMPTY_STORYBOARD_PERSON_PLACEHOLDER = "/";
+const STORYBOARD_TRUSTED_ROLE_LABELS = [
+  "主角",
+  "敌人",
+  "男主",
+  "女主",
+  "男主角",
+  "女主角",
+  "主人公",
+  "反派",
+  "配角",
+];
 const STORYBOARD_ROWS_HASH_MISMATCH_MESSAGE =
   "当前分镜内容已变化，请先保存修改或重新生成后再确定使用。";
 const SCENE_SCALE_LABELS: Record<string, string> = {
@@ -401,6 +468,7 @@ export function App() {
   const [rows, setRows] = useState<StoryboardWorkbenchRow[]>([]);
   const [rowsDirty, setRowsDirty] = useState(false);
   const [storyboardResult, setStoryboardResult] = useState<GenerateStoryboardResponse | null>(null);
+  const [qaTrace, setQaTrace] = useState<HopeQaTrace | null>(null);
   const [lastExportResult, setLastExportResult] = useState<ExportBundleResponse | null>(null);
   const [generatedSceneTasks, setGeneratedSceneTasks] = useState<GeneratedSceneTask[]>([]);
   const [sceneTasks, setSceneTasks] = useState<SceneTaskRecord[]>([]);
@@ -445,6 +513,7 @@ export function App() {
     const start = (currentPage - 1) * storyboardPageSize;
     return rows.slice(start, start + storyboardPageSize);
   }, [currentPage, rows, storyboardPageSize]);
+  const qaTraceJson = useMemo(() => (qaTrace ? JSON.stringify(qaTrace) : ""), [qaTrace]);
 
   useEffect(() => {
     setCurrentPage((value) => Math.min(value, pageCount));
@@ -477,6 +546,11 @@ export function App() {
       resizeObserver?.disconnect();
     };
   }, [rows.length, storyboardPageSizeManual]);
+
+  const publishQaTrace = (trace: HopeQaTrace) => {
+    (window as HopeQaWindow).__hopeQaTrace = trace;
+    setQaTrace(trace);
+  };
 
   const currentSceneTask = useMemo(
     () => sceneTasks.find((task) => task.id === currentTaskId) ?? null,
@@ -1213,10 +1287,11 @@ export function App() {
     setRows([]);
     setRowsDirty(false);
     setCurrentPage(1);
+    const acceptedSceneSummary = `场景：${scriptScene.label}`;
     setExportMessage(
       nextSceneTasks.length
-        ? `已确认使用当前文案，已准备 ${nextSceneTasks.length} 个镜头任务。下一步可直接开始生成。`
-        : "已确认使用当前文案，系统候选将在新建镜头任务时动态显示；请先保存任务队列后再开始生成。",
+        ? `已确认使用当前文案（${acceptedSceneSummary}），已准备 ${nextSceneTasks.length} 个镜头任务。下一步可直接开始生成。`
+        : `已确认使用当前文案（${acceptedSceneSummary}），系统候选将在新建镜头任务时动态显示；请先保存任务队列后再开始生成。`,
     );
     return true;
   };
@@ -1346,6 +1421,7 @@ export function App() {
         omitted_detail_summary: requestAnalysis.omittedDetailSummary,
         synopsis_text: storyInput,
       });
+      publishQaTrace(buildExpandScriptQaTrace(response));
       const storyBody = response.expanded_script_text.trim();
       const responseDurationSeconds = requestIsLongText
         ? resolveResponseStoryDurationSeconds(response, requestDurationSeconds)
@@ -1423,6 +1499,7 @@ export function App() {
         omitted_detail_summary: requestAnalysis.omittedDetailSummary,
         synopsis_text: storyInput,
       });
+      publishQaTrace(buildExpandScriptQaTrace(response));
       const responseSourceType = normalizeSourceInputType(
         response.source_input_type || requestAnalysis.sourceInputType,
       );
@@ -1528,7 +1605,14 @@ export function App() {
     const nextShotIndex = resolveNextShotIndexForCandidate(firstCandidate.id);
     const defaultTaskName = formatDefaultShotTaskName(firstCandidate.sceneIndex, nextShotIndex);
 
-    setTaskDraft(createTaskDraftFromCandidate(firstCandidate, defaultTaskName, shotCandidateBaseDuration, nextShotIndex));
+    setTaskDraft(
+      createTaskDraftFromCandidate(
+        firstCandidate,
+        defaultTaskName,
+        resolveCandidateTaskDurationSeconds(firstCandidate, shotCandidateBaseDuration, acceptedPlanMode),
+        nextShotIndex,
+      ),
+    );
   };
 
   const handleTaskCandidateSelect = (candidateId: string) => {
@@ -1546,7 +1630,7 @@ export function App() {
       createTaskDraftFromCandidate(
         candidate,
         formatDefaultShotTaskName(candidate.sceneIndex, nextShotIndex),
-        shotCandidateBaseDuration,
+        resolveCandidateTaskDurationSeconds(candidate, shotCandidateBaseDuration, acceptedPlanMode),
         nextShotIndex,
       ),
     );
@@ -1676,7 +1760,7 @@ export function App() {
         createTaskDraftFromCandidate(
           currentCandidate,
           formatDefaultShotTaskName(currentCandidate.sceneIndex, nextShotIndex),
-          shotCandidateBaseDuration,
+          resolveCandidateTaskDurationSeconds(currentCandidate, shotCandidateBaseDuration, acceptedPlanMode),
           nextShotIndex,
         ),
       );
@@ -1700,6 +1784,10 @@ export function App() {
 
   const handleImportScript = () => {
     if (bridgeBusy) {
+      return;
+    }
+    if (!canImportScript) {
+      setExportMessage("请先点击“确定使用”同步当前文本、场景和时长后再导入镜头任务。");
       return;
     }
     if (!sceneTasks.length) {
@@ -1761,7 +1849,7 @@ export function App() {
     setTaskSegmentTitle(sourceSegmentTitle);
     setBridgeBusy("generate");
     try {
-      const response = await invokeGenerateStoryboard({
+      const request: GenerateStoryboardRequestWithTargetDuration = {
         task_name: sourceTaskName,
         script_id: sourceScriptId,
         scene_type: taskSceneOption.value,
@@ -1779,13 +1867,15 @@ export function App() {
             ? "镜头任务使用用户选择的局部场景方向。"
             : null,
         expanded_script_text: source,
+        target_duration_seconds: taskDurationSeconds,
         selected_total_duration_seconds: taskDurationSeconds,
         target_duration_mode: FIXED_DURATION_MODE,
         auto_segment_strategy: AUTO_SEGMENT_STRATEGY_FIXED_SECONDS,
         model_config_summary: modelConfigSummary,
-      });
-      const taskCharacters = extractCharacterNamesFromText(source);
-      const nextRows = response.rows.map((row) => mapGeneratedStoryboardRow(row, taskCharacters));
+      };
+      const response = await invokeGenerateStoryboard(request);
+      const nextRows = response.rows.map((row) => mapGeneratedStoryboardRow(row));
+      publishQaTrace(buildGenerateStoryboardQaTrace(response, nextRows));
       if (isBlockedStoryboardResponse(response)) {
         setStoryboardResult(null);
         setRows([]);
@@ -2430,17 +2520,20 @@ export function App() {
     ? {
         label: "导入镜头任务",
         onClick: handleImportScript,
-        disabled: bridgeBusy !== null,
+        disabled: bridgeBusy !== null || !canImportScript,
       }
     : {
         label: "开始生成",
         onClick: handleGenerate,
         disabled: !desktopRuntimeAvailable || bridgeBusy !== null || !canGenerate,
       };
+  const textDialogSceneOption =
+    textDialog?.kind === "expandedScript" ? expandedScriptScene ?? selectedSceneOption : selectedSceneOption;
 
   return (
     <Shell>
       <div className="reference-workbench">
+        <div id="hope-qa-trace" hidden data-hope-qa-trace={qaTraceJson} />
         <div className="reference-shell">
           <header className="reference-topbar">
             <div className="reference-brand">
@@ -2745,7 +2838,7 @@ export function App() {
                   type="button"
                   className={currentSceneTask ? "task-current-card" : "task-current-card task-current-card--empty"}
                   onClick={handleImportScript}
-                  disabled={!sceneTasks.length || bridgeBusy !== null}
+                  disabled={!sceneTasks.length || bridgeBusy !== null || !canImportScript}
                   aria-label="选择镜头任务"
                   title={
                     currentSceneTask
@@ -2772,7 +2865,7 @@ export function App() {
                 type="button"
                 className="action-button action-button--light"
                 onClick={handleImportScript}
-                disabled={!sceneTasks.length || bridgeBusy !== null}
+                disabled={!sceneTasks.length || bridgeBusy !== null || !canImportScript}
               >
                 导入镜头任务
               </button>
@@ -2847,7 +2940,7 @@ export function App() {
                         <td>
                           <LongTextCell
                             label="人物"
-                            value={formatInternalPlaceholder(row.person)}
+                            value={formatStoryboardWorkbenchPerson(row)}
                             compact
                             onOpen={() => openStoryboardCellDialog(row, "person", "人物")}
                           />
@@ -3096,7 +3189,7 @@ export function App() {
                             <td>{shot.shot_order}</td>
                             <td>{shot.shot_task_name}</td>
                             <td>{shot.shot_duration_seconds} 秒</td>
-                            <td>{formatInternalPlaceholder(firstRow?.person ?? "not_specified")}</td>
+                            <td>{formatStoryboardBackendPerson(firstRow?.person ?? "")}</td>
                             <td>{formatInternalPlaceholder(firstRow?.character_action ?? "待明确")}</td>
                             <td>{promptReady}</td>
                             <td>{shot.confirmed ? "已确认" : "未确认"}</td>
@@ -3260,7 +3353,7 @@ export function App() {
                     <strong>当前任务来源</strong>
                     <span>
                       {taskDraft.segmentTitle || "自定义片段"} · 预计任务 {taskDraft.durationSeconds} 秒 ·
-                      人物：{extractCharacterNamesFromText(taskDraft.scriptText).join("、") || "未识别"}
+                      人物：{extractCharacterNamesFromText(taskDraft.scriptText).join("、") || EMPTY_STORYBOARD_PERSON_PLACEHOLDER}
                     </span>
                     <small>
                       {taskDraft.editingTaskRecordId
@@ -3431,6 +3524,14 @@ export function App() {
                   <span>{textDialog.helper}</span>
                 </div>
                 <div className="edit-dialog__header-actions">
+                  {textDialog.kind === "synopsis" || textDialog.kind === "expandedScript" ? (
+                    <div
+                      className="text-dialog__scene-chip"
+                      title={`当前选择场景：${textDialogSceneOption.group} / ${textDialogSceneOption.value}`}
+                    >
+                      场景：{textDialogSceneOption.label}
+                    </div>
+                  ) : null}
                   {textDialog.kind === "synopsis" && textDialog.editable ? (
                     <button
                       type="button"
@@ -3512,21 +3613,6 @@ export function App() {
                 )}
                 <div className="text-dialog__actions">
                   <span>Enter 可换行，正文区域可上下滚动。</span>
-                  {textDialog.kind === "expandedScript" || textDialog.kind === "synopsis" ? (
-                    <button
-                      type="button"
-                      className="action-button action-button--light"
-                      onClick={handleConfirmTextDialogUse}
-                      disabled={
-                        bridgeBusy !== null ||
-                        (textDialog.kind === "expandedScript"
-                          ? !(synopsis.trim() || expandedScript.trim()) || expandedScriptAccepted
-                          : !textDialog.value.trim())
-                      }
-                    >
-                      {textDialog.kind === "expandedScript" && expandedScriptAccepted ? "已确认使用" : "确定使用"}
-                    </button>
-                  ) : null}
                   {textDialog.editable ? (
                     <button
                       type="button"
@@ -4169,20 +4255,42 @@ function buildSourceStoryFactsForUi(text: string): SourceStoryFacts {
 }
 
 function extractCharacterNamesFromText(text: string) {
-  const matches = text.match(/[\u4e00-\u9fa5]{2,4}/g) ?? [];
-  const stopWords = new Set([
+  const names: string[] = [];
+  for (const label of STORYBOARD_TRUSTED_ROLE_LABELS) {
+    if (text.includes(label) && !names.includes(label)) {
+      names.push(label);
+    }
+  }
+  return names;
+}
+
+function isTrustedStoryboardPersonCandidate(value: string) {
+  const candidate = value.trim();
+  if (!candidate) {
+    return false;
+  }
+  if (candidate === "not_specified" || candidate === "not_specified_by_v120_bridge") {
+    return false;
+  }
+
+  const trustedRoleLabels = new Set(STORYBOARD_TRUSTED_ROLE_LABELS);
+  const blockedExactValues = new Set([
     "当前",
     "镜头",
-    "任务",
-    "系统",
-    "候选",
+    "焦点",
+    "构图",
+    "画面",
+    "声音",
+    "脚步",
+    "脚步声来",
+    "风在断壁",
+    "瓦砾上",
+    "环境",
     "场景",
     "目标",
     "人物",
-    "主角",
-    "敌人",
     "动作",
-    "画面",
+    "光线",
     "身体",
     "衣袍",
     "石墙",
@@ -4197,27 +4305,72 @@ function extractCharacterNamesFromText(text: string) {
     "空气",
     "左手",
     "右手",
+    "半边肩",
     "双掌",
     "长剑",
     "软剑",
     "短刀",
+    "瓦砾",
+    "断壁",
+    "而过",
+    "都像",
+    "猛然单与瞳孔骤",
+    "林风蹲",
+    "关系保",
+    "终于",
+    "边咳了",
+    "时抬",
+    "初立",
+    "后颈",
+    "林峰背",
   ]);
-  const names: string[] = [];
-  for (const match of matches) {
-    if (stopWords.has(match) || /^(一个|一声|一道|这一|那个|没有|不是|只是|已经|突然|然后|继续|同时|之间|之中|之上|之下)$/.test(match)) {
-      continue;
-    }
-    if (/(而|的|了|着|在|从|把|被|向|将|与|和|及|或|于|中|上|下|里|外)$/.test(match)) {
-      continue;
-    }
-    if (!names.includes(match)) {
-      names.push(match);
-    }
-    if (names.length >= 4) {
-      break;
-    }
+  if (blockedExactValues.has(candidate)) {
+    return false;
   }
-  return names;
+
+  const combinationSegments = candidate
+    .split(/\s*[与和、，,\/／]\s*/g)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (combinationSegments.length > 1) {
+    return combinationSegments.every((segment) =>
+      isTrustedStoryboardPersonSegment(segment, trustedRoleLabels, blockedExactValues),
+    );
+  }
+
+  return isTrustedStoryboardPersonSegment(candidate, trustedRoleLabels, blockedExactValues);
+}
+
+function isTrustedStoryboardPersonSegment(
+  candidate: string,
+  trustedRoleLabels: Set<string>,
+  blockedExactValues: Set<string>,
+) {
+  if (trustedRoleLabels.has(candidate)) {
+    return true;
+  }
+
+  if (blockedExactValues.has(candidate)) {
+    return false;
+  }
+
+  if (!/^[\u4e00-\u9fa5]{2,4}$/.test(candidate)) {
+    return false;
+  }
+
+  if (/^(一个|一声|一道|这一|那个|没有|不是|只是|已经|突然|然后|继续|同时|之间|之中|之上|之下)$/.test(candidate)) {
+    return false;
+  }
+
+  if (/(而|的|了|着|在|从|把|被|向|将|与|和|及|或|于|中|上|下|里|外)$/.test(candidate)) {
+    return false;
+  }
+
+  if (/(的人|的手|人影|镜头|焦点|脚步|风声|瓦砾|断壁|废墟|地面|空气|构图|画面|动作|声音|环境|场景)$/.test(candidate)) {
+    return false;
+  }
+
+  return true;
 }
 
 function preservedFactSummaryForUi(facts: SourceStoryFacts) {
@@ -4327,6 +4480,197 @@ function formatTextModelRunMessage(warnings: ProductWarning[]) {
   return hasTextModelFallback(warnings)
     ? "未启用千问或调用失败，已使用本地候选结果"
     : "千问文本生成已完成";
+}
+
+function buildExpandScriptQaTrace(response: ExpandScriptResponse): HopeQaTrace {
+  const warnings = collectQaTraceWarnings([
+    { source: "warnings", warnings: response.warnings },
+    { source: "blockers", warnings: response.blockers ?? [] },
+    { source: "continuity_warnings", warnings: response.continuity_warnings ?? [] },
+  ]);
+
+  return buildHopeQaTrace({
+    command: "expand_script",
+    status: response.status ?? "Ready",
+    warnings,
+    responseRows: [],
+    uiRows: [],
+    backendRowsHash: "",
+  });
+}
+
+function buildGenerateStoryboardQaTrace(
+  response: GenerateStoryboardResponse,
+  uiRows: StoryboardWorkbenchRow[],
+): HopeQaTrace {
+  const rowWarnings = response.rows.flatMap((row) => row.prompt_text_compilation_warnings ?? []);
+  const warnings = collectQaTraceWarnings([
+    { source: "export_status.warnings", warnings: response.export_status.warnings },
+    { source: "export_status.blockers", warnings: response.export_status.blockers },
+    { source: "row.prompt_text_compilation_warnings", warnings: rowWarnings },
+  ]);
+
+  return buildHopeQaTrace({
+    command: "generate_storyboard",
+    status: response.export_status.status,
+    warnings,
+    responseRows: normalizeResponseRowsForQa(response.rows),
+    uiRows: normalizeWorkbenchRowsForQa(uiRows),
+    backendRowsHash: response.rows_hash ?? "",
+  });
+}
+
+function buildHopeQaTrace(input: {
+  command: HopeQaCommand;
+  status: string;
+  warnings: HopeQaTraceWarning[];
+  responseRows: HopeQaTraceRow[];
+  uiRows: HopeQaTraceRow[];
+  backendRowsHash: string;
+}): HopeQaTrace {
+  const responseRowsHash = stableQaHash(input.responseRows);
+  const uiRowsHash = stableQaHash(input.uiRows);
+  return {
+    version: QA_TRACE_VERSION,
+    command: input.command,
+    captured_at_ms: Date.now(),
+    status: sanitizeQaText(input.status),
+    warning_codes: input.warnings.map((warning) => warning.code),
+    warnings: input.warnings,
+    fallback_reason: resolveQaFallbackReason(input.warnings),
+    validator_reason: resolveQaValidatorReason(input.warnings),
+    response_rows_count: input.responseRows.length,
+    ui_rows_count: input.uiRows.length,
+    backend_rows_hash: sanitizeQaText(input.backendRowsHash),
+    response_rows_hash: responseRowsHash,
+    ui_rows_hash: uiRowsHash,
+    rows_match: responseRowsHash === uiRowsHash,
+    response_rows: input.responseRows,
+    ui_rows: input.uiRows,
+    row_diffs: diffQaRows(input.responseRows, input.uiRows),
+  };
+}
+
+function collectQaTraceWarnings(
+  groups: Array<{ source: string; warnings: ProductWarning[] }>,
+): HopeQaTraceWarning[] {
+  const seen = new Set<string>();
+  const collected: HopeQaTraceWarning[] = [];
+
+  groups.forEach((group) => {
+    group.warnings.forEach((warning) => {
+      const item = {
+        source: group.source,
+        code: String(warning.code ?? ""),
+        message: sanitizeQaText(warning.message ?? ""),
+      };
+      const key = `${item.source}\n${item.code}\n${item.message}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        collected.push(item);
+      }
+    });
+  });
+
+  return collected;
+}
+
+function normalizeResponseRowsForQa(rows: GeneratedStoryboardRow[]): HopeQaTraceRow[] {
+  return rows.map((row) => ({
+    order: Number(row.order ?? 0),
+    person: sanitizeQaText(row.person),
+    visual_description: sanitizeQaText(row.visual_description),
+    character_action: sanitizeQaText(row.character_action),
+    camera_movement: sanitizeQaText(resolveCameraMovement(row)),
+    prompt_text: sanitizeQaText(row.prompt_text),
+    duration_seconds: Number(row.duration_seconds ?? 0),
+  }));
+}
+
+function normalizeWorkbenchRowsForQa(rows: StoryboardWorkbenchRow[]): HopeQaTraceRow[] {
+  return rows.map((row) => ({
+    order: Number(row.order ?? 0),
+    person: sanitizeQaText(formatStoryboardWorkbenchPerson(row)),
+    visual_description: sanitizeQaText(row.visualDescription),
+    character_action: sanitizeQaText(row.characterAction),
+    camera_movement: sanitizeQaText(row.cameraMovement),
+    prompt_text: sanitizeQaText(row.prompt),
+    duration_seconds: Number(row.shotDurationSeconds ?? row.durationSeconds ?? 0),
+  }));
+}
+
+function resolveQaFallbackReason(warnings: HopeQaTraceWarning[]) {
+  const warning = warnings.find((item) =>
+    isTextModelFallbackWarning({ code: item.code, message: item.message }) ||
+    /fallback|missing|closed|network|invalid|not_supported/i.test(`${item.code} ${item.message}`),
+  );
+  return warning ? formatQaWarningReason(warning) : "";
+}
+
+function resolveQaValidatorReason(warnings: HopeQaTraceWarning[]) {
+  const warning = warnings.find((item) =>
+    /validator|ungrounded|grounding|generated_script|subject|person/i.test(
+      `${item.code} ${item.message}`,
+    ),
+  );
+  return warning ? formatQaWarningReason(warning) : "";
+}
+
+function formatQaWarningReason(warning: HopeQaTraceWarning) {
+  const detail = warning.message || warning.code;
+  return sanitizeQaText(`${warning.source}:${warning.code}: ${detail}`);
+}
+
+function diffQaRows(responseRows: HopeQaTraceRow[], uiRows: HopeQaTraceRow[]): HopeQaTraceRowDiff[] {
+  const fields: Array<keyof HopeQaTraceRow> = [
+    "order",
+    "person",
+    "visual_description",
+    "character_action",
+    "camera_movement",
+    "prompt_text",
+    "duration_seconds",
+  ];
+  const diffs: HopeQaTraceRowDiff[] = [];
+  const rowCount = Math.max(responseRows.length, uiRows.length);
+
+  for (let index = 0; index < rowCount; index += 1) {
+    const responseRow = responseRows[index] ?? null;
+    const uiRow = uiRows[index] ?? null;
+    fields.forEach((field) => {
+      const responseValue = responseRow ? responseRow[field] : "[missing]";
+      const uiValue = uiRow ? uiRow[field] : "[missing]";
+      if (responseValue !== uiValue) {
+        diffs.push({
+          row: index + 1,
+          field,
+          response: responseValue,
+          ui: uiValue,
+        });
+      }
+    });
+  }
+
+  return diffs;
+}
+
+function stableQaHash(value: unknown) {
+  const source = JSON.stringify(value);
+  let hash = 2166136261;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function sanitizeQaText(value: unknown) {
+  return String(value ?? "")
+    .replace(/((?:api[_-]?key|authorization|bearer|token|secret|password)\s*[:=]\s*["']?)[^"',\s;]+/gi, "$1[redacted]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [redacted]")
+    .replace(/\b(?:sk|AKIA)[-_A-Za-z0-9]{12,}\b/g, "[redacted-secret]")
+    .replace(/(HOPE_TEXT_MODEL_API_KEY(?:_REF)?\s*=\s*)[^\s;]+/gi, "$1[redacted]")
+    .slice(0, QA_TRACE_FIELD_LIMIT);
 }
 
 function normalizeApiKeyRef(value: string) {
@@ -4526,18 +4870,17 @@ function createShotCandidateFromSegment(
   fallbackScene: SceneOption,
   explicitTitle?: string,
 ): ShotCandidate {
-  const scene = recommendSceneOptionForCandidateSegment(segment, fallbackScene);
   const sceneIndex = index + 1;
   return {
     id: idPrefix === "custom" ? "custom" : `${idPrefix}-${sceneIndex}`,
     sceneIndex,
-    title: explicitTitle ?? `${scene.label} · 场景候选 ${sceneIndex}`,
+    title: explicitTitle ?? `${fallbackScene.label} · 场景候选 ${sceneIndex}`,
     text: segment,
     preview: truncatePreview(segment),
     durationSeconds,
-    sceneType: scene.value,
-    sceneLabel: scene.label,
-    sceneCategory: scene.group,
+    sceneType: fallbackScene.value,
+    sceneLabel: fallbackScene.label,
+    sceneCategory: fallbackScene.group,
   };
 }
 
@@ -4840,7 +5183,8 @@ function createTaskDraftFromCandidate(
   fallbackDurationSeconds: number,
   shotIndexWithinScene = 1,
 ): TaskDraftState {
-  const durationSeconds = normalizeDurationOption(candidate.durationSeconds, fallbackDurationSeconds);
+  const durationSeconds = normalizeDurationOption(fallbackDurationSeconds, candidate.durationSeconds);
+  const candidateDurationSeconds = normalizeDurationOption(candidate.durationSeconds, durationSeconds);
   return {
     mode: "create",
     sourceKind: "candidate",
@@ -4854,7 +5198,7 @@ function createTaskDraftFromCandidate(
     durationSeconds,
     baseSegmentTitle: candidate.title,
     baseScriptText: candidate.text,
-    baseDurationSeconds: durationSeconds,
+    baseDurationSeconds: candidateDurationSeconds,
     sourceSceneType: candidate.sceneType,
     sourceSceneLabel: candidate.sceneLabel,
     sourceSceneCategory: candidate.sceneCategory,
@@ -4862,6 +5206,18 @@ function createTaskDraftFromCandidate(
     manualEditedFields: createTaskDraftEditFlags(),
     durationHint: TASK_DRAFT_DURATION_HINT,
   };
+}
+
+function resolveCandidateTaskDurationSeconds(
+  candidate: ShotCandidate,
+  acceptedDurationSeconds: number,
+  targetDurationMode: TargetDurationMode,
+) {
+  if (targetDurationMode === FIXED_DURATION_MODE) {
+    return normalizeDurationOption(acceptedDurationSeconds, candidate.durationSeconds);
+  }
+
+  return normalizeDurationOption(candidate.durationSeconds, acceptedDurationSeconds);
 }
 
 function updateTaskDraftDurationFromSystemCandidates(
@@ -5248,25 +5604,86 @@ function formatInternalPlaceholder(value: string) {
     .replace(/\bfused_scene_performance_core_preserved\b/g, "保持表演连续性");
 }
 
-function mapGeneratedStoryboardRow(
-  row: GeneratedStoryboardRow,
-  characterContext: string[] = [],
-): StoryboardWorkbenchRow {
+function shouldDisplayStoryboardPerson(value: string) {
+  const cleanValue = value.trim();
+  if (!cleanValue || cleanValue === EMPTY_STORYBOARD_PERSON_PLACEHOLDER || cleanValue === "未指定角色") {
+    return false;
+  }
+  return isTrustedStoryboardPersonCandidate(cleanValue);
+}
+
+function resolveStoryboardPersonDisplay(backendPerson: string) {
+  if (shouldDisplayStoryboardPerson(backendPerson)) {
+    return formatInternalPlaceholder(backendPerson);
+  }
+  return EMPTY_STORYBOARD_PERSON_PLACEHOLDER;
+}
+
+function formatStoryboardBackendPerson(backendPerson: string) {
+  return resolveStoryboardPersonDisplay(String(backendPerson ?? ""));
+}
+
+function formatStoryboardWorkbenchPerson(row: StoryboardWorkbenchRow) {
+  const backendPerson = row.backendRow?.person ?? "";
+  const backendDisplay = formatStoryboardBackendPerson(backendPerson);
+  if (backendDisplay !== EMPTY_STORYBOARD_PERSON_PLACEHOLDER) {
+    return backendDisplay;
+  }
+  return resolveStoryboardPersonDisplay(row.person);
+}
+
+function storyboardFieldUsesUntrustedPersonSubject(value: string, backendPerson: string) {
+  const untrustedSubjects = [
+    backendPerson,
+    "环境",
+    "场景",
+    "空镜",
+    "镜头",
+    "焦点",
+    "构图",
+    "画面",
+    "声音",
+    "脚步",
+    "废墟",
+    "断壁",
+    "瓦砾",
+    "都像",
+    "喉结滚与尚未",
+  ]
+    .map((item) => item.trim())
+    .filter((item, index, items) => item && items.indexOf(item) === index && !shouldDisplayStoryboardPerson(item));
+
+  return untrustedSubjects.some((subject) => {
+    const escapedSubject = escapeRegExp(subject);
+    return new RegExp(`主体为${escapedSubject}|${escapedSubject}(?:从|在|将|把|沿|正|开始|靠近|逼近|动作)`).test(value);
+  });
+}
+
+function sanitizeStoryboardPersonAnchoredField(value: string, backendPerson: string, displayPerson: string) {
+  const formattedValue = formatInternalPlaceholder(value || "");
+  if (!formattedValue.trim()) {
+    return EMPTY_STORYBOARD_PERSON_PLACEHOLDER;
+  }
+  if (
+    displayPerson === EMPTY_STORYBOARD_PERSON_PLACEHOLDER &&
+    storyboardFieldUsesUntrustedPersonSubject(formattedValue, backendPerson)
+  ) {
+    return EMPTY_STORYBOARD_PERSON_PLACEHOLDER;
+  }
+  if (displayPerson === EMPTY_STORYBOARD_PERSON_PLACEHOLDER) {
+    return formattedValue;
+  }
+  return replaceGenericCharacterLabel(formattedValue, displayPerson);
+}
+
+function mapGeneratedStoryboardRow(row: GeneratedStoryboardRow): StoryboardWorkbenchRow {
   const promptText = row.prompt_text?.trim();
-  const primaryCharacter = characterContext[0] ?? "";
-  const person = replaceGenericCharacterLabel(
-    formatInternalPlaceholder(row.person || "not_specified"),
-    primaryCharacter,
-  );
-  const visualDescription = replaceGenericCharacterLabel(row.visual_description, primaryCharacter);
-  const characterAction = replaceGenericCharacterLabel(
-    formatInternalPlaceholder(row.character_action),
-    primaryCharacter,
-  );
-  const prompt = replaceGenericCharacterLabel(
-    promptText || EMPTY_PROMPT_TEXT_PLACEHOLDER,
-    primaryCharacter,
-  );
+  const backendPerson = String(row.person ?? "").trim();
+  const person = resolveStoryboardPersonDisplay(backendPerson);
+  const visualDescription = formatInternalPlaceholder(row.visual_description || "");
+  const characterAction = formatInternalPlaceholder(row.character_action || "");
+  const prompt = promptText || EMPTY_PROMPT_TEXT_PLACEHOLDER;
+  const cameraMovement = resolveCameraMovement(row);
   return {
     id: row.shot_id || createRowId(),
     order: row.order,
@@ -5281,7 +5698,7 @@ function mapGeneratedStoryboardRow(
     groundingSource: row.grounding_source,
     person,
     shot: formatInternalPlaceholder(row.shot_title || row.shot_id),
-    cameraMovement: formatCameraMovement(resolveCameraMovement(row)),
+    cameraMovement: formatCameraMovement(cameraMovement),
     sceneScale: row.scene_scale || "source",
     visualDescription,
     characterAction,
@@ -5334,7 +5751,7 @@ function toGeneratedStoryboardRows(rows: StoryboardWorkbenchRow[]): GeneratedSto
       fused_source_text: row.shotScript ?? row.visualDescription,
       sequence_grouping: sequenceGrouping,
     };
-    const backendPersonDisplay = formatInternalPlaceholder(backend?.person || "not_specified");
+    const backendPersonDisplay = formatStoryboardBackendPerson(backend?.person ?? "");
     const backendShotDisplay = formatInternalPlaceholder(backend?.shot_title || backend?.shot_id || "");
     const backendCameraMovement = backend ? resolveCameraMovement(backend) : "";
     const backendCameraMovementDisplay = formatCameraMovement(backendCameraMovement);

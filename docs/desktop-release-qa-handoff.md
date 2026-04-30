@@ -82,6 +82,18 @@ The four required smoke cases are stored in:
 tests/qa/desktop-four-groups.json
 ```
 
+The repo-local CDP runner used for the visible WebView2 workflow is:
+
+```text
+scripts/hope-ui-driven-trace-runner.mjs
+```
+
+Example invocation after the release shell CDP target is ready:
+
+```powershell
+node .\scripts\hope-ui-driven-trace-runner.mjs --case A_hot_blood_battle --scene 热血战斗 --source "废墟之上，主角单膝跪地，敌人缓步逼近。" --duration 15 --compact 1
+```
+
 Each case must:
 
 - start the real release shell through CDP
@@ -163,6 +175,26 @@ C:\Users\Administrator\Desktop\九州剧本文字版2.docx
 ```
 
 Do not run the 403-case matrix until the four-group trace gate passes.
+
+## 2026-04-30 Bridge State
+
+This checkpoint was pushed so another machine can continue without depending on
+local-only files from the original machine.
+
+Latest known release-shell facts before the bridge:
+
+- real release WebView2 launch and `StopOnly` cleanup were stable
+- provider hard gate reported `live_ready=true`
+- Qwen live calls returned HTTP 403 in all four groups
+- scene-type rewrite text passed at the fallback text layer
+- `generate_storyboard` still used fallback because of HTTP 403
+- A + war formation still had a UI/response mismatch:
+  response row 2 person was `敌人与废墟`, while UI displayed `/`
+- do not open the 403-case matrix from the original machine
+
+Next machine should continue from the pushed branch by first confirming the same
+four-group gate, then resolving the 403 and A + war formation UI person
+mismatch before entering the full 403-case matrix.
 
 ## Release Preparation Gate
 
