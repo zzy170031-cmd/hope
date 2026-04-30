@@ -1,0 +1,50 @@
+{
+  "name": "Hope desktop four-group qwen trace gate",
+  "provider": "qwen",
+  "model": "qwen-plus",
+  "duration_seconds": 15,
+  "requires_real_release_webview2": true,
+  "requires_one_shell_per_case": true,
+  "requires_trace": [
+    "window.__hopeQaTrace",
+    "#hope-qa-trace[data-hope-qa-trace]"
+  ],
+  "cases": [
+    {
+      "id": "A_hot_blood_battle",
+      "scene_type": "hot_blood_battle",
+      "scene_label": "热血战斗",
+      "source_text": "废墟之上，主角单膝跪地，敌人缓步逼近。",
+      "must_preserve": ["废墟", "主角", "单膝跪地", "敌人", "缓步逼近"],
+      "scene_rewrite_must_show": ["对抗", "逼近", "压力"],
+      "forbidden": ["孔却燃", "冷笑", "甲胄", "铠甲", "剑柄", "左膝", "断戟", "断桥", "渗血"]
+    },
+    {
+      "id": "A_chinese_war_formation",
+      "scene_type": "chinese_war_formation",
+      "scene_label": "国战军阵建立",
+      "source_text": "废墟之上，主角单膝跪地，敌人缓步逼近。",
+      "must_preserve": ["废墟", "主角", "单膝跪地", "敌人", "缓步逼近"],
+      "scene_rewrite_must_show": ["战场", "军阵", "压迫"],
+      "forbidden": ["孔却燃", "甲胄", "铠甲", "剑柄", "左膝", "断戟", "整列军阵", "军队规模"]
+    },
+    {
+      "id": "B_hot_blood_battle",
+      "scene_type": "hot_blood_battle",
+      "scene_label": "热血战斗",
+      "source_text": "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。",
+      "must_preserve": ["林峰护住苏瑶", "阿青提醒", "黑衣追兵", "巷口", "逼近"],
+      "scene_rewrite_must_show": ["护住", "追兵", "逼近", "动作压力"],
+      "forbidden": ["左臂", "衣袖", "三名黑衣追兵", "编号追兵组", "断桥", "灯塔", "木栈道", "水面", "探照灯"]
+    },
+    {
+      "id": "B_slg_sandbox_view",
+      "scene_type": "slg_sandbox_view",
+      "scene_label": "沙盘战略视口",
+      "source_text": "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。",
+      "must_preserve": ["林峰护住苏瑶", "阿青提醒", "黑衣追兵", "巷口", "逼近"],
+      "scene_rewrite_must_show": ["视口", "态势", "巷口压力", "退路"],
+      "forbidden": ["方仅", "左臂", "衣袖", "断桥", "灯塔", "木栈道", "水面", "探照灯", "地图道具"]
+    }
+  ]
+}
