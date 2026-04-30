@@ -532,6 +532,71 @@ impl AppState {
 }
 
 fn default_text_model_provider_status() -> TextModelProviderStatus {
+    let provider = normalize_provider_id(
+        &env::var("HOPE_TEXT_MODEL_PROVIDER").unwrap_or_else(|_| "qwen".to_string()),
+    );
+    let model = env::var("HOPE_TEXT_MODEL_MODEL")
+        .ok()
+        .and_then(non_empty_trimmed)
+        .unwrap_or_else(|| "qwen-plus".to_string());
+    let configured_base_url = env::var("HOPE_TEXT_MODEL_BASE_URL")
+        .ok()
+        .and_then(non_empty_trimmed);
+    let base_url_present = configured_base_url.is_some();
+    let base_url = configured_base_url
+        .or_else(|| Some("https://dashscope.aliyuncs.com/compatible-mode/v1".to_string()));
+    let api_key_ref = env::var("HOPE_TEXT_MODEL_API_KEY_REF")
+        .ok()
+        .and_then(non_empty_trimmed)
+        .unwrap_or_else(|| "env:HOPE_TEXT_MODEL_API_KEY".to_string());
+    let api_key_present = api_key_ref
+        .strip_prefix("env:")
+        .and_then(|name| env::var(name).ok())
+        .and_then(non_empty_trimmed)
+        .is_some();
+    let enabled = provider == "qwen" && parse_bool_env("HOPE_TEXT_MODEL_ENABLED");
+    let model_present = !model.trim().is_empty();
+    let live_ready =
+        provider == "qwen" && enabled && model_present && base_url_present && api_key_present;
+    let (status, message) = if provider != "qwen" {
+        (
+            "reserved",
+            "Provider is reserved and is not enabled for live text generation.",
+        )
+    } else if !model_present {
+        ("api_config_unsaved", "Model is missing.")
+    } else if !base_url_present {
+        ("base_url_missing", "Base URL is missing.")
+    } else if !enabled {
+        (
+            "provider_disabled",
+            "Provider is not enabled; local candidates will be used.",
+        )
+    } else if !api_key_present {
+        ("session_key_missing", "Session API key is missing.")
+    } else {
+        (
+            "enabled",
+            "Qwen provider is enabled for live text generation.",
+        )
+    };
+
+    TextModelProviderStatus {
+        provider,
+        model,
+        base_url,
+        enabled,
+        base_url_present,
+        api_key_present,
+        live_ready,
+        status: status.to_string(),
+        message: message.to_string(),
+        storage: "session-only".to_string(),
+    }
+}
+
+#[allow(dead_code)]
+fn legacy_default_text_model_provider_status() -> TextModelProviderStatus {
     TextModelProviderStatus {
         provider: "qwen".to_string(),
         model: "qwen-plus".to_string(),
@@ -615,6 +680,18 @@ fn non_empty_trimmed(value: impl AsRef<str>) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn parse_bool_env(name: &str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

@@ -15,6 +15,7 @@
       {
         "title": "Hope Desktop Shell",
         "label": "main",
+        "create": false,
         "width": 1280,
         "height": 860,
         "minWidth": 1260,

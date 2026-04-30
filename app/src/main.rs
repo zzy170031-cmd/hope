@@ -29,7 +29,13 @@ use hope_app::{
     },
 };
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, process::Command};
+use std::{
+    fs,
+    io::Write,
+    path::PathBuf,
+    process::{self, Command},
+};
+use tauri::{Manager, WebviewWindow, WebviewWindowBuilder};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -54,13 +60,171 @@ struct ImportedStoryDocument {
     text: String,
 }
 
+const QA_CDP_PORT_ARG: &str = "--hope-qa-cdp-port=";
+const QA_BASE_URL_ARG: &str = "--hope-qa-base-url=";
+const QA_ENV_FILE_ARG: &str = "--hope-qa-env-file=";
+const QA_LAUNCH_ID_ARG: &str = "--hope-qa-launch-id=";
+const QA_MODEL_ARG: &str = "--hope-qa-model=";
+const QA_MODEL_ENABLED_ARG: &str = "--hope-qa-model-enabled=";
+const QA_PID_FILE_ARG: &str = "--hope-qa-pid-file=";
+const QA_PROVIDER_ARG: &str = "--hope-qa-provider=";
+const QA_WEBVIEW2_USER_DATA_ARG: &str = "--hope-qa-webview2-user-data-folder=";
+const WEBVIEW2_DEFAULT_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,\
+msSmartScreenProtection --noerrdialogs --disable-crash-reporter --disable-breakpad";
+
 fn main() {
-    if std::env::args().any(|arg| arg == "--contracts") {
+    install_shell_diagnostic_panic_hook();
+    append_shell_diagnostic("process_start");
+    let args = std::env::args().collect::<Vec<_>>();
+    if args.iter().any(|arg| arg == "--contracts") {
         print_contract_smoke();
         return;
     }
 
+    append_shell_diagnostic("before_configure_qa_webview2_from_args");
+    configure_qa_webview2_from_args(&args);
+    append_shell_diagnostic("after_configure_qa_webview2_from_args");
     run_native_host();
+}
+
+fn install_shell_diagnostic_panic_hook() {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        append_shell_diagnostic(&format!(
+            "panic={}",
+            sanitize_diagnostic_value(&panic_info.to_string())
+        ));
+        previous_hook(panic_info);
+    }));
+}
+
+fn configure_qa_webview2_from_args(args: &[String]) {
+    if let Some(launch_id) = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix(QA_LAUNCH_ID_ARG))
+        .filter(|value| !value.trim().is_empty())
+    {
+        append_shell_diagnostic(&format!("launch_id={launch_id}"));
+    }
+
+    if let Some(env_file) = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix(QA_ENV_FILE_ARG))
+        .filter(|value| !value.trim().is_empty())
+    {
+        apply_qa_env_file(env_file);
+    }
+
+    if let Some(provider) = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix(QA_PROVIDER_ARG))
+        .filter(|value| !value.trim().is_empty())
+    {
+        set_process_env_var("HOPE_TEXT_MODEL_PROVIDER", provider);
+    }
+
+    if let Some(model) = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix(QA_MODEL_ARG))
+        .filter(|value| !value.trim().is_empty())
+    {
+        set_process_env_var("HOPE_TEXT_MODEL_MODEL", model);
+    }
+
+    if let Some(enabled) = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix(QA_MODEL_ENABLED_ARG))
+        .and_then(parse_qa_bool)
+    {
+        set_process_env_var(
+            "HOPE_TEXT_MODEL_ENABLED",
+            if enabled { "true" } else { "false" },
+        );
+    }
+
+    if let Some(base_url) = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix(QA_BASE_URL_ARG))
+        .filter(|value| !value.trim().is_empty())
+    {
+        set_process_env_var("HOPE_TEXT_MODEL_BASE_URL", base_url);
+    }
+
+    if let Some(port) = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix(QA_CDP_PORT_ARG))
+        .filter(|port| is_valid_tcp_port(port))
+    {
+        set_process_env_var(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            &format!("{WEBVIEW2_DEFAULT_BROWSER_ARGS} --remote-debugging-port={port}"),
+        );
+    }
+
+    if let Some(user_data_folder) = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix(QA_WEBVIEW2_USER_DATA_ARG))
+        .filter(|value| !value.trim().is_empty())
+    {
+        set_process_env_var("WEBVIEW2_USER_DATA_FOLDER", user_data_folder);
+    }
+
+    if let Some(pid_file) = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix(QA_PID_FILE_ARG))
+        .filter(|value| !value.trim().is_empty())
+    {
+        let _ = fs::write(pid_file, process::id().to_string());
+    }
+}
+
+fn apply_qa_env_file(path: &str) {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return;
+    };
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((key, raw_value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if !matches!(
+            key,
+            "HOPE_TEXT_MODEL_API_KEY" | "HOPE_TEXT_MODEL_BASE_URL"
+        ) {
+            continue;
+        }
+        let value = raw_value
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_string();
+        if !value.is_empty() {
+            set_process_env_var(key, &value);
+        }
+    }
+}
+
+fn is_valid_tcp_port(value: &str) -> bool {
+    value.parse::<u16>().is_ok_and(|port| port > 0)
+}
+
+fn parse_qa_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn set_process_env_var(key: &str, value: &str) {
+    // This runs before Tauri/WebView2 starts, so setting process env is bounded to startup.
+    unsafe {
+        std::env::set_var(key, value);
+    }
 }
 
 fn print_contract_smoke() {
@@ -73,7 +237,36 @@ fn print_contract_smoke() {
 }
 
 fn run_native_host() {
-    tauri::Builder::default()
+    append_shell_diagnostic("before_builder_run");
+    let run_result = tauri::Builder::default()
+        .setup(|app| {
+            append_shell_diagnostic("setup_enter");
+            let has_webview2_cdp_args = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
+                .is_ok_and(|value| value.contains("--remote-debugging-port="));
+            let has_webview2_user_data_folder = std::env::var("WEBVIEW2_USER_DATA_FOLDER")
+                .is_ok_and(|value| !value.trim().is_empty());
+            append_shell_diagnostic(&format!(
+                "webview2_remote_debugging_arg_present={has_webview2_cdp_args}"
+            ));
+            append_shell_diagnostic(&format!(
+                "webview2_user_data_folder_present={has_webview2_user_data_folder}"
+            ));
+
+            let window = ensure_main_window(app).map_err(|error| {
+                append_shell_diagnostic(&format!(
+                    "main_window_error={}",
+                    sanitize_diagnostic_value(&error.to_string())
+                ));
+                error
+            })?;
+            append_shell_diagnostic("main_window_found");
+            append_shell_diagnostic("main_window=found");
+            let _ = window.show();
+            let _ = window.set_focus();
+            append_shell_diagnostic("setup_exit");
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             project_create_or_switch,
             writer_entry_snapshot,
@@ -94,8 +287,90 @@ fn run_native_host() {
             select_export_save_path,
             copy_export_artifact_to_path
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run Hope desktop native host");
+        .run(tauri::generate_context!());
+
+    if let Err(error) = run_result {
+        append_shell_diagnostic(&format!(
+            "builder_run_error={}",
+            sanitize_diagnostic_value(&error.to_string())
+        ));
+        panic!("failed to run Hope desktop native host: {error}");
+    }
+}
+
+fn ensure_main_window<R: tauri::Runtime>(app: &mut tauri::App<R>) -> tauri::Result<WebviewWindow<R>> {
+    append_shell_diagnostic("before_main_window_get");
+    if let Some(window) = app.get_webview_window("main") {
+        append_shell_diagnostic("main_window_found=precreated");
+        append_shell_diagnostic("main_window=precreated");
+        return Ok(window);
+    }
+
+    append_shell_diagnostic("main_window_missing");
+    append_shell_diagnostic("before_main_window_config_lookup");
+    let Some(config) = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "main")
+        .cloned()
+        .or_else(|| app.config().app.windows.first().cloned())
+    else {
+        append_shell_diagnostic("main_window_config=missing");
+        return Err(tauri::Error::WindowLabelAlreadyExists("main".to_string()));
+    };
+
+    append_shell_diagnostic("before_builder_from_config");
+    let mut builder = WebviewWindowBuilder::from_config(app.handle(), &config)?;
+    if let Ok(args) = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
+        if !args.trim().is_empty() {
+            append_shell_diagnostic("main_window_additional_browser_args=applied");
+            builder = builder.additional_browser_args(&args);
+        }
+    }
+    if let Ok(data_dir) = std::env::var("WEBVIEW2_USER_DATA_FOLDER") {
+        if !data_dir.trim().is_empty() {
+            append_shell_diagnostic("main_window_data_directory=applied");
+            builder = builder.data_directory(PathBuf::from(data_dir));
+        }
+    }
+
+    append_shell_diagnostic("before_main_window_build");
+    let window = match builder.build() {
+        Ok(window) => window,
+        Err(error) => {
+            append_shell_diagnostic(&format!(
+                "main_window_build_error={}",
+                sanitize_diagnostic_value(&error.to_string())
+            ));
+            return Err(error);
+        }
+    };
+    append_shell_diagnostic("main_window=created_in_setup");
+    Ok(window)
+}
+
+fn sanitize_diagnostic_value(value: &str) -> String {
+    let mut sanitized = value.replace('\r', " ").replace('\n', " ");
+    for sensitive in ["api_key", "apikey", "token", "secret", "authorization"] {
+        if sanitized.to_ascii_lowercase().contains(sensitive) {
+            sanitized = "<redacted sensitive diagnostic>".to_string();
+            break;
+        }
+    }
+    sanitized
+}
+
+fn append_shell_diagnostic(line: &str) {
+    let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("hope-shell-diagnostic.log")
+    else {
+        return;
+    };
+    let _ = writeln!(file, "[hope-shell-diagnostic] {line}");
 }
 
 #[tauri::command]
