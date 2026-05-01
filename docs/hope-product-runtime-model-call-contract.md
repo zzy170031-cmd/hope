@@ -25,6 +25,9 @@ Current engineering must first complete all of the following before entering 403
 - `qwen-max` storyboard grounding fix
 - Four trace gates
 - Scene-type-driven rewrite gate
+- StoryFactFrame binding gate
+- Anime script confirmation protocol gate
+- Cross rewrite drift smoke gate
 
 Development-time GPT/Codex usage is separate from product runtime model usage. Developer assistance, code generation, QA investigation, and thread governance must never be counted as product runtime model calls and must never be mixed with the product runtime provider/model ledger.
 
@@ -227,6 +230,9 @@ Before any 403-case work starts, the engineering sequence must complete:
 1. `qwen-max` storyboard grounding fix
 2. Four trace gates
 3. Scene-type-driven rewrite gate
+4. StoryFactFrame binding gate
+5. Anime script confirmation protocol gate
+6. Cross rewrite drift smoke gate
 
 ## Freeze Summary
 
