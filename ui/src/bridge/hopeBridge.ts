@@ -770,6 +770,33 @@ function normalizeStoryboardExportStatus(raw: unknown) {
   };
 }
 
+function normalizeStringList(raw: unknown): string[] {
+  return Array.isArray(raw) ? raw.map((item) => String(item)) : [];
+}
+
+function normalizeStoryboardBindingEvidence(raw: unknown) {
+  const evidence = readObject(raw ?? {}, "storyboard binding evidence");
+  return {
+    current_case_id: String(evidence.current_case_id ?? evidence.currentCaseId ?? ""),
+    source_text_hash: String(evidence.source_text_hash ?? evidence.sourceTextHash ?? ""),
+    accepted_rewrite_hash: String(evidence.accepted_rewrite_hash ?? evidence.acceptedRewriteHash ?? ""),
+    task_script_hash: String(evidence.task_script_hash ?? evidence.taskScriptHash ?? ""),
+    story_fact_frame_hash: String(evidence.story_fact_frame_hash ?? evidence.storyFactFrameHash ?? ""),
+    source_profile: String(evidence.source_profile ?? evidence.sourceProfile ?? ""),
+    scene_type: String(evidence.scene_type ?? evidence.sceneType ?? ""),
+    duration_seconds: Number(evidence.duration_seconds ?? evidence.durationSeconds ?? 0),
+    duration_plan_hash: String(evidence.duration_plan_hash ?? evidence.durationPlanHash ?? ""),
+    storyboard_rows_hash: String(evidence.storyboard_rows_hash ?? evidence.storyboardRowsHash ?? ""),
+    must_keep_facts: normalizeStringList(evidence.must_keep_facts ?? evidence.mustKeepFacts),
+    missing_source_facts: normalizeStringList(evidence.missing_source_facts ?? evidence.missingSourceFacts),
+    forbidden_facts: normalizeStringList(evidence.forbidden_facts ?? evidence.forbiddenFacts),
+    forbidden_fact_hits: normalizeStringList(evidence.forbidden_fact_hits ?? evidence.forbiddenFactHits),
+    stale_binding_detected: Boolean(evidence.stale_binding_detected ?? evidence.staleBindingDetected),
+    kb_rule_pack_ids: normalizeStringList(evidence.kb_rule_pack_ids ?? evidence.kbRulePackIds),
+    kb_snapshot_hash: String(evidence.kb_snapshot_hash ?? evidence.kbSnapshotHash ?? ""),
+  };
+}
+
 function normalizeGenerateStoryboardResponse(raw: unknown): GenerateStoryboardResponse {
   const response = readObject(raw, "generate_storyboard response");
   const durationPlan = readObject(
@@ -838,6 +865,9 @@ function normalizeGenerateStoryboardResponse(raw: unknown): GenerateStoryboardRe
       | null,
     kb_router_result: normalizeKbRouterResult(
       response.kb_router_result ?? response.kbRouterResult ?? response,
+    ),
+    binding_evidence: normalizeStoryboardBindingEvidence(
+      response.binding_evidence ?? response.bindingEvidence ?? {},
     ),
   };
 }

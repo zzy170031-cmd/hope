@@ -2,29 +2,30 @@ use std::{io, sync::OnceLock};
 
 use crate::{
     ipc::{
-        ConfigureTextModelProviderRequest, ExpandScriptRequest, ExportBundleRequest,
-        ExportStoryboardBankRequest, GenerateStoryboardRequest, ListStoryboardShotResultsRequest,
-        ProjectCreateOrSwitchRequest, RemoveStoryboardShotResultRequest,
-        SaveStoryboardShotResultRequest, StoryboardRenderSegmentCutPreviewSnapshotRequest,
-        TextModelProviderStatus, UpdateStoryboardRowsRequest, UpdateStoryboardShotResultRequest,
-        ValidationExportPanelSnapshotRequest, WriterEntrySnapshotRequest,
-        CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND, EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND,
-        EXPORT_STORYBOARD_BANK_COMMAND, GENERATE_STORYBOARD_COMMAND,
-        GET_TEXT_MODEL_PROVIDER_STATUS_COMMAND, LIST_STORYBOARD_SHOT_RESULTS_COMMAND,
-        PROJECT_CREATE_OR_SWITCH_COMMAND, REMOVE_STORYBOARD_SHOT_RESULT_COMMAND,
-        SAVE_STORYBOARD_SHOT_RESULT_COMMAND, STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
+        CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND, ConfigureTextModelProviderRequest,
+        EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, EXPORT_STORYBOARD_BANK_COMMAND,
+        ExpandScriptRequest, ExportBundleRequest, ExportStoryboardBankRequest,
+        GENERATE_STORYBOARD_COMMAND, GET_TEXT_MODEL_PROVIDER_STATUS_COMMAND,
+        GenerateStoryboardRequest, LIST_STORYBOARD_SHOT_RESULTS_COMMAND,
+        ListStoryboardShotResultsRequest, PROJECT_CREATE_OR_SWITCH_COMMAND,
+        ProjectCreateOrSwitchRequest, REMOVE_STORYBOARD_SHOT_RESULT_COMMAND,
+        RemoveStoryboardShotResultRequest, SAVE_STORYBOARD_SHOT_RESULT_COMMAND,
+        STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND, SaveStoryboardShotResultRequest,
+        StoryboardRenderSegmentCutPreviewSnapshotRequest, TextModelProviderStatus,
         UPDATE_STORYBOARD_ROWS_COMMAND, UPDATE_STORYBOARD_SHOT_RESULT_COMMAND,
-        VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND, WRITER_ENTRY_SNAPSHOT_COMMAND,
+        UpdateStoryboardRowsRequest, UpdateStoryboardShotResultRequest,
+        VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND, ValidationExportPanelSnapshotRequest,
+        WRITER_ENTRY_SNAPSHOT_COMMAND, WriterEntrySnapshotRequest,
     },
     runtime::{
+        ProjectCreateOrSwitchSnapshot, StoryboardRenderSegmentCutPreviewSnapshot,
+        ValidationExportPanelSnapshot, WriterEntrySnapshot,
         build_project_create_or_switch_snapshot,
         build_storyboard_rendersegment_cut_preview_snapshot,
         build_validation_export_panel_snapshot, build_writer_entry_snapshot, expand_script,
         export_bundle, export_storyboard_bank, generate_storyboard, list_storyboard_shot_results,
         remove_storyboard_shot_result, save_storyboard_rows, save_storyboard_shot_result,
-        update_storyboard_shot_result, ProjectCreateOrSwitchSnapshot,
-        StoryboardRenderSegmentCutPreviewSnapshot, ValidationExportPanelSnapshot,
-        WriterEntrySnapshot,
+        update_storyboard_shot_result,
     },
     state::AppState,
 };
@@ -310,20 +311,21 @@ mod tests {
     };
 
     use crate::ipc::{
-        ConfigureTextModelProviderRequest, ProjectCreateOrSwitchRequest,
-        StoryboardRenderSegmentCutPreviewSnapshotRequest, ValidationExportPanelSnapshotRequest,
-        WriterEntrySnapshotRequest, CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND, EXPAND_SCRIPT_COMMAND,
-        EXPORT_BUNDLE_COMMAND, EXPORT_STORYBOARD_BANK_COMMAND, GENERATE_STORYBOARD_COMMAND,
-        GET_TEXT_MODEL_PROVIDER_STATUS_COMMAND, LIST_STORYBOARD_SHOT_RESULTS_COMMAND,
+        CONFIGURE_TEXT_MODEL_PROVIDER_COMMAND, ConfigureTextModelProviderRequest,
+        EXPAND_SCRIPT_COMMAND, EXPORT_BUNDLE_COMMAND, EXPORT_STORYBOARD_BANK_COMMAND,
+        GENERATE_STORYBOARD_COMMAND, GET_TEXT_MODEL_PROVIDER_STATUS_COMMAND,
+        LIST_STORYBOARD_SHOT_RESULTS_COMMAND, ProjectCreateOrSwitchRequest,
         REMOVE_STORYBOARD_SHOT_RESULT_COMMAND, SAVE_STORYBOARD_SHOT_RESULT_COMMAND,
-        UPDATE_STORYBOARD_ROWS_COMMAND, UPDATE_STORYBOARD_SHOT_RESULT_COMMAND,
+        StoryboardRenderSegmentCutPreviewSnapshotRequest, UPDATE_STORYBOARD_ROWS_COMMAND,
+        UPDATE_STORYBOARD_SHOT_RESULT_COMMAND, ValidationExportPanelSnapshotRequest,
+        WriterEntrySnapshotRequest,
     };
 
     use super::{
-        desktop_invoke_contract, invoke_desktop_command, invoke_desktop_command_with_state,
-        DesktopInvokeRequest, DesktopInvokeResponse, DESKTOP_INVOKE_COMMANDS,
+        DESKTOP_INVOKE_COMMANDS, DesktopInvokeRequest, DesktopInvokeResponse,
         PROJECT_CREATE_OR_SWITCH_COMMAND, STORYBOARD_RENDERSEGMENT_CUT_PREVIEW_SNAPSHOT_COMMAND,
         VALIDATION_EXPORT_PANEL_SNAPSHOT_COMMAND, WRITER_ENTRY_SNAPSHOT_COMMAND,
+        desktop_invoke_contract, invoke_desktop_command, invoke_desktop_command_with_state,
     };
     use crate::{runtime::ValidationExportPanelState, state::AppState};
 
@@ -497,14 +499,18 @@ mod tests {
             DesktopInvokeResponse::ExpandScript(response) => {
                 assert!(!response.expanded_script_text.contains("api_key_present"));
                 assert!(!response.expanded_script_text.contains("prompt_text"));
-                assert!(response
-                    .warnings
-                    .iter()
-                    .any(|warning| warning.code == "text_model_api_key_missing"));
-                assert!(response
-                    .warnings
-                    .iter()
-                    .any(|warning| warning.code == "text_model_live_expand_fallback"));
+                assert!(
+                    response
+                        .warnings
+                        .iter()
+                        .any(|warning| warning.code == "text_model_api_key_missing")
+                );
+                assert!(
+                    response
+                        .warnings
+                        .iter()
+                        .any(|warning| warning.code == "text_model_live_expand_fallback")
+                );
                 assert!(!response.expanded_script_text.contains("api_key:"));
             }
             _ => panic!("expand_script should return expand response"),
@@ -522,9 +528,11 @@ mod tests {
         )
         .expect_err("mismatched request variant should be rejected before state load");
 
-        assert!(error
-            .to_string()
-            .contains("desktop invoke command is not registered yet"));
+        assert!(
+            error
+                .to_string()
+                .contains("desktop invoke command is not registered yet")
+        );
     }
 
     #[test]
@@ -618,10 +626,12 @@ mod tests {
             DesktopInvokeResponse::ValidationExportPanelSnapshot(snapshot) => {
                 assert_eq!(snapshot.project_id, "project-week3-001");
                 assert!(!snapshot.summary_items.is_empty());
-                assert!(snapshot
-                    .summary_items
-                    .iter()
-                    .any(|item| item.label == "repair_recommendations"));
+                assert!(
+                    snapshot
+                        .summary_items
+                        .iter()
+                        .any(|item| item.label == "repair_recommendations")
+                );
                 assert_eq!(snapshot.repair_recommendations.len(), 0);
                 assert!(snapshot.summary_items.iter().any(|item| {
                     item.label == "repair_recommendations"
@@ -689,9 +699,11 @@ mod tests {
                 assert!(!response.expanded_script_text.contains("scene_type:"));
                 assert!(!response.expanded_script_text.contains("prompt_text"));
                 assert!(!response.expanded_script_text.contains("0-3s"));
-                assert!(!response
-                    .expanded_script_text
-                    .contains("desktop-smoke-secret"));
+                assert!(
+                    !response
+                        .expanded_script_text
+                        .contains("desktop-smoke-secret")
+                );
                 assert!(!format!("{:?}", response.warnings).contains("desktop-smoke-secret"));
                 assert!(!response.kb_router_result.selected_sample_ids.is_empty());
                 assert!(!response.kb_router_result.selected_kb_rules.is_empty());
@@ -743,6 +755,15 @@ mod tests {
                     base_url_present: true,
                     api_key_present: false,
                 }),
+                accepted_rewrite_snapshot: None,
+                current_case_id: String::new(),
+                source_text_hash: String::new(),
+                accepted_rewrite_hash: String::new(),
+                task_script_hash: String::new(),
+                story_fact_frame_hash: String::new(),
+                source_profile: String::new(),
+                must_keep_facts: Vec::new(),
+                forbidden_facts: Vec::new(),
             }),
         )
         .expect("generate_storyboard bridge command should succeed");
@@ -751,11 +772,13 @@ mod tests {
             DesktopInvokeResponse::GenerateStoryboard(response) => {
                 assert!(!response.rows.is_empty());
                 assert!(response.rows.iter().all(|row| !row.prompt_text.is_empty()));
-                assert!(response
-                    .export_status
-                    .warnings
-                    .iter()
-                    .any(|warning| warning.code == "model_provider_reserved"));
+                assert!(
+                    response
+                        .export_status
+                        .warnings
+                        .iter()
+                        .any(|warning| warning.code == "model_provider_reserved")
+                );
                 assert!((3..=5).contains(&response.kb_router_result.selected_sample_ids.len()));
                 assert!(!response.kb_router_result.selected_kb_rules.is_empty());
                 assert_eq!(
@@ -848,10 +871,12 @@ mod tests {
                     Some(result_id.as_str())
                 );
                 assert_eq!(ready_artifact.edited_rows_applied, true);
-                assert!(ready_artifact
-                    .prompt_text_compilation_statuses
-                    .iter()
-                    .any(|status| status == "ReadyStub"));
+                assert!(
+                    ready_artifact
+                        .prompt_text_compilation_statuses
+                        .iter()
+                        .any(|status| status == "ReadyStub")
+                );
                 assert!(!ready_artifact.selected_sample_ids.is_empty());
                 assert!(!ready_artifact.selected_kb_rule_ids.is_empty());
                 assert_eq!(ready_artifact.full_kb_rows_included, 0);

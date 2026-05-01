@@ -212,6 +212,29 @@ export interface KbRouterRuntimeResponse {
   full_kb_rows_included?: number;
 }
 
+export interface InferredSceneFact {
+  fact: string;
+  inference_reason: string;
+  inference_scope: string;
+}
+
+export interface AcceptedRewriteSnapshotBinding {
+  current_case_id: string;
+  source_text_hash: string;
+  accepted_rewrite_hash: string;
+  scene_type: string;
+  scene_label: string;
+  scene_category?: string;
+  duration_seconds: number;
+  target_duration_mode: TargetDurationMode;
+  accepted_confirmation_body: string;
+  story_fact_frame_hash: string;
+  explicit_facts: string[];
+  inferred_scene_facts: InferredSceneFact[];
+  must_keep_facts: string[];
+  forbidden_facts: string[];
+}
+
 export interface GenerateStoryboardRequest {
   task_name: string;
   script_id?: string | null;
@@ -231,6 +254,15 @@ export interface GenerateStoryboardRequest {
   target_duration_mode?: TargetDurationMode;
   auto_segment_strategy?: string;
   model_config_summary?: ModelConfigSummary;
+  accepted_rewrite_snapshot?: AcceptedRewriteSnapshotBinding;
+  current_case_id?: string;
+  source_text_hash?: string;
+  accepted_rewrite_hash?: string;
+  task_script_hash?: string;
+  story_fact_frame_hash?: string;
+  source_profile?: string;
+  must_keep_facts?: string[];
+  forbidden_facts?: string[];
 }
 
 export type BridgeCallStatus = "Ready" | "WarningOnly" | "Blocked" | "Gated";
@@ -280,6 +312,26 @@ export interface StoryboardDurationPlan {
   allocated_seconds: number;
 }
 
+export interface StoryboardBindingEvidence {
+  current_case_id: string;
+  source_text_hash: string;
+  accepted_rewrite_hash: string;
+  task_script_hash: string;
+  story_fact_frame_hash: string;
+  source_profile: string;
+  scene_type: string;
+  duration_seconds: number;
+  duration_plan_hash: string;
+  storyboard_rows_hash: string;
+  must_keep_facts: string[];
+  missing_source_facts: string[];
+  forbidden_facts: string[];
+  forbidden_fact_hits: string[];
+  stale_binding_detected: boolean;
+  kb_rule_pack_ids: string[];
+  kb_snapshot_hash: string;
+}
+
 export interface StoryboardExportStatus {
   status: BridgeCallStatus;
   blockers: ProductWarning[];
@@ -317,6 +369,7 @@ export interface GenerateStoryboardResponse {
   dirty?: boolean;
   dirty_source_note?: string | null;
   kb_router_result?: KbRouterRuntimeResponse | null;
+  binding_evidence?: StoryboardBindingEvidence;
 }
 
 export interface ExportBundleRequest {

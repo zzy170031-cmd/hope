@@ -9,11 +9,36 @@ const args = Object.fromEntries(
   }).filter((item) => item.length === 2),
 );
 
+const allowedQwenTextModels = [
+  "qwen-max",
+  "qvq-max-2025-03-25",
+  "qwen-math-turbo",
+  "qwen-plus",
+  "qwen3-max-preview",
+  "qwen3-max-2025-09-23",
+  "qwen3-max",
+  "qwen3-max-2026-01-23",
+  "qwen3-max-thinking",
+  "qwen3.5-plus",
+  "qwen-long",
+];
+
+const modelPriority = [
+  "qwen-max",
+  "qvq-max-2025-03-25",
+  "qwen-math-turbo",
+];
+
 const input = {
   caseId: args.case ?? "case",
   sceneLabel: args.scene ?? "",
   sourceText: args.source ?? "",
   durationSeconds: Number(args.duration ?? 15),
+  expectedProvider: args["expected-provider"] || "qwen",
+  expectedModel: args["expected-model"] || "qwen-max",
+  allowedModels: allowedQwenTextModels,
+  modelPriority,
+  assertBinding: args["assert-binding"] === "1",
 };
 
 function getJson(url) {
@@ -89,6 +114,12 @@ function browserWorkflowExpression(payload) {
   return `
 (async () => {
   const input = ${JSON.stringify(payload)};
+  const allowedModels = Array.isArray(input.allowedModels) ? input.allowedModels.map(String) : [];
+  const modelPriority = Array.isArray(input.modelPriority) ? input.modelPriority.map(String) : [];
+  const options = {
+    expectedProvider: String(input.expectedProvider ?? "qwen"),
+    expectedModel: String(input.expectedModel ?? "qwen-max"),
+  };
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const textOf = (element) => (element?.textContent || "").replace(/\\s+/g, " ").trim();
   const visible = (element) => Boolean(element && (element.offsetWidth || element.offsetHeight || element.getClientRects().length));
@@ -135,19 +166,87 @@ function browserWorkflowExpression(payload) {
     await sleep(options.pause ?? 350);
     return textOf(button);
   };
-  const setSelectByLabel = (label, desired) => {
+  const clickFirstButton = async (labels, options = {}) => {
+    for (const label of labels) {
+      const button = findButton(label, { ...options, enabled: options.enabled ?? true });
+      if (button) {
+        button.scrollIntoView({ block: "center", inline: "center" });
+        button.click();
+        await sleep(options.pause ?? 350);
+        return textOf(button);
+      }
+    }
+    throw new Error("button not found: " + labels.join(" or ") + "; buttons=" + buttons().map(textOf).join(" | "));
+  };
+  const selectByLabel = (label) => {
     const labels = Array.from(document.querySelectorAll("label"));
     const owner = labels.find((item) => textOf(item).includes(label) && item.querySelector("select"));
     const select = owner?.querySelector("select");
     if (!select) {
       throw new Error("select not found: " + label);
     }
+    return select;
+  };
+  const optionByValueOrText = (select, desired) => {
+    return Array.from(select.options).find((item) => item.value === desired || textOf(item).includes(desired));
+  };
+  const setSelectByLabel = (label, desired) => {
+    const select = selectByLabel(label);
     const option = Array.from(select.options).find((item) => item.value === desired || textOf(item).includes(desired));
     if (!option) {
       throw new Error("option not found: " + label + " -> " + desired);
     }
     nativeValue(select, option.value);
     return { label, value: select.value, optionText: textOf(option) };
+  };
+  const toggleSelectAwayAndBack = async (label, desired) => {
+    const select = selectByLabel(label);
+    const desiredOption = optionByValueOrText(select, desired);
+    if (!desiredOption) {
+      throw new Error("option not found: " + label + " -> " + desired);
+    }
+    const options = Array.from(select.options);
+    const alternate =
+      options.find((item) => item.value !== desiredOption.value && !textOf(item).includes("长文本")) ||
+      options.find((item) => item.value !== desiredOption.value);
+    if (!alternate) {
+      throw new Error("alternate option not found: " + label);
+    }
+    nativeValue(select, alternate.value);
+    await sleep(350);
+    nativeValue(select, desiredOption.value);
+    await sleep(350);
+    return {
+      label,
+      desired: desiredOption.value,
+      desiredText: textOf(desiredOption),
+      alternate: alternate.value,
+      alternateText: textOf(alternate),
+    };
+  };
+  const normalizeSourceEditorState = async (sceneLabel, durationValue) => {
+    if (findButton("放大编辑", { enabled: true })) {
+      return { action: "already_editable" };
+    }
+    if (!findButton("查看确认稿", { enabled: true })) {
+      return { action: "no_confirmation_snapshot_button" };
+    }
+
+    const attempts = [
+      ["单镜头时长", durationValue],
+      ["场景类型", sceneLabel],
+    ];
+    const errors = [];
+    for (const [label, desired] of attempts) {
+      try {
+        const toggle = await toggleSelectAwayAndBack(label, desired);
+        await waitFor(() => findButton("放大编辑", { enabled: true }), "source editor restored to editable", 30000);
+        return { action: "ui_select_toggle", toggle };
+      } catch (error) {
+        errors.push(error.message);
+      }
+    }
+    throw new Error("source editor normalization failed: " + errors.join(" | "));
   };
   const readTraceAttr = () => {
     const raw = document.getElementById("hope-qa-trace")?.getAttribute("data-hope-qa-trace") || "";
@@ -166,7 +265,7 @@ function browserWorkflowExpression(payload) {
     const raw = await invoke("get_text_model_provider_status");
     return {
       provider: String(raw?.provider ?? "qwen"),
-      model: String(raw?.model ?? "qwen-plus"),
+      model: String(raw?.model ?? "unknown"),
       enabled: Boolean(raw?.enabled),
       base_url_present: Boolean(raw?.base_url_present ?? raw?.baseUrlPresent),
       api_key_present: Boolean(raw?.api_key_present ?? raw?.apiKeyPresent),
@@ -198,15 +297,37 @@ function browserWorkflowExpression(payload) {
     };
   };
 
+  if (options.expectedProvider === "qwen" && !allowedModels.includes(options.expectedModel)) {
+    return {
+      ok: false,
+      stage: "expected_model_not_allowed",
+      expectedProvider: options.expectedProvider,
+      expectedModel: options.expectedModel,
+      allowedModels,
+      modelPriority,
+      layout: layoutEvidence(),
+    };
+  }
+
   window.confirm = () => true;
   await waitFor(() => document.readyState === "complete" || document.querySelector(".reference-workbench"), "app shell ready", 30000);
   const status = await providerStatus();
-  if (!(status.provider === "qwen" && status.model === "qwen-plus" && status.enabled && status.base_url_present && status.api_key_present && status.live_ready && status.status === "enabled")) {
-    return { ok: false, stage: "provider_status", providerStatus: status, layout: layoutEvidence() };
+  if (!(status.provider === options.expectedProvider && status.model === options.expectedModel && status.enabled && status.base_url_present && status.api_key_present && status.live_ready && status.status === "enabled")) {
+    return {
+      ok: false,
+      stage: "provider_status",
+      providerStatus: status,
+      expectedProvider: options.expectedProvider,
+      expectedModel: options.expectedModel,
+      allowedModels,
+      modelPriority,
+      layout: layoutEvidence(),
+    };
   }
 
   const sceneSelection = setSelectByLabel("场景类型", input.sceneLabel);
   const durationSelection = setSelectByLabel("单镜头时长", String(input.durationSeconds));
+  const sourceEditorNormalization = await normalizeSourceEditorState(input.sceneLabel, String(input.durationSeconds));
 
   await clickButton("放大编辑");
   const inputTextarea = await waitFor(() => document.querySelector(".text-dialog textarea"), "story material textarea", 30000);
@@ -228,7 +349,7 @@ function browserWorkflowExpression(payload) {
   const expandTrace = currentTrace();
   const expandTraceAttr = readTraceAttr();
 
-  await clickButton("放大编辑");
+  const expandedDialogEntryText = await clickFirstButton(["查看确认稿", "放大编辑"], { within: ".text-control__actions" });
   const expandedTextarea = await waitFor(() => document.querySelector(".text-dialog textarea"), "expanded story textarea", 30000);
   const expandedText = expandedTextarea.value;
   await clickButton("关闭", { within: ".text-dialog" });
@@ -242,18 +363,98 @@ function browserWorkflowExpression(payload) {
   await waitFor(() => !document.querySelector(".task-draft-dialog"), "task draft dialog closed", 30000);
   await waitFor(() => findButton("开始生成", { enabled: true }), "generate enabled", 30000);
   await clickButton("开始生成");
-  await waitFor(() => currentTrace()?.command === "generate_storyboard" && normalizeRows().length > 0 && !buttons().some((button) => textOf(button).includes("生成中")), "generate_storyboard trace and rows", 180000);
+  await waitFor(() => {
+    const trace = currentTrace();
+    const generateDone = !buttons().some((button) => textOf(button).includes("生成中"));
+    if (!trace || trace.command !== "generate_storyboard" || !generateDone) {
+      return false;
+    }
+    return trace.status === "Blocked" || normalizeRows().length > 0;
+  }, "generate_storyboard trace completion", 180000);
   const generateTrace = currentTrace();
   const generateTraceAttr = readTraceAttr();
   const tableRows = normalizeRows();
+  if (generateTrace?.status === "Blocked") {
+    return {
+      ok: false,
+      stage: "generate_storyboard_blocked",
+      warningCodes: generateTrace.warning_codes ?? [],
+      caseId: input.caseId,
+      expectedProvider: options.expectedProvider,
+      expectedModel: options.expectedModel,
+      providerStatus: status,
+      expandTrace,
+      generateTrace,
+      generateTraceAttr,
+      tableRows,
+      tableRowCount: tableRows.length,
+      layout: layoutEvidence(),
+      visibleTextSample: textOf(document.body).slice(0, 1500),
+    };
+  }
+  const bindingEvidence = generateTrace?.binding_evidence ?? null;
+  if (input.assertBinding) {
+    const bindingFailures = [];
+    const validatorGatePresent = Object.prototype.hasOwnProperty.call(
+      generateTrace ?? {},
+      "validator_gate_passed",
+    );
+    if (!validatorGatePresent) {
+      bindingFailures.push("validator_gate_missing");
+    } else if (generateTrace.validator_gate_passed !== true) {
+      const validatorFailures = Array.isArray(generateTrace?.validator_gate_failures) && generateTrace.validator_gate_failures.length
+        ? generateTrace.validator_gate_failures
+        : ["validator_gate_not_passed"];
+      bindingFailures.push(...validatorFailures);
+    }
+    if (generateTrace?.rows_match !== true) {
+      bindingFailures.push("rows_mismatch");
+    }
+    if (!bindingEvidence) {
+      bindingFailures.push("binding_evidence_missing");
+    } else {
+      if (bindingEvidence.stale_binding_detected !== false) {
+        bindingFailures.push("stale_binding_detected");
+      }
+      if ((bindingEvidence.missing_source_facts ?? []).length) {
+        bindingFailures.push("missing_source_facts");
+      }
+      if ((bindingEvidence.forbidden_fact_hits ?? []).length) {
+        bindingFailures.push("forbidden_fact_hits");
+      }
+    }
+    if (bindingFailures.length) {
+      return {
+        ok: false,
+        stage: "binding_evidence",
+        bindingFailures: Array.from(new Set(bindingFailures)),
+        bindingEvidence,
+        caseId: input.caseId,
+        expectedProvider: options.expectedProvider,
+        expectedModel: options.expectedModel,
+        providerStatus: status,
+        expandTrace,
+        generateTrace,
+        tableRows,
+        tableRowCount: tableRows.length,
+        layout: layoutEvidence(),
+      };
+    }
+  }
 
   return {
     ok: true,
     caseId: input.caseId,
+    expectedProvider: options.expectedProvider,
+    expectedModel: options.expectedModel,
+    allowedModels,
+    modelPriority,
     sceneSelection,
     durationSelection,
+    sourceEditorNormalization,
     providerStatus: status,
     expandButtonText,
+    expandedDialogEntryText,
     expandedText,
     expandTrace,
     expandTraceAttr,
@@ -266,6 +467,44 @@ function browserWorkflowExpression(payload) {
   };
 })()
 `;
+}
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function compactBindingEvidence(value) {
+  if (!value) {
+    return null;
+  }
+  return {
+    ...value,
+    stale_binding_detected: value.stale_binding_detected === false ? false : Boolean(value.stale_binding_detected),
+    missing_source_facts: asArray(value.missing_source_facts),
+    forbidden_fact_hits: asArray(value.forbidden_fact_hits),
+  };
+}
+
+function compactValidatorGateEvidence(value) {
+  const trace = value?.generateTrace;
+  const bindingEvidence = compactBindingEvidence(trace?.binding_evidence ?? value?.bindingEvidence);
+  const validatorGatePresent = Object.prototype.hasOwnProperty.call(trace ?? {}, "validator_gate_passed");
+  const validatorGateFailures = asArray(trace?.validator_gate_failures);
+  const runnerBindingFailures = asArray(value?.bindingFailures);
+  return {
+    validator_gate_present: validatorGatePresent,
+    validator_gate_passed: validatorGatePresent ? trace.validator_gate_passed === true : null,
+    validator_gate_failures: validatorGateFailures.length ? validatorGateFailures : runnerBindingFailures,
+    rows_match: trace?.rows_match === true,
+    row_diffs: asArray(trace?.row_diffs),
+    binding_evidence: bindingEvidence
+      ? {
+          stale_binding_detected: bindingEvidence.stale_binding_detected,
+          missing_source_facts: bindingEvidence.missing_source_facts,
+          forbidden_fact_hits: bindingEvidence.forbidden_fact_hits,
+        }
+      : null,
+  };
 }
 
 const cdp = await connectCdp();
@@ -282,12 +521,22 @@ try {
     throw new Error(JSON.stringify(evaluation.exceptionDetails));
   }
   const value = evaluation.result.value;
+  const validatorGateEvidence = compactValidatorGateEvidence(value);
   const payload = args.compact
     ? {
         cdp_target: { id: cdp.target.id, url: cdp.target.url, title: cdp.target.title },
         result: {
           ok: value?.ok,
+          stage: value?.stage,
+          warningCodes: value?.warningCodes,
+          bindingFailures: value?.bindingFailures,
+          bindingEvidence: value?.bindingEvidence,
           caseId: value?.caseId,
+          expectedProvider: value?.expectedProvider,
+          expectedModel: value?.expectedModel,
+          allowedModels: value?.allowedModels,
+          modelPriority: value?.modelPriority,
+          validator_gate_evidence: validatorGateEvidence,
           sceneSelection: value?.sceneSelection,
           durationSelection: value?.durationSelection,
           providerStatus: value?.providerStatus,
@@ -311,8 +560,12 @@ try {
                 backend_rows_hash: value.generateTrace.backend_rows_hash,
                 response_rows_hash: value.generateTrace.response_rows_hash,
                 ui_rows_hash: value.generateTrace.ui_rows_hash,
-                rows_match: value.generateTrace.rows_match,
-                row_diffs: value.generateTrace.row_diffs,
+                rows_match: validatorGateEvidence.rows_match,
+                validator_gate_present: validatorGateEvidence.validator_gate_present,
+                validator_gate_passed: validatorGateEvidence.validator_gate_passed,
+                validator_gate_failures: validatorGateEvidence.validator_gate_failures,
+                row_diffs: validatorGateEvidence.row_diffs,
+                binding_evidence: compactBindingEvidence(value.generateTrace.binding_evidence),
                 ui_rows: (value.generateTrace.ui_rows ?? []).map((row) => ({
                   order: row.order,
                   person: row.person,

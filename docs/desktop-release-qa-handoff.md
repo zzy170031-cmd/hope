@@ -18,7 +18,7 @@ machine.
 Use the repo-local launcher from a checkout of `codex/desktop-shell`:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-hope-release-cdp.ps1 -StopExisting -StopOnCdpFailure -WaitSeconds 20
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-hope-release-cdp.ps1 -Provider qwen -Model qwen-max -StopExisting -StopOnCdpFailure -WaitSeconds 20
 ```
 
 Cleanup command:
@@ -30,7 +30,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-hope-rel
 The legacy local launcher path may still exist on the original machine:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File E:\codex\tools\start-hope-release-cdp.ps1 -StopExisting -StopOnCdpFailure -WaitSeconds 20
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File E:\codex\tools\start-hope-release-cdp.ps1 -Provider qwen -Model qwen-max -StopExisting -StopOnCdpFailure -WaitSeconds 20
 ```
 
 For new machines, prefer the repo-local launcher.
@@ -59,11 +59,22 @@ Never commit:
 
 ## Provider Hard Gate
 
+Non-secret Qwen model rule:
+
+- Current QA live default model is `qwen-max`.
+- Qwen API model candidate order is `qwen-max -> qvq-max-2025-03-25 -> qwen-math-turbo`.
+- `qwen-plus` is retained only as a historical compatibility model, not the
+  current default gate.
+- Every QA run must explicitly confirm the active model in both the release
+  shell startup command and the runner `--expected-model` argument.
+- Do not silently switch models inside the UI-driven trace.
+- Do not pass QA through fallback-only behavior or fallback pseudo-success.
+
 Before running business QA, confirm provider status from the real release shell:
 
 ```text
 provider=qwen
-model=qwen-plus
+model=qwen-max
 enabled=true
 base_url_present=true
 api_key_present=true
@@ -91,7 +102,7 @@ scripts/hope-ui-driven-trace-runner.mjs
 Example invocation after the release shell CDP target is ready:
 
 ```powershell
-node .\scripts\hope-ui-driven-trace-runner.mjs --case A_hot_blood_battle --scene 热血战斗 --source "废墟之上，主角单膝跪地，敌人缓步逼近。" --duration 15 --compact 1
+node .\scripts\hope-ui-driven-trace-runner.mjs --case A_hot_blood_battle --scene 热血战斗 --source "废墟之上，主角单膝跪地，敌人缓步逼近。" --duration 15 --expected-provider qwen --expected-model qwen-max --compact 1
 ```
 
 Each case must:
@@ -174,7 +185,45 @@ Long-text sample path on the original machine:
 C:\Users\Administrator\Desktop\九州剧本文字版2.docx
 ```
 
-Do not run the 403-case matrix until the four-group trace gate passes.
+Do not run the 403-case matrix until the four-group trace gate, scene-type
+rewrite gate, and cross rewrite drift smoke gate pass.
+
+## Story Fact Frame Binding Gate
+
+The executable contract is stored in:
+
+```text
+docs/hope-story-fact-frame-storyboard-binding-contract.md
+```
+
+The cross rewrite drift smoke definition is stored in:
+
+```text
+tests/qa/desktop-cross-drift-smoke.json
+```
+
+Before 403-case, every live trace must expose sanitized binding evidence:
+
+- `current_case_id`
+- `source_text_hash`
+- `accepted_rewrite_hash`
+- `task_script_hash`
+- `story_fact_frame_hash`
+- `source_profile`
+- `scene_type`
+- `duration_seconds`
+- `duration_plan_hash`
+- `storyboard_rows_hash`
+- `must_keep_facts`
+- `missing_source_facts`
+- `forbidden_facts`
+- `forbidden_fact_hits`
+- `stale_binding_detected`
+- `kb_rule_pack_ids`
+- `kb_snapshot_hash`
+
+Passing rows require `stale_binding_detected=false`, `missing_source_facts=[]`,
+and `forbidden_fact_hits=[]`. `rows_match=true` alone is not sufficient.
 
 ## 2026-04-30 Bridge State
 

@@ -16,9 +16,10 @@ pub use contracts::{
     ModelResponse, ProductWarning, PromptPackageRecord, PromptTextCompilationStatus,
     RemoveStoryboardShotResultRequest, RemoveStoryboardShotResultResponse,
     SaveStoryboardShotResultRequest, SaveStoryboardShotResultResponse, ScenePerformanceProjection,
-    SequenceFieldState, SequenceGrouping, ShotGroundingSource, StoryboardDurationPlan,
-    StoryboardExportStatus, StructureMode, TextGenerationOutputSchema, TextGenerationRequest,
-    TextGenerationResponse, TextGenerationTask, TextModelProvider, TextModelProviderKind,
+    SequenceFieldState, SequenceGrouping, ShotGroundingSource, StoryboardBindingEvidence,
+    StoryboardDurationPlan, StoryboardExportStatus, StructureMode, TextGenerationOutputSchema,
+    TextGenerationRequest, TextGenerationResponse, TextGenerationTask, TextModelProvider,
+    TextModelProviderKind,
     UpdateStoryboardRowsRequest, UpdateStoryboardShotResultRequest,
     UpdateStoryboardShotResultResponse, ValidationSummary,
 };

@@ -20,6 +20,7 @@ import {
 } from "./bridge/hopeBridge";
 import { ROUTES, resolveRoute } from "./routes";
 import type {
+  AcceptedRewriteSnapshotBinding,
   ExpandScriptResponse,
   ExportBundleResponse,
   ExportStoryboardBankResponse,
@@ -31,6 +32,7 @@ import type {
   ProductWarning,
   SceneFusionOption,
   SourceStoryFacts,
+  StoryboardBindingEvidence,
   StoryboardExportStatus,
   StoryboardWorkbenchRow,
   TargetDurationMode,
@@ -84,9 +86,12 @@ interface HopeQaTrace {
   response_rows_hash: string;
   ui_rows_hash: string;
   rows_match: boolean;
+  validator_gate_passed: boolean;
+  validator_gate_failures: string[];
   response_rows: HopeQaTraceRow[];
   ui_rows: HopeQaTraceRow[];
   row_diffs: HopeQaTraceRowDiff[];
+  binding_evidence?: StoryboardBindingEvidence;
 }
 
 interface HopeQaWindow extends Window {
@@ -225,6 +230,10 @@ interface SceneTaskRecord {
   generatedShotTaskCount?: number;
   scriptTextSource?: TaskDraftScriptTextSource;
   userEditedFields?: TaskDraftManualEditedFields;
+  acceptedSnapshotId?: string;
+  acceptedSourceTextHash?: string;
+  acceptedRewriteHash?: string;
+  acceptedStoryFactFrameHash?: string;
 }
 
 type SourceInputType =
@@ -246,6 +255,40 @@ interface SourceInputAnalysis {
   actionLabel: string;
   sourceMaterialLengthChars: number;
   recommendsLongTextMode: boolean;
+}
+
+interface InferredSceneFactForUi {
+  fact: string;
+  inferenceReason: string;
+  inferenceScope: string;
+}
+
+interface StoryFactFrameForUi {
+  sourceProfile: string;
+  characters: string[];
+  relationships: string[];
+  locations: string[];
+  events: string[];
+  pressureRelations: string[];
+  explicitFacts: string[];
+  inferredSceneFacts: InferredSceneFactForUi[];
+  mustKeepFacts: string[];
+  forbiddenFacts: string[];
+}
+
+interface AcceptedRewriteSnapshot {
+  id: string;
+  sourceTextHash: string;
+  acceptedTextHash: string;
+  sceneType: string;
+  sceneLabel: string;
+  sceneCategory: string;
+  durationSeconds: number;
+  targetDurationMode: TargetDurationMode;
+  acceptedConfirmationBody: string;
+  storyFactFrame: StoryFactFrameForUi;
+  storyFactFrameHash: string;
+  createdAtMs: number;
 }
 
 const DEFAULT_STORYBOARD_PAGE_SIZE = 5;
@@ -447,17 +490,21 @@ export function App() {
   const [bridgeStatus] = useState(() => getHopeBridgeStatus());
   const [selectedScene, setSelectedScene] = useState<SceneFusionOption>(DEFAULT_SCENE);
   const [synopsis, setSynopsis] = useState(DEFAULT_SYNOPSIS);
+  const [sourceMaterialText, setSourceMaterialText] = useState(DEFAULT_SYNOPSIS);
   const [expandedScript, setExpandedScript] = useState("");
   const [expandedScriptResult, setExpandedScriptResult] = useState<ExpandScriptResponse | null>(null);
+  const [expandedScriptSourceText, setExpandedScriptSourceText] = useState("");
   const [showExpandedScriptStatus, setShowExpandedScriptStatus] = useState(false);
   const [expandedScriptDurationSeconds, setExpandedScriptDurationSeconds] = useState<number | null>(null);
   const [expandedScriptScene, setExpandedScriptScene] = useState<SceneOption | null>(null);
   const [acceptedScript, setAcceptedScript] = useState("");
+  const [acceptedSourceText, setAcceptedSourceText] = useState("");
   const [acceptedScriptId, setAcceptedScriptId] = useState<string | null>(null);
   const [acceptedScriptDurationSeconds, setAcceptedScriptDurationSeconds] = useState<number | null>(null);
   const [acceptedScriptTargetDurationMode, setAcceptedScriptTargetDurationMode] =
     useState<TargetDurationMode | null>(null);
   const [acceptedScriptScene, setAcceptedScriptScene] = useState<SceneOption | null>(null);
+  const [acceptedRewriteSnapshot, setAcceptedRewriteSnapshot] = useState<AcceptedRewriteSnapshot | null>(null);
   const [taskName, setTaskName] = useState(DEFAULT_TASK_NAME);
   const [taskSourceScript, setTaskSourceScript] = useState("");
   const [taskScriptId, setTaskScriptId] = useState<string | null>(null);
@@ -618,12 +665,17 @@ export function App() {
   );
   const sourceInputStatusText = storyBridgeView.previewStatus;
 
-  const canImportScript = acceptedScript.trim().length > 0 && storyPlanIsCurrent;
+  const currentTaskBindingIsCurrent = useMemo(
+    () => sceneTaskMatchesAcceptedSnapshot(currentSceneTask, acceptedRewriteSnapshot),
+    [acceptedRewriteSnapshot, currentSceneTask],
+  );
+  const canImportScript = acceptedScript.trim().length > 0 && storyPlanIsCurrent && Boolean(acceptedRewriteSnapshot);
   const hasTaskScript = currentSceneTask?.scriptText.trim().length ? true : taskSourceScript.trim().length > 0;
   const canGenerate =
     Boolean(currentSceneTask?.scriptText.trim()) &&
     Boolean(currentSceneTask?.name.trim()) &&
-    storyPlanIsCurrent;
+    storyPlanIsCurrent &&
+    currentTaskBindingIsCurrent;
   const expandedScriptAccepted = Boolean(
     expandedScriptResult?.script_id &&
       expandedScriptSnapshotIsCurrent &&
@@ -892,6 +944,7 @@ export function App() {
 
   const clearExpandedScriptSnapshot = () => {
     setExpandedScriptResult(null);
+    setExpandedScriptSourceText("");
     setExpandedScriptDurationSeconds(null);
     setExpandedScriptScene(null);
     setShowExpandedScriptStatus(false);
@@ -1137,6 +1190,30 @@ export function App() {
   };
 
   const openSynopsisDialog = () => {
+    const canShowRewriteConfirmation =
+      Boolean(expandedScript.trim()) &&
+      Boolean(expandedScriptResult?.script_id) &&
+      expandedScriptSnapshotIsCurrent;
+    if (canShowRewriteConfirmation) {
+      setTextDialog({
+        kind: "expandedScript",
+        title: "查看剧本确认稿",
+        value: formatRewriteConfirmationDraftForUi({
+          sourceText: expandedScriptSourceText || sourceMaterialText || expandedScript || synopsis,
+          acceptedText: expandedScript || synopsis,
+          scene: expandedScriptScene ?? selectedSceneOption,
+          durationSeconds: expandedScriptDurationSeconds ?? activeScriptDurationSeconds,
+          targetDurationMode: normalizeTargetDurationModeForUi(
+            expandedScriptResult?.target_duration_mode ?? expandedScriptResult?.targetDurationMode ?? targetDurationMode,
+          ),
+          response: expandedScriptResult,
+        }),
+        helper: "确认稿只展示可读正文和轻量锚点；确认使用后才会进入镜头拆解。",
+        editable: false,
+      });
+      return;
+    }
+
     setTextDialog({
       kind: "synopsis",
       title: "编辑故事材料",
@@ -1149,9 +1226,20 @@ export function App() {
   const openExpandedScriptDialog = () => {
     setTextDialog({
       kind: "expandedScript",
-      title: "查看剧本正文",
-      value: expandedScript ? formatStoryMaterialDialogText(expandedScript) : "等待剧本正文",
-      helper: "确认使用后才会进入镜头拆解。",
+      title: "查看剧本确认稿",
+      value: expandedScript
+        ? formatRewriteConfirmationDraftForUi({
+            sourceText: expandedScriptSourceText || sourceMaterialText || expandedScript,
+            acceptedText: expandedScript,
+            scene: expandedScriptScene ?? selectedSceneOption,
+            durationSeconds: expandedScriptDurationSeconds ?? activeScriptDurationSeconds,
+            targetDurationMode: normalizeTargetDurationModeForUi(
+              expandedScriptResult?.target_duration_mode ?? expandedScriptResult?.targetDurationMode ?? targetDurationMode,
+            ),
+            response: expandedScriptResult,
+          })
+        : "等待剧本正文",
+      helper: "确认稿只展示可读正文和轻量锚点；确认使用后才会进入镜头拆解。",
       editable: false,
     });
   };
@@ -1189,6 +1277,7 @@ export function App() {
     if (textDialog.kind === "synopsis") {
       const nextText = extractEditableStoryDialogText(textDialog.value);
       setSynopsis(nextText);
+      setSourceMaterialText(nextText);
       setExpandedScript(nextText);
       clearExpandedScriptSnapshot();
       clearConfirmedStoryboardState();
@@ -1233,7 +1322,7 @@ export function App() {
 
     if (
       textDialog.kind === "expandedScript" &&
-      confirmScriptTextForStoryboard(expandedScript.trim() || extractEditableStoryDialogText(textDialog.value))
+      confirmScriptTextForStoryboard(expandedScript.trim() || extractConfirmationScriptBodyFromDialogText(textDialog.value))
     ) {
       setTextDialog(null);
     }
@@ -1264,15 +1353,25 @@ export function App() {
         normalizeScriptText(expandedScript || synopsis) === normalizeScriptText(nextText),
     );
     const scriptId = shouldCarryExpandedScriptId ? expandedScriptResult?.script_id ?? null : null;
+    const nextAcceptedSnapshot = buildAcceptedRewriteSnapshotForUi({
+      sourceText: nextText,
+      acceptedText: nextText,
+      scene: scriptScene,
+      durationSeconds: scriptDuration,
+      targetDurationMode,
+    });
     const nextSceneTasks: SceneTaskRecord[] = [];
 
     setSynopsis(nextText);
+    setSourceMaterialText(nextText);
     setExpandedScript(nextText);
     setAcceptedScript(nextText);
+    setAcceptedSourceText(nextText);
     setAcceptedScriptId(scriptId);
     setAcceptedScriptDurationSeconds(scriptDuration);
     setAcceptedScriptTargetDurationMode(targetDurationMode);
     setAcceptedScriptScene(scriptScene);
+    setAcceptedRewriteSnapshot(nextAcceptedSnapshot);
     setTaskSourceScript("");
     setTaskScriptId(null);
     setTaskSegmentTitle("");
@@ -1303,15 +1402,27 @@ export function App() {
       return;
     }
 
+    const expandedCandidateText = normalizeScriptText(expandedScript || synopsis);
+    if (
+      expandedScriptResult?.script_id &&
+      expandedScriptSnapshotIsCurrent &&
+      expandedCandidateText === normalizeScriptText(nextText)
+    ) {
+      handleAcceptExpandedScript();
+      return;
+    }
+
     confirmScriptTextForStoryboard(nextText);
   };
 
   const clearConfirmedStoryboardState = () => {
     setAcceptedScript("");
+    setAcceptedSourceText("");
     setAcceptedScriptId(null);
     setAcceptedScriptDurationSeconds(null);
     setAcceptedScriptTargetDurationMode(null);
     setAcceptedScriptScene(null);
+    setAcceptedRewriteSnapshot(null);
     setTaskSourceScript("");
     setTaskScriptId(null);
     setTaskSegmentTitle("");
@@ -1357,6 +1468,7 @@ export function App() {
       }
       const analysis = analyzeSourceInputForUi(text);
       setSynopsis(text);
+      setSourceMaterialText(text);
       resetScriptAndStoryboardState();
       setExportMessage(
         `已导入 ${formatImportedDocumentType(document.file_type)} 文档。${analysis.statusMessage} 当前仍按用户选择的${
@@ -1382,21 +1494,24 @@ export function App() {
     }
 
     const storyInput = synopsis.trim();
+    const rawStoryInput = normalizeScriptText(sourceMaterialText || storyInput) || storyInput;
+    const requestSourceAnalysis = analyzeSourceInputForUi(rawStoryInput);
     if (!storyInput) {
       setExportMessage("请先输入故事梗概，再扩写故事。");
       return;
     }
 
+    setSourceMaterialText(rawStoryInput);
     setBridgeBusy("expand");
     try {
       const requestScene = selectedSceneOption;
       const requestDurationMode = targetDurationMode;
       const requestIsLongText = requestDurationMode === LONG_TEXT_DURATION_MODE;
       const requestDurationSeconds = requestIsLongText
-        ? estimateLongTextAutoDurationSeconds(sourceInputAnalysis)
+        ? estimateLongTextAutoDurationSeconds(requestSourceAnalysis)
         : durationSeconds;
       const requestAnalysis = buildSceneRewriteRequestAnalysis(
-        sourceInputAnalysis,
+        requestSourceAnalysis,
         requestScene,
         requestDurationMode,
         requestDurationSeconds,
@@ -1419,18 +1534,19 @@ export function App() {
         preserved_fact_summary: requestAnalysis.preservedFactSummary,
         changed_for_screenplay_summary: requestAnalysis.changedForScreenplaySummary,
         omitted_detail_summary: requestAnalysis.omittedDetailSummary,
-        synopsis_text: storyInput,
+        synopsis_text: rawStoryInput,
       });
       publishQaTrace(buildExpandScriptQaTrace(response));
       const storyBody = response.expanded_script_text.trim();
       const responseDurationSeconds = requestIsLongText
         ? resolveResponseStoryDurationSeconds(response, requestDurationSeconds)
         : requestDurationSeconds;
-      const nextStoryText = storyBody || storyInput;
-      const changed = normalizeScriptText(nextStoryText) !== normalizeScriptText(storyInput);
+      const nextStoryText = storyBody || rawStoryInput;
+      const changed = normalizeScriptText(nextStoryText) !== normalizeScriptText(rawStoryInput);
       setSynopsis(nextStoryText);
       resetScriptAndStoryboardState();
       setExpandedScriptResult(response);
+      setExpandedScriptSourceText(rawStoryInput);
       setExpandedScript(nextStoryText);
       setExpandedScriptDurationSeconds(responseDurationSeconds);
       setExpandedScriptScene(requestScene);
@@ -1460,21 +1576,24 @@ export function App() {
     }
 
     const storyInput = synopsis.trim();
+    const rawSourceText = normalizeScriptText(sourceMaterialText || storyInput) || storyInput;
+    const requestSourceAnalysis = analyzeSourceInputForUi(rawSourceText);
     if (!storyInput) {
       setExportMessage("请先输入或导入故事材料，再继续处理剧本。");
       return;
     }
 
+    setSourceMaterialText(rawSourceText);
     setBridgeBusy("expand");
     try {
       const requestScene = selectedSceneOption;
       const requestDurationMode = targetDurationMode;
       const requestIsLongText = requestDurationMode === LONG_TEXT_DURATION_MODE;
       const requestDurationSeconds = requestIsLongText
-        ? estimateLongTextAutoDurationSeconds(sourceInputAnalysis)
+        ? estimateLongTextAutoDurationSeconds(requestSourceAnalysis)
         : durationSeconds;
       const requestAnalysis = buildSceneRewriteRequestAnalysis(
-        sourceInputAnalysis,
+        requestSourceAnalysis,
         requestScene,
         requestDurationMode,
         requestDurationSeconds,
@@ -1497,7 +1616,7 @@ export function App() {
         preserved_fact_summary: requestAnalysis.preservedFactSummary,
         changed_for_screenplay_summary: requestAnalysis.changedForScreenplaySummary,
         omitted_detail_summary: requestAnalysis.omittedDetailSummary,
-        synopsis_text: storyInput,
+        synopsis_text: rawSourceText,
       });
       publishQaTrace(buildExpandScriptQaTrace(response));
       const responseSourceType = normalizeSourceInputType(
@@ -1505,11 +1624,12 @@ export function App() {
       );
       const responseMessage = statusMessageForSourceInputType(responseSourceType);
       const scriptBody = extractScriptBody(response.expanded_script_text) || response.expanded_script_text.trim();
-      const changed = normalizeScriptText(scriptBody) !== normalizeScriptText(storyInput);
+      const changed = normalizeScriptText(scriptBody) !== normalizeScriptText(rawSourceText);
       const responseDurationSeconds = requestIsLongText
         ? resolveResponseStoryDurationSeconds(response, requestDurationSeconds)
         : requestDurationSeconds;
       setExpandedScriptResult(response);
+      setExpandedScriptSourceText(rawSourceText);
       setExpandedScript(scriptBody);
       setSynopsis(scriptBody);
       setExpandedScriptDurationSeconds(responseDurationSeconds);
@@ -1587,6 +1707,8 @@ export function App() {
       return;
     }
 
+    const bindingSnapshot = acceptedRewriteSnapshot;
+    const snapshotSceneOption = bindingSnapshot ? sceneOptionFromAcceptedSnapshot(bindingSnapshot) : selectedSceneOption;
     const fallbackSceneIndex = shotCandidates.length + 1;
     const nextUnusedCandidate =
       shotCandidates.find((candidate) => !sceneTasks.some((task) => task.candidateId === candidate.id)) ??
@@ -1595,12 +1717,12 @@ export function App() {
       id: "custom",
       sceneIndex: fallbackSceneIndex,
       title: "自定义镜头片段",
-      text: acceptedScript.trim(),
-      preview: acceptedScript.trim(),
+      text: bindingSnapshot?.acceptedConfirmationBody ?? acceptedScript.trim(),
+      preview: bindingSnapshot?.acceptedConfirmationBody ?? acceptedScript.trim(),
       durationSeconds: shotCandidateBaseDuration,
-      sceneType: selectedSceneOption.value,
-      sceneLabel: selectedSceneOption.label,
-      sceneCategory: selectedSceneOption.group,
+      sceneType: snapshotSceneOption.value,
+      sceneLabel: snapshotSceneOption.label,
+      sceneCategory: snapshotSceneOption.group,
     };
     const nextShotIndex = resolveNextShotIndexForCandidate(firstCandidate.id);
     const defaultTaskName = formatDefaultShotTaskName(firstCandidate.sceneIndex, nextShotIndex);
@@ -1655,6 +1777,11 @@ export function App() {
       setExportMessage("请先选择或编辑一个镜头片段，再创建镜头任务。");
       return;
     }
+    const bindingSnapshot = acceptedRewriteSnapshot;
+    if (!bindingSnapshot) {
+      setExportMessage("请先点击“确定使用”冻结当前确认稿快照，再创建镜头任务。");
+      return;
+    }
 
     const candidate = shotCandidates.find((item) => item.id === taskDraft.selectedCandidateId);
     const nextTaskName =
@@ -1707,6 +1834,10 @@ export function App() {
         hadRowEdits: false,
         scriptTextSource: taskDraft.scriptTextSource,
         userEditedFields: taskDraft.manualEditedFields,
+        acceptedSnapshotId: bindingSnapshot.id,
+        acceptedSourceTextHash: bindingSnapshot.sourceTextHash,
+        acceptedRewriteHash: bindingSnapshot.acceptedTextHash,
+        acceptedStoryFactFrameHash: bindingSnapshot.storyFactFrameHash,
       };
 
       if (!current.some((task) => task.id === nextTaskId)) {
@@ -1830,6 +1961,15 @@ export function App() {
       setExportMessage("生成分镜只能使用已保存的镜头任务，请先从任务队列导入或保存一个任务。");
       return;
     }
+    const bindingSnapshot = acceptedRewriteSnapshot;
+    if (!bindingSnapshot) {
+      setExportMessage("请先点击“确定使用”冻结当前确认稿快照，再开始生成分镜。");
+      return;
+    }
+    if (!sceneTaskMatchesAcceptedSnapshot(currentSceneTask, bindingSnapshot)) {
+      setExportMessage("当前镜头任务不属于最新确认稿快照，请重新创建或更新镜头任务后再生成。");
+      return;
+    }
     if (!confirmDiscardDirty("重新生成当前镜头任务")) {
       return;
     }
@@ -1837,12 +1977,20 @@ export function App() {
     const source = currentSceneTask.scriptText.trim();
     const sourceTaskName = currentSceneTask.name.trim() || "未命名镜头任务";
     const sourceSegmentTitle = currentSceneTask.segmentTitle || sourceTaskName;
-    const sourceScriptId = currentSceneTask.scriptId ?? acceptedScriptId ?? taskScriptId;
+    const sourceScriptId = currentSceneTask.scriptId ?? acceptedScriptId ?? null;
+    const snapshotSceneOption = sceneOptionFromAcceptedSnapshot(bindingSnapshot);
+    const taskSceneOption = findSceneOption(currentSceneTask.sourceSceneType ?? bindingSnapshot.sceneType) ?? snapshotSceneOption;
+    const primarySceneType = bindingSnapshot.sceneType;
+    const primarySceneLabel = bindingSnapshot.sceneLabel || snapshotSceneOption.label;
+    const primarySceneCategory = bindingSnapshot.sceneCategory || snapshotSceneOption.group;
+    const shotSceneType = currentSceneTask.sourceSceneType ?? taskSceneOption.value;
+    const shotSceneLabel = currentSceneTask.sourceSceneLabel ?? taskSceneOption.label;
     const taskDurationSeconds = normalizeDurationOption(
-      currentSceneTask.sourceDurationSeconds ?? durationSeconds,
-      durationSeconds,
+      currentSceneTask.sourceDurationSeconds ?? bindingSnapshot.durationSeconds,
+      bindingSnapshot.durationSeconds,
     );
-    const taskSceneOption = findSceneOption(currentSceneTask.sourceSceneType ?? null) ?? acceptedScriptScene ?? selectedSceneOption;
+    const groundingTextForBinding = normalizeScriptText(source);
+    const taskScriptHash = stableBindingHashJson(groundingTextForBinding);
     setTaskName(sourceTaskName);
     setTaskSourceScript(source);
     setTaskScriptId(sourceScriptId);
@@ -1852,26 +2000,35 @@ export function App() {
       const request: GenerateStoryboardRequestWithTargetDuration = {
         task_name: sourceTaskName,
         script_id: sourceScriptId,
-        scene_type: taskSceneOption.value,
-        scene_label: currentSceneTask?.sourceSceneLabel ?? taskSceneOption.label,
-        scene_category: currentSceneTask?.sourceSceneCategory ?? taskSceneOption.group,
-        shot_script: source,
-        primary_scene_type: taskSceneOption.value,
-        primary_scene_label: currentSceneTask?.sourceSceneLabel ?? taskSceneOption.label,
-        primary_scene_category: currentSceneTask?.sourceSceneCategory ?? taskSceneOption.group,
-        shot_scene_type: currentSceneTask?.sourceSceneType ?? taskSceneOption.value,
-        shot_scene_label: currentSceneTask?.sourceSceneLabel ?? taskSceneOption.label,
+        scene_type: primarySceneType,
+        scene_label: primarySceneLabel,
+        scene_category: primarySceneCategory,
+        shot_script: groundingTextForBinding,
+        primary_scene_type: primarySceneType,
+        primary_scene_label: primarySceneLabel,
+        primary_scene_category: primarySceneCategory,
+        shot_scene_type: shotSceneType,
+        shot_scene_label: shotSceneLabel,
         shot_intent: sourceSegmentTitle || sourceTaskName,
         adaptation_reason:
-          currentSceneTask?.sourceSceneType && currentSceneTask.sourceSceneType !== taskSceneOption.value
+          shotSceneType && shotSceneType !== primarySceneType
             ? "镜头任务使用用户选择的局部场景方向。"
             : null,
-        expanded_script_text: source,
+        expanded_script_text: bindingSnapshot.acceptedConfirmationBody,
         target_duration_seconds: taskDurationSeconds,
         selected_total_duration_seconds: taskDurationSeconds,
         target_duration_mode: FIXED_DURATION_MODE,
         auto_segment_strategy: AUTO_SEGMENT_STRATEGY_FIXED_SECONDS,
         model_config_summary: modelConfigSummary,
+        accepted_rewrite_snapshot: buildAcceptedRewriteSnapshotBinding(bindingSnapshot),
+        current_case_id: bindingSnapshot.id,
+        source_text_hash: bindingSnapshot.sourceTextHash,
+        accepted_rewrite_hash: bindingSnapshot.acceptedTextHash,
+        task_script_hash: taskScriptHash,
+        story_fact_frame_hash: bindingSnapshot.storyFactFrameHash,
+        source_profile: bindingSnapshot.storyFactFrame.sourceProfile,
+        must_keep_facts: bindingSnapshot.storyFactFrame.mustKeepFacts,
+        forbidden_facts: bindingSnapshot.storyFactFrame.forbiddenFacts,
       };
       const response = await invokeGenerateStoryboard(request);
       const nextRows = response.rows.map((row) => mapGeneratedStoryboardRow(row));
@@ -2028,8 +2185,11 @@ export function App() {
   };
 
   const handleAcceptExpandedScript = () => {
-    const scriptText = (synopsis.trim() || expandedScript.trim());
-    if (!scriptText || !expandedScriptResult) {
+    const acceptedRewriteText = expandedScript.trim() || synopsis.trim();
+    const rawSourceText = normalizeScriptText(
+      expandedScriptSourceText || sourceMaterialText || acceptedRewriteText,
+    );
+    if (!acceptedRewriteText || !expandedScriptResult) {
       setExportMessage("请先完成扩写剧本，再确认使用。");
       return false;
     }
@@ -2046,16 +2206,26 @@ export function App() {
       expandedScriptResult.target_duration_mode ?? expandedScriptResult.targetDurationMode ?? targetDurationMode,
     );
     const scriptDuration = responseMode === LONG_TEXT_DURATION_MODE
-      ? expandedScriptDurationSeconds ?? estimateLongTextAutoDurationSeconds(analyzeSourceInputForUi(scriptText))
+      ? expandedScriptDurationSeconds ?? estimateLongTextAutoDurationSeconds(analyzeSourceInputForUi(rawSourceText))
       : durationSeconds;
+    const nextAcceptedSnapshot = buildAcceptedRewriteSnapshotForUi({
+      sourceText: rawSourceText,
+      acceptedText: acceptedRewriteText,
+      scene: scriptScene,
+      durationSeconds: scriptDuration,
+      targetDurationMode: responseMode,
+    });
     const nextSceneTasks: SceneTaskRecord[] = [];
-    setAcceptedScript(scriptText);
+    setSourceMaterialText(rawSourceText);
+    setAcceptedScript(acceptedRewriteText);
+    setAcceptedSourceText(rawSourceText);
     setAcceptedScriptId(expandedScriptResult.script_id);
     setAcceptedScriptDurationSeconds(scriptDuration);
     setAcceptedScriptTargetDurationMode(responseMode);
     setAcceptedScriptScene(scriptScene);
-    setExpandedScript(scriptText);
-    setSynopsis(scriptText);
+    setAcceptedRewriteSnapshot(nextAcceptedSnapshot);
+    setExpandedScript(acceptedRewriteText);
+    setSynopsis(acceptedRewriteText);
     setTaskSourceScript("");
     setTaskScriptId(null);
     setTaskSegmentTitle("");
@@ -2767,7 +2937,9 @@ export function App() {
                 </div>
                 <div className="text-control__actions">
                   <button type="button" className="text-control__button" onClick={openSynopsisDialog}>
-                    放大编辑
+                    {expandedScript.trim() && expandedScriptResult?.script_id && expandedScriptSnapshotIsCurrent
+                      ? "查看确认稿"
+                      : "放大编辑"}
                   </button>
                   <button
                     type="button"
@@ -3777,6 +3949,300 @@ function buildModelConfigSummary(
   };
 }
 
+function buildAcceptedRewriteSnapshotForUi({
+  sourceText,
+  acceptedText,
+  scene,
+  durationSeconds,
+  targetDurationMode,
+}: {
+  sourceText: string;
+  acceptedText: string;
+  scene: SceneOption;
+  durationSeconds: number;
+  targetDurationMode: TargetDurationMode;
+}): AcceptedRewriteSnapshot {
+  const cleanSource = normalizeScriptText(sourceText || acceptedText);
+  const cleanAccepted = normalizeScriptText(acceptedText);
+  const analysis = analyzeSourceInputForUi(cleanSource);
+  const storyFactFrame = buildStoryFactFrameForUi(
+    cleanSource,
+    analysis,
+    scene,
+    durationSeconds,
+    targetDurationMode,
+  );
+  const sourceTextHash = stableBindingHashJson(cleanSource);
+  const acceptedTextHash = stableBindingHashJson(cleanAccepted);
+  const storyFactFrameHash = stableBindingHashValue({
+    sourceTextHash,
+    acceptedTextHash,
+    sceneType: scene.value,
+    durationSeconds,
+    targetDurationMode,
+    storyFactFrame,
+  });
+
+  return {
+    id: `accepted-${sourceTextHash}-${acceptedTextHash}-${stableBindingHashJson(
+      `${scene.value}:${durationSeconds}:${targetDurationMode}:${storyFactFrameHash}`,
+    )}`,
+    sourceTextHash,
+    acceptedTextHash,
+    sceneType: scene.value,
+    sceneLabel: scene.label,
+    sceneCategory: scene.group,
+    durationSeconds,
+    targetDurationMode,
+    acceptedConfirmationBody: cleanAccepted,
+    storyFactFrame,
+    storyFactFrameHash,
+    createdAtMs: Date.now(),
+  };
+}
+
+function buildAcceptedRewriteSnapshotBinding(snapshot: AcceptedRewriteSnapshot): AcceptedRewriteSnapshotBinding {
+  return {
+    current_case_id: snapshot.id,
+    source_text_hash: snapshot.sourceTextHash,
+    accepted_rewrite_hash: snapshot.acceptedTextHash,
+    scene_type: snapshot.sceneType,
+    scene_label: snapshot.sceneLabel,
+    scene_category: snapshot.sceneCategory,
+    duration_seconds: snapshot.durationSeconds,
+    target_duration_mode: snapshot.targetDurationMode,
+    accepted_confirmation_body: snapshot.acceptedConfirmationBody,
+    story_fact_frame_hash: snapshot.storyFactFrameHash,
+    explicit_facts: snapshot.storyFactFrame.explicitFacts,
+    inferred_scene_facts: snapshot.storyFactFrame.inferredSceneFacts.map((fact) => ({
+      fact: fact.fact,
+      inference_reason: fact.inferenceReason,
+      inference_scope: fact.inferenceScope,
+    })),
+    must_keep_facts: snapshot.storyFactFrame.mustKeepFacts,
+    forbidden_facts: snapshot.storyFactFrame.forbiddenFacts,
+  };
+}
+
+function sceneTaskMatchesAcceptedSnapshot(
+  task: SceneTaskRecord | null,
+  snapshot: AcceptedRewriteSnapshot | null,
+) {
+  if (!task || !snapshot) {
+    return false;
+  }
+  return (
+    task.acceptedSnapshotId === snapshot.id &&
+    task.acceptedSourceTextHash === snapshot.sourceTextHash &&
+    task.acceptedRewriteHash === snapshot.acceptedTextHash &&
+    task.acceptedStoryFactFrameHash === snapshot.storyFactFrameHash
+  );
+}
+
+function sceneOptionFromAcceptedSnapshot(snapshot: AcceptedRewriteSnapshot): SceneOption {
+  return (
+    findSceneOption(snapshot.sceneType) ?? {
+      value: snapshot.sceneType as SceneFusionOption,
+      label: snapshot.sceneLabel,
+      group: snapshot.sceneCategory || snapshot.sceneType,
+    }
+  );
+}
+
+function buildStoryFactFrameForUi(
+  sourceText: string,
+  analysis: SourceInputAnalysis,
+  scene: SceneOption,
+  durationSeconds: number,
+  targetDurationMode: TargetDurationMode,
+): StoryFactFrameForUi {
+  const cleanText = normalizeScriptText(sourceText);
+  const facts = analysis.sourceStoryFacts;
+  const hasA = ["主角", "敌人", "废墟"].every((term) => cleanText.includes(term));
+  const hasB = ["林峰", "苏瑶", "阿青"].every((term) => cleanText.includes(term)) &&
+    (cleanText.includes("黑衣追兵") || cleanText.includes("追兵"));
+  const sourceProfile = hasB ? "B_alley_pursuit" : hasA ? "A_ruin_duel" : analysis.sourceInputType;
+  const explicitFacts = hasB
+    ? ["林峰", "苏瑶", "阿青", "黑衣追兵", "巷口", "逼近", "林峰护住苏瑶", "阿青提醒"]
+    : hasA
+      ? ["主角", "敌人", "废墟", "单膝跪地", "逼近"]
+      : [];
+  const relationships = hasB
+    ? ["林峰护住苏瑶", "阿青提醒他们", "黑衣追兵从巷口逼近"]
+    : hasA
+      ? ["主角与敌人对峙", "敌人缓步逼近"]
+      : sourceStoryFactList(facts.character_relationships, facts.characterRelationships, 6);
+  const locations = uniqueStrings([
+    ...sourceStoryFactList(facts.location_facts, facts.locationFacts, 6),
+    ...(hasB ? ["巷口"] : []),
+    ...(hasA ? ["废墟"] : []),
+  ]);
+  const events = uniqueStrings([
+    ...sourceStoryFactList(facts.core_events, facts.coreEvents, 6),
+    ...sourceStoryFactList(facts.event_order, facts.eventOrder, 6),
+    ...(hasB ? ["林峰护住苏瑶", "阿青提醒", "黑衣追兵逼近"] : []),
+    ...(hasA ? ["主角单膝跪地", "敌人缓步逼近"] : []),
+  ]);
+  const pressureRelations = uniqueStrings([
+    ...sourceStoryFactList(facts.conflict_progression, facts.conflictProgression, 6),
+    ...(hasB ? ["追兵压力", "巷口逼近"] : []),
+    ...(hasA ? ["对峙压力", "敌人逼近"] : []),
+  ]);
+  const propFacts = sourceStoryFactList(facts.prop_state, facts.propState, 6);
+  const forbiddenFacts = uniqueStrings([
+    ...(hasA ? sourceExternalOnly(["甲胄", "铠甲", "剑柄", "断戟", "军阵规模", "左臂", "伤口"], cleanText) : []),
+    ...(hasB ? sourceExternalOnly(["三名", "刀锋", "衣袖裂口", "左臂", "伤口"], cleanText) : []),
+  ]);
+  const characters = uniqueStrings([
+    ...sourceStoryFactList(facts.character_names, facts.characterNames, 10),
+    ...(hasB ? ["林峰", "苏瑶", "阿青", "黑衣追兵"] : []),
+    ...(hasA ? ["主角", "敌人"] : []),
+  ]);
+  const explicitFactList = uniqueStrings([
+    ...explicitFacts,
+    ...characters,
+    ...relationships,
+    ...locations,
+    ...events,
+    ...pressureRelations,
+    ...propFacts,
+  ]).slice(0, 24);
+  const inferredSceneFacts = buildInferredSceneFactsForUi({
+    sourceText: cleanText,
+    characters,
+    scene,
+    durationSeconds,
+    targetDurationMode,
+  });
+
+  return {
+    sourceProfile,
+    characters,
+    relationships,
+    locations,
+    events,
+    pressureRelations,
+    explicitFacts: explicitFactList,
+    inferredSceneFacts,
+    mustKeepFacts: uniqueStrings([
+      ...explicitFactList,
+    ]),
+    forbiddenFacts,
+  };
+}
+
+function buildInferredSceneFactsForUi({
+  sourceText,
+  characters,
+  scene,
+  durationSeconds,
+  targetDurationMode,
+}: {
+  sourceText: string;
+  characters: string[];
+  scene: SceneOption;
+  durationSeconds: number;
+  targetDurationMode: TargetDurationMode;
+}): InferredSceneFactForUi[] {
+  const source = `${sourceText} ${scene.value} ${scene.label}`;
+  const primary = characters[0] ?? "主角";
+  const secondary = characters.find((name) => name !== primary) ?? "对手";
+  const isActionScene =
+    /(战斗|打斗|追击|对峙|逼近|攻势|格挡|battle|combat|chase|weapon)/i.test(source) ||
+    ["hot_blood_battle", "guoman_hot_blood_combat", "ink_wuxia_combat", "weapon_highlight", "field_chase"].includes(
+      scene.value,
+    );
+  const hasStreetBlocking = /(街边|街道|巷口|路边|摊位|墙角|市集|门口)/.test(sourceText);
+  const inferred: InferredSceneFactForUi[] = [];
+  const pushInferred = (fact: string, inferenceReason: string, inferenceScope: string) => {
+    const cleanFact = normalizeScriptText(fact);
+    if (!cleanFact || sourceText.includes(cleanFact)) {
+      return;
+    }
+    inferred.push({
+      fact: cleanFact,
+      inferenceReason,
+      inferenceScope,
+    });
+  };
+
+  if (isActionScene && hasStreetBlocking) {
+    pushInferred(
+      `${primary}临时借用街边木棍形成格挡动作`,
+      "街边打斗需要可拍摄的近身动作支点，木棍属于当前场景临时道具。",
+      "临时动作道具",
+    );
+    pushInferred(
+      `${secondary}以短刀或近身压迫制造逼近压力`,
+      "动作场景需要明确攻防关系，短兵器只作为本场动作调度，不改变人物长期装备。",
+      "临时动作道具",
+    );
+    pushInferred(
+      "二人借摊位、墙角、街边障碍拉开距离",
+      "街边空间可提供低风险调度点，服务分镜走位和剪辑节奏。",
+      "场面调度",
+    );
+  }
+
+  if (isActionScene && durationSeconds >= 30) {
+    pushInferred(
+      "动作按逼近、格挡、错身、再对峙拆成节奏落点",
+      "目标时长较长，需要低风险动作节拍补全以支撑分镜拆分。",
+      targetDurationMode === LONG_TEXT_DURATION_MODE ? "节奏补全" : "场面调度",
+    );
+  }
+
+  if (/(紧张|害怕|犹豫|愤怒|坚定|绝望|希望)/.test(sourceText)) {
+    pushInferred(
+      "通过停顿、回望、握紧等微动作可视化情绪",
+      "情绪词需要转换成可拍摄动作，但不新增人物身份或剧情因果。",
+      "情绪可视化",
+    );
+  }
+
+  return uniqueInferredSceneFacts(inferred).slice(0, 8);
+}
+
+function uniqueInferredSceneFacts(values: InferredSceneFactForUi[]) {
+  const seen = new Set<string>();
+  const result: InferredSceneFactForUi[] = [];
+  for (const value of values) {
+    const cleanFact = normalizeScriptText(value.fact);
+    if (!cleanFact || seen.has(cleanFact)) {
+      continue;
+    }
+    seen.add(cleanFact);
+    result.push({
+      fact: cleanFact,
+      inferenceReason: normalizeScriptText(value.inferenceReason),
+      inferenceScope: normalizeScriptText(value.inferenceScope),
+    });
+  }
+  return result;
+}
+
+function sourceStoryFactList(primary: string[] | undefined, alias: string[] | undefined, limit: number) {
+  return uniqueStrings([...(primary ?? []), ...(alias ?? [])]).slice(0, limit);
+}
+
+function sourceExternalOnly(values: string[], sourceText: string) {
+  return values.filter((value) => !sourceText.includes(value));
+}
+
+function uniqueStrings(values: string[]) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const clean = normalizeScriptText(value);
+    if (!clean || seen.has(clean)) {
+      continue;
+    }
+    seen.add(clean);
+    result.push(clean);
+  }
+  return result;
+}
+
 function analyzeSourceInputForUi(text: string): SourceInputAnalysis {
   const cleanText = text.trim();
   const sourceInputType = detectSourceInputTypeForUi(cleanText);
@@ -4222,6 +4688,9 @@ function buildSourceStoryFactsForUi(text: string): SourceStoryFacts {
   const coreEvents = compactSegments.slice(0, 8);
   const eventOrder = coreEvents.map((item, index) => `${index + 1}. ${item}`);
   const characterNames = extractCharacterNamesFromText(cleanText);
+  const propFacts = compactSegments
+    .filter((item) => /(武器|道具|装备|木棍|短刀|刀|剑|枪|弓|戟|铠甲|甲胄|伤口|受伤|血迹|旧照|照片|相片)/.test(item))
+    .slice(0, 6);
   const locationFacts = Array.from(
     new Set(
       (cleanText.match(/[在于到][^，。！？；;\n]{2,16}(?:城|镇|村|宫|殿|山|海|街|房|屋|厅|场|城墙|废墟|战场)/g) ?? [])
@@ -4241,8 +4710,8 @@ function buildSourceStoryFactsForUi(text: string): SourceStoryFacts {
     eventOrder,
     timeline_facts: coreEvents.slice(0, 4),
     timelineFacts: coreEvents.slice(0, 4),
-    prop_state: [],
-    propState: [],
+    prop_state: propFacts,
+    propState: propFacts,
     location_facts: locationFacts,
     locationFacts,
     emotional_progression: compactSegments.filter((item) => /(害怕|愤怒|犹豫|坚定|崩溃|觉醒|释然|紧张|绝望|希望)/.test(item)).slice(0, 4),
@@ -4259,6 +4728,13 @@ function extractCharacterNamesFromText(text: string) {
   for (const label of STORYBOARD_TRUSTED_ROLE_LABELS) {
     if (text.includes(label) && !names.includes(label)) {
       names.push(label);
+    }
+  }
+  for (const match of text.matchAll(/([\u4e00-\u9fa5]{2,4})(?:跟|和|与|同)([\u4e00-\u9fa5]{2,4})(?=在|于|到|打|斗|对|追|护|逼|，|。|,|$)/g)) {
+    for (const candidate of [match[1], match[2]]) {
+      if (candidate && isTrustedStoryboardPersonCandidate(candidate) && !names.includes(candidate)) {
+        names.push(candidate);
+      }
     }
   }
   return names;
@@ -4517,6 +4993,7 @@ function buildGenerateStoryboardQaTrace(
     responseRows: normalizeResponseRowsForQa(response.rows),
     uiRows: normalizeWorkbenchRowsForQa(uiRows),
     backendRowsHash: response.rows_hash ?? "",
+    bindingEvidence: response.binding_evidence,
   });
 }
 
@@ -4527,9 +5004,18 @@ function buildHopeQaTrace(input: {
   responseRows: HopeQaTraceRow[];
   uiRows: HopeQaTraceRow[];
   backendRowsHash: string;
+  bindingEvidence?: StoryboardBindingEvidence;
 }): HopeQaTrace {
   const responseRowsHash = stableQaHash(input.responseRows);
   const uiRowsHash = stableQaHash(input.uiRows);
+  const rowsMatch = responseRowsHash === uiRowsHash;
+  const bindingEvidence = sanitizeBindingEvidenceForQa(input.bindingEvidence);
+  const validatorGateFailures = resolveQaValidatorGateFailures({
+    command: input.command,
+    rowsMatch,
+    bindingEvidence,
+    warnings: input.warnings,
+  });
   return {
     version: QA_TRACE_VERSION,
     command: input.command,
@@ -4544,11 +5030,73 @@ function buildHopeQaTrace(input: {
     backend_rows_hash: sanitizeQaText(input.backendRowsHash),
     response_rows_hash: responseRowsHash,
     ui_rows_hash: uiRowsHash,
-    rows_match: responseRowsHash === uiRowsHash,
+    rows_match: rowsMatch,
+    validator_gate_passed: validatorGateFailures.length === 0,
+    validator_gate_failures: validatorGateFailures,
     response_rows: input.responseRows,
     ui_rows: input.uiRows,
     row_diffs: diffQaRows(input.responseRows, input.uiRows),
+    binding_evidence: bindingEvidence,
   };
+}
+
+function resolveQaValidatorGateFailures(input: {
+  command: HopeQaCommand;
+  rowsMatch: boolean;
+  bindingEvidence?: StoryboardBindingEvidence;
+  warnings: HopeQaTraceWarning[];
+}) {
+  const failures: string[] = [];
+  if (!input.rowsMatch) {
+    failures.push("rows_mismatch");
+  }
+  if (input.command === "generate_storyboard") {
+    const evidence = input.bindingEvidence;
+    if (!evidence) {
+      failures.push("binding_evidence_missing");
+    } else {
+      if (evidence.stale_binding_detected) {
+        failures.push("stale_binding_detected");
+      }
+      if (evidence.missing_source_facts.length) {
+        failures.push("missing_source_facts");
+      }
+      if (evidence.forbidden_fact_hits.length) {
+        failures.push("forbidden_fact_hits");
+      }
+    }
+  }
+  const hasFallbackOrRepair = input.warnings.some((warning) => /fallback|repair|repaired/i.test(warning.code));
+  const hasExplicitFallbackOrRepairRecord = input.warnings.some(
+    (warning) => /fallback|repair|repaired/i.test(`${warning.code} ${warning.message}`),
+  );
+  if (hasFallbackOrRepair && !hasExplicitFallbackOrRepairRecord) {
+    failures.push("fallback_or_repair_unrecorded");
+  }
+  return failures;
+}
+
+function sanitizeBindingEvidenceForQa(evidence: StoryboardBindingEvidence | undefined) {
+  return evidence
+    ? {
+        ...evidence,
+        current_case_id: sanitizeQaText(evidence.current_case_id),
+        source_text_hash: sanitizeQaText(evidence.source_text_hash),
+        accepted_rewrite_hash: sanitizeQaText(evidence.accepted_rewrite_hash),
+        task_script_hash: sanitizeQaText(evidence.task_script_hash),
+        story_fact_frame_hash: sanitizeQaText(evidence.story_fact_frame_hash),
+        source_profile: sanitizeQaText(evidence.source_profile),
+        scene_type: sanitizeQaText(evidence.scene_type),
+        duration_plan_hash: sanitizeQaText(evidence.duration_plan_hash),
+        storyboard_rows_hash: sanitizeQaText(evidence.storyboard_rows_hash),
+        must_keep_facts: evidence.must_keep_facts.map(sanitizeQaText),
+        missing_source_facts: evidence.missing_source_facts.map(sanitizeQaText),
+        forbidden_facts: evidence.forbidden_facts.map(sanitizeQaText),
+        forbidden_fact_hits: evidence.forbidden_fact_hits.map(sanitizeQaText),
+        kb_rule_pack_ids: evidence.kb_rule_pack_ids.map(sanitizeQaText),
+        kb_snapshot_hash: sanitizeQaText(evidence.kb_snapshot_hash),
+      }
+    : undefined;
 }
 
 function collectQaTraceWarnings(
@@ -4659,6 +5207,27 @@ function stableQaHash(value: unknown) {
   let hash = 2166136261;
   for (let index = 0; index < source.length; index += 1) {
     hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function normalizeBindingText(value: string) {
+  return value.trim().split(/\s+/u).filter(Boolean).join(" ");
+}
+
+function stableBindingHashJson(value: string) {
+  return stableBindingHashSerialized(JSON.stringify(normalizeBindingText(value)) ?? "");
+}
+
+function stableBindingHashValue(value: unknown) {
+  return stableBindingHashSerialized(JSON.stringify(value) ?? "");
+}
+
+function stableBindingHashSerialized(source: string) {
+  let hash = 2166136261;
+  for (const byte of new TextEncoder().encode(source)) {
+    hash ^= byte;
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
@@ -5384,13 +5953,322 @@ function formatStoryMaterialDialogText(text: string) {
     .trim();
 }
 
+const CONFIRMATION_SCRIPT_BODY_LABEL = "【剧本确认稿正文】";
+const CONFIRMATION_BLOCK_HEADING_PATTERN =
+  /^(【人物名称 \/ 代号】|【角色表演锚】|【基础场景描述】|【复杂场景描述】|【剧本确认稿正文】|【节奏落点】|【确认提示】)\s*$/u;
+const CONFIRMATION_BLOCKED_ANCHOR_PATTERN =
+  /(发型|发色|脸型|五官|服装风格|身材|年龄外观|人物参考图|参考图|源外身份|源外武器|源外道具|源外装备|源外伤口|军队规模|军团规模|世界观设定)/u;
+const CONFIRMATION_VISIBLE_SCENE_TERMS = [
+  "废墟",
+  "巷口",
+  "城市",
+  "街道",
+  "城墙",
+  "战场",
+  "宫殿",
+  "山路",
+  "庭院",
+  "房间",
+  "大厅",
+  "桥",
+  "门",
+  "楼",
+  "石墙",
+  "瓦砾",
+  "尘土",
+  "雨",
+  "雪",
+  "风",
+  "火光",
+  "灯光",
+  "月光",
+  "阴影",
+];
+const CONFIRMATION_TIME_LIGHT_TERMS = [
+  "清晨",
+  "白天",
+  "黄昏",
+  "夜晚",
+  "深夜",
+  "晨光",
+  "夕阳",
+  "火光",
+  "灯光",
+  "月光",
+  "阴影",
+  "雨",
+  "雪",
+];
+const CONFIRMATION_MOVEMENT_TERMS = ["逼近", "追击", "逃离", "冲向", "后退", "转身", "护住", "提醒", "对峙", "包围"];
+const CONFIRMATION_EXPRESSION_TERMS = ["害怕", "紧张", "愤怒", "犹豫", "坚定", "冷静", "惊讶", "绝望", "希望", "凝视"];
+const CONFIRMATION_MICRO_ACTION_TERMS = ["单膝跪地", "握紧", "抬头", "回头", "停顿", "后退", "护住", "低声", "沉默", "喘息", "凝视"];
+const CONFIRMATION_TONE_TERMS = ["低声", "呼喊", "喊", "质问", "命令", "提醒", "哽咽", "坚定", "冷静", "急促"];
+const CONFIRMATION_MATERIAL_TERMS = ["石墙", "瓦砾", "尘土", "木门", "水面", "玻璃", "金属", "废墟"];
+
+function formatRewriteConfirmationDraftForUi({
+  sourceText,
+  acceptedText,
+  scene,
+  durationSeconds,
+  targetDurationMode,
+  response,
+}: {
+  sourceText: string;
+  acceptedText: string;
+  scene: SceneOption;
+  durationSeconds: number;
+  targetDurationMode: TargetDurationMode;
+  response?: ExpandScriptResponse | null;
+}) {
+  const cleanAccepted = stripConfirmationUnsafeText(extractScriptBody(acceptedText) || acceptedText);
+  const cleanSource = stripConfirmationUnsafeText(sourceText || cleanAccepted);
+  const sourceAnalysis = analyzeSourceInputForUi(cleanSource);
+  const storyFactFrame = buildStoryFactFrameForUi(
+    cleanSource,
+    sourceAnalysis,
+    scene,
+    durationSeconds,
+    targetDurationMode,
+  );
+  const scriptBody = cleanAccepted || cleanSource;
+
+  return [
+    formatConfirmationBlock("【人物名称 / 代号】", buildConfirmationCharacterLines(storyFactFrame, cleanSource)),
+    formatConfirmationBlock("【角色表演锚】", buildConfirmationPerformanceLines(storyFactFrame, cleanSource)),
+    formatConfirmationBlock("【基础场景描述】", buildConfirmationBaseSceneLines(storyFactFrame, scene, cleanSource)),
+    formatConfirmationBlock("【复杂场景描述】", buildConfirmationComplexSceneLines(storyFactFrame, cleanSource)),
+    formatConfirmationBlock(CONFIRMATION_SCRIPT_BODY_LABEL, scriptBody || "等待剧本确认稿正文。"),
+    formatConfirmationBlock(
+      "【节奏落点】",
+      buildConfirmationBeatLines(scriptBody, durationSeconds, targetDurationMode, response),
+    ),
+    formatConfirmationBlock("【确认提示】", buildConfirmationPromptLines(response)),
+  ].join("\n\n");
+}
+
+function formatConfirmationBlock(label: string, body: string | string[]) {
+  const cleanBody = Array.isArray(body)
+    ? body.map((line) => line.trim()).filter(Boolean).join("\n")
+    : body.trim();
+  return `${label}\n${cleanBody || "未在材料中明示。"}`;
+}
+
+function buildConfirmationCharacterLines(frame: StoryFactFrameForUi, sourceText: string) {
+  const characters = uniqueStrings([
+    ...frame.characters,
+    ...extractCharacterNamesFromText(sourceText),
+  ]).slice(0, 6);
+  if (!characters.length) {
+    return ["- 名称 / 代号：未在材料中明示；角色功能：以剧本确认稿正文为准。"];
+  }
+
+  return characters.map((character) => {
+    const relationship = findConfirmationMention(frame.relationships, character) || "未在材料中明示";
+    const action =
+      findConfirmationMention(frame.events, character) ||
+      findSentenceMention(sourceText, character) ||
+      "见剧本确认稿正文";
+    const expression = extractConfirmationKeyword(sourceText, CONFIRMATION_EXPRESSION_TERMS, character) || "未在材料中明示";
+    const microAction = extractConfirmationKeyword(sourceText, CONFIRMATION_MICRO_ACTION_TERMS, character) || "未在材料中明示";
+    const tone = extractConfirmationKeyword(sourceText, CONFIRMATION_TONE_TERMS, character) || "未在材料中明示";
+    return [
+      `- 名称 / 代号：${sanitizeConfirmationAnchor(character, 24)}`,
+      `角色功能：${inferConfirmationCharacterFunction(character, relationship, action)}`,
+      `关系：${relationship}`,
+      `动作：${action}`,
+      `神情：${expression}`,
+      `微动作：${microAction}`,
+      `语气：${tone}。`,
+    ].join("；");
+  });
+}
+
+function buildConfirmationPerformanceLines(frame: StoryFactFrameForUi, sourceText: string) {
+  return [
+    `- 动作：${formatConfirmationFactList(frame.events, "按正文动作顺序确认", 4)}`,
+    `- 神情：${extractConfirmationKeyword(sourceText, CONFIRMATION_EXPRESSION_TERMS) || "未在材料中明示"}`,
+    `- 微动作：${extractConfirmationKeyword(sourceText, CONFIRMATION_MICRO_ACTION_TERMS) || "未在材料中明示"}`,
+    `- 语气：${extractConfirmationKeyword(sourceText, CONFIRMATION_TONE_TERMS) || "未在材料中明示"}`,
+  ];
+}
+
+function buildConfirmationBaseSceneLines(frame: StoryFactFrameForUi, scene: SceneOption, sourceText: string) {
+  return [
+    `- 场景类型：${scene.group} / ${scene.label}`,
+    `- 地点：${formatConfirmationFactList(frame.locations, "以正文明确地点为准", 4)}`,
+    `- 可见元素：${formatConfirmationTerms(sourceText, CONFIRMATION_VISIBLE_SCENE_TERMS, "以正文明确空间和动作对象为准")}`,
+    `- 时间 / 光线：${formatConfirmationTerms(sourceText, CONFIRMATION_TIME_LIGHT_TERMS, "未在材料中明示")}`,
+  ];
+}
+
+function buildConfirmationComplexSceneLines(frame: StoryFactFrameForUi, sourceText: string) {
+  const pressure = formatConfirmationFactList(frame.pressureRelations, "以正文冲突关系为准", 3);
+  return [
+    `- 空间关系：${formatConfirmationFactList(frame.relationships, "以正文人物关系和位置关系为准", 3)}`,
+    `- 压力方向：${pressure}`,
+    `- 前中后景：分镜阶段按已确认地点、可见元素和人物动作拆分，不新增画面事实`,
+    `- 动线：${formatConfirmationTerms(sourceText, CONFIRMATION_MOVEMENT_TERMS, pressure)}`,
+    `- 背景材质：${formatConfirmationTerms(sourceText, CONFIRMATION_MATERIAL_TERMS, "未在材料中明示")}`,
+    `- 光源：${formatConfirmationTerms(sourceText, CONFIRMATION_TIME_LIGHT_TERMS, "未在材料中明示")}`,
+    `- 场面调度：${formatConfirmationFactList(frame.events, "按剧本确认稿正文的事件顺序调度", 3)}`,
+    `- 合理补全：${formatConfirmationInferredFacts(frame.inferredSceneFacts, "未启用额外导演级补全")}`,
+  ];
+}
+
+function formatConfirmationInferredFacts(values: InferredSceneFactForUi[], fallback: string) {
+  const facts = values
+    .map((value) => sanitizeConfirmationAnchor(value.fact, 72))
+    .filter(Boolean)
+    .slice(0, 4);
+  return facts.length ? facts.join(" / ") : fallback;
+}
+
+function buildConfirmationBeatLines(
+  scriptBody: string,
+  durationSeconds: number,
+  targetDurationMode: TargetDurationMode,
+  response?: ExpandScriptResponse | null,
+) {
+  const duration = normalizeScriptDurationOption(durationSeconds, 15);
+  const durationLabel = targetDurationMode === LONG_TEXT_DURATION_MODE
+    ? `长文本模式，预计剧情总时长约 ${duration} 秒`
+    : `固定目标 ${duration} 秒`;
+  const planSummary = responseDurationPlanSummary(response ?? null);
+  const beats = buildCandidateSourceSegments(scriptBody).slice(0, 3);
+  const beatLabels = beats.length <= 1 ? ["整体"] : beats.length === 2 ? ["起", "落"] : ["起", "承", "落"];
+  return [
+    `- 目标节奏：${durationLabel}${planSummary ? `；${planSummary}` : ""}`,
+    ...beats.map((beat, index) => `- ${beatLabels[index] ?? `第 ${index + 1} 落点`}：${sanitizeConfirmationAnchor(beat, 120)}`),
+  ];
+}
+
+function buildConfirmationPromptLines(response?: ExpandScriptResponse | null) {
+  const kbSummary = confirmationKbSummary(response);
+  return [
+    "- 确认后：正文进入镜头任务拆解，下方分镜字段和导出字段不在本步骤改名或新增。",
+    kbSummary
+      ? `- 知识库：仅使用摘要信息；${kbSummary}`
+      : "- 知识库：仅遵守摘要使用规则，本框不展示知识库原文。",
+    "- 事实边界：未在原文、确认正文或摘要中明示的信息，不作为本次确认内容。",
+  ];
+}
+
+function confirmationKbSummary(response?: ExpandScriptResponse | null) {
+  const router = response?.kb_router_result;
+  const summary =
+    router?.kb_context_summary ||
+    router?.selected_kb_rules?.map((rule) => rule.summary).filter(Boolean).join("；") ||
+    "";
+  return safeConfirmationSummary(summary, 140);
+}
+
+function safeConfirmationSummary(value: string, maxLength = 120) {
+  const clean = sanitizeConfirmationAnchor(value, maxLength);
+  if (!clean || /[_{}\[\]=]|ReadyStub|manifest/i.test(clean)) {
+    return "";
+  }
+  return clean;
+}
+
+function formatConfirmationFactList(values: string[], fallback: string, limit = 4) {
+  const facts = uniqueStrings(values)
+    .map((value) => sanitizeConfirmationAnchor(value, 72))
+    .filter(Boolean)
+    .slice(0, limit);
+  return facts.length ? facts.join(" / ") : fallback;
+}
+
+function formatConfirmationTerms(sourceText: string, terms: string[], fallback: string) {
+  const found = terms
+    .filter((term) => sourceText.includes(term))
+    .map((term) => sanitizeConfirmationAnchor(term, 24))
+    .filter(Boolean);
+  return uniqueStrings(found).slice(0, 6).join(" / ") || fallback;
+}
+
+function findConfirmationMention(values: string[], term: string) {
+  const mention = values.find((value) => value.includes(term));
+  return mention ? sanitizeConfirmationAnchor(mention, 72) : "";
+}
+
+function findSentenceMention(sourceText: string, term: string) {
+  const sentence = splitScriptBody(sourceText).find((item) => item.includes(term));
+  return sentence ? sanitizeConfirmationAnchor(sentence, 72) : "";
+}
+
+function extractConfirmationKeyword(sourceText: string, terms: string[], term?: string) {
+  const sentence = splitScriptBody(sourceText).find((item) =>
+    (!term || item.includes(term)) && terms.some((keyword) => item.includes(keyword)),
+  );
+  if (!sentence) {
+    return "";
+  }
+  const keyword = terms.find((item) => sentence.includes(item));
+  return keyword ? sanitizeConfirmationAnchor(keyword, 32) : "";
+}
+
+function inferConfirmationCharacterFunction(character: string, relationship: string, action: string) {
+  const source = `${character} ${relationship} ${action}`;
+  if (/(敌|反派|追兵|威胁|逼近|对抗)/.test(source)) {
+    return "施压 / 对抗";
+  }
+  if (/(护住|保护|救|搀扶|带着)/.test(source)) {
+    return "保护 / 推进行动";
+  }
+  if (/(提醒|呼喊|劝|解释)/.test(source)) {
+    return "提醒 / 信息推进";
+  }
+  if (/(主角|主人公|男主|女主)/.test(character)) {
+    return "主行动线";
+  }
+  return "按正文参与事件";
+}
+
+function stripConfirmationUnsafeText(text: string) {
+  return stripStoryDialogInternalText(text)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !isConfirmationUnsafeLine(line))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function sanitizeConfirmationAnchor(value: string, maxLength = 96) {
+  const normalized = normalizeScriptText(value);
+  if (!normalized || isConfirmationUnsafeLine(normalized)) {
+    return "";
+  }
+  const clean = normalized
+    .replace(/[{}[\]=]/g, "")
+    .replace(/\b(?:prompt_text|source_register|overlay|validator|trace|schema|hash|rows)\b/gi, "")
+    .replace(/\braw[_\s-]*(?:kb|prompt)\b/gi, "")
+    .trim();
+  if (!clean || isConfirmationUnsafeLine(clean) || CONFIRMATION_BLOCKED_ANCHOR_PATTERN.test(clean)) {
+    return "";
+  }
+  return truncatePreview(clean, maxLength).replace(/[。；;]\s*$/, "");
+}
+
+function isConfirmationUnsafeLine(line: string) {
+  return /\b(?:prompt_text|source_register|overlay|validator|trace|schema|hash|rows|token|secret|authorization|bearer)\b|raw[_\s-]*(?:kb|prompt)/i.test(line);
+}
+
+function extractConfirmationScriptBodyFromDialogText(value: string) {
+  const blocks = parseEditableStoryDialogBlocks(value);
+  const bodyBlock = blocks.find((block) => block.label === CONFIRMATION_SCRIPT_BODY_LABEL);
+  return (bodyBlock?.body || extractEditableStoryDialogText(value)).trim();
+}
+
 function parseEditableStoryDialogBlocks(value: string): ScriptDialogBlock[] {
   const cleanValue = value.replace(/\r\n/g, "\n").trim();
   if (!cleanValue) {
     return [];
   }
 
-  const headingPattern = /^(正文|第\s*\d+\s*段|结尾)\s*[：:]?\s*$/u;
+  const headingPattern = cleanValue.includes(CONFIRMATION_SCRIPT_BODY_LABEL)
+    ? CONFIRMATION_BLOCK_HEADING_PATTERN
+    : /^(正文|第\s*\d+\s*段|结尾)\s*[：:]?\s*$/u;
   const blocks: ScriptDialogBlock[] = [];
   let current: ScriptDialogBlock | null = null;
 

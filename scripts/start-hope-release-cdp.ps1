@@ -3,7 +3,7 @@ param(
   [int]$Port = 9224,
   [string]$EnvFile = "C:\Users\Administrator\.codex\.sandbox-secrets\hope-qwen.env",
   [string]$Provider = "qwen",
-  [string]$Model = "qwen-plus",
+  [string]$Model = "qwen-max",
   [string]$ExpectedTargetUrl = "http://tauri.localhost/#/workbench",
   [int]$WaitSeconds = 12,
   [int]$StopWaitSeconds = 10,
@@ -23,6 +23,19 @@ param(
 $ErrorActionPreference = "Stop"
 $script:LastHopeWebView2QueryError = $null
 $script:ApplicationEventBaseline = Get-Date
+$AllowedQwenTextModels = @(
+  "qwen-max",
+  "qvq-max-2025-03-25",
+  "qwen-math-turbo",
+  "qwen-plus",
+  "qwen3-max-preview",
+  "qwen3-max-2025-09-23",
+  "qwen3-max",
+  "qwen3-max-2026-01-23",
+  "qwen3-max-thinking",
+  "qwen3.5-plus",
+  "qwen-long"
+)
 
 function Convert-ResultJson {
   param([hashtable]$Data)
@@ -563,7 +576,7 @@ $diagnosticLog = Join-Path $workDir "hope-shell-diagnostic.log"
 $profileRoot = Join-Path $env:TEMP "hope-webview2-cdp"
 $profileDir = Join-Path $profileRoot $launchId
 $effectiveModelEnabled = if ($ModelEnabled -eq "auto") {
-  $Provider -eq "qwen" -and $Model -eq "qwen-plus"
+  $Provider -eq "qwen" -and $AllowedQwenTextModels -contains $Model
 } else {
   $ModelEnabled -eq "true"
 }

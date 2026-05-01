@@ -431,6 +431,40 @@ pub struct ExpandScriptResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InferredSceneFactBinding {
+    pub fact: String,
+    #[serde(default)]
+    pub inference_reason: String,
+    #[serde(default)]
+    pub inference_scope: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AcceptedRewriteSnapshotBinding {
+    pub current_case_id: String,
+    pub source_text_hash: String,
+    pub accepted_rewrite_hash: String,
+    pub scene_type: String,
+    pub scene_label: String,
+    #[serde(default)]
+    pub scene_category: String,
+    pub duration_seconds: u16,
+    #[serde(default = "default_target_duration_mode")]
+    pub target_duration_mode: String,
+    #[serde(default)]
+    pub accepted_confirmation_body: String,
+    pub story_fact_frame_hash: String,
+    #[serde(default)]
+    pub explicit_facts: Vec<String>,
+    #[serde(default)]
+    pub inferred_scene_facts: Vec<InferredSceneFactBinding>,
+    #[serde(default)]
+    pub must_keep_facts: Vec<String>,
+    #[serde(default)]
+    pub forbidden_facts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GenerateStoryboardRequest {
     pub task_name: String,
     pub script_id: Option<String>,
@@ -464,6 +498,58 @@ pub struct GenerateStoryboardRequest {
     pub auto_segment_strategy: String,
     #[serde(default)]
     pub model_config_summary: Option<ModelConfigSummary>,
+    #[serde(default)]
+    pub accepted_rewrite_snapshot: Option<AcceptedRewriteSnapshotBinding>,
+    #[serde(default)]
+    pub current_case_id: String,
+    #[serde(default)]
+    pub source_text_hash: String,
+    #[serde(default)]
+    pub accepted_rewrite_hash: String,
+    #[serde(default)]
+    pub task_script_hash: String,
+    #[serde(default)]
+    pub story_fact_frame_hash: String,
+    #[serde(default)]
+    pub source_profile: String,
+    #[serde(default)]
+    pub must_keep_facts: Vec<String>,
+    #[serde(default)]
+    pub forbidden_facts: Vec<String>,
+}
+
+impl Default for GenerateStoryboardRequest {
+    fn default() -> Self {
+        Self {
+            task_name: String::new(),
+            script_id: None,
+            scene_type: None,
+            scene_label: None,
+            scene_category: None,
+            shot_script: None,
+            primary_scene_type: None,
+            primary_scene_label: None,
+            primary_scene_category: None,
+            shot_scene_type: None,
+            shot_scene_label: None,
+            shot_intent: None,
+            adaptation_reason: None,
+            expanded_script_text: None,
+            selected_total_duration_seconds: 0,
+            target_duration_mode: default_target_duration_mode(),
+            auto_segment_strategy: String::new(),
+            model_config_summary: None,
+            accepted_rewrite_snapshot: None,
+            current_case_id: String::new(),
+            source_text_hash: String::new(),
+            accepted_rewrite_hash: String::new(),
+            task_script_hash: String::new(),
+            story_fact_frame_hash: String::new(),
+            source_profile: String::new(),
+            must_keep_facts: Vec::new(),
+            forbidden_facts: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -510,6 +596,44 @@ pub struct StoryboardDurationPlan {
     pub row_count: u32,
     pub per_row_seconds: u16,
     pub allocated_seconds: u16,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoryboardBindingEvidence {
+    #[serde(default)]
+    pub current_case_id: String,
+    #[serde(default)]
+    pub source_text_hash: String,
+    #[serde(default)]
+    pub accepted_rewrite_hash: String,
+    #[serde(default)]
+    pub task_script_hash: String,
+    #[serde(default)]
+    pub story_fact_frame_hash: String,
+    #[serde(default)]
+    pub source_profile: String,
+    #[serde(default)]
+    pub scene_type: String,
+    #[serde(default)]
+    pub duration_seconds: u16,
+    #[serde(default)]
+    pub duration_plan_hash: String,
+    #[serde(default)]
+    pub storyboard_rows_hash: String,
+    #[serde(default)]
+    pub must_keep_facts: Vec<String>,
+    #[serde(default)]
+    pub missing_source_facts: Vec<String>,
+    #[serde(default)]
+    pub forbidden_facts: Vec<String>,
+    #[serde(default)]
+    pub forbidden_fact_hits: Vec<String>,
+    #[serde(default)]
+    pub stale_binding_detected: bool,
+    #[serde(default)]
+    pub kb_rule_pack_ids: Vec<String>,
+    #[serde(default)]
+    pub kb_snapshot_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -560,6 +684,8 @@ pub struct GenerateStoryboardResponse {
     #[serde(default)]
     pub dirty_source_note: Option<String>,
     pub kb_router_result: KbRouterRuntimeResponse,
+    #[serde(default)]
+    pub binding_evidence: StoryboardBindingEvidence,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
