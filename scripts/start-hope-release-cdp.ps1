@@ -3,7 +3,7 @@ param(
   [int]$Port = 9224,
   [string]$EnvFile = "C:\Users\Administrator\.codex\.sandbox-secrets\hope-qwen.env",
   [string]$Provider = "qwen",
-  [string]$Model = "qwen-max",
+  [string]$Model = "qwen-plus-2025-07-28",
   [string]$ExpectedTargetUrl = "http://tauri.localhost/#/workbench",
   [int]$WaitSeconds = 12,
   [int]$StopWaitSeconds = 10,
@@ -17,17 +17,22 @@ param(
   [switch]$StopExisting,
   [switch]$StopOnly,
   [switch]$StopOnCdpFailure,
-  [switch]$KeepOnCdpFailure
+  [switch]$KeepOnCdpFailure,
+  [switch]$NoProxy,
+  [switch]$QaProviderHardFail
 )
 
 $ErrorActionPreference = "Stop"
 $script:LastHopeWebView2QueryError = $null
 $script:ApplicationEventBaseline = Get-Date
 $AllowedQwenTextModels = @(
-  "qwen-max",
+  "qwen-plus-2025-07-28",
+  "qwen3.6-plus",
+  "qwen3.6-plus-2026-04-02",
   "qvq-max-2025-03-25",
-  "qwen-math-turbo",
   "qwen-plus",
+  "qwen-max",
+  "qwen-math-turbo",
   "qwen3-max-preview",
   "qwen3-max-2025-09-23",
   "qwen3-max",
@@ -69,6 +74,54 @@ function Get-EnvFileMap {
 function Quote-CmdArg {
   param([string]$Value)
   '"' + ($Value -replace '"', '\"') + '"'
+}
+
+function Test-ProcessEnvPresent {
+  param([string]$Name)
+  -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($Name, "Process"))
+}
+
+function Get-ProxyEnvPresence {
+  $httpProxyPresent = Test-ProcessEnvPresent -Name "HTTP_PROXY"
+  $httpsProxyPresent = Test-ProcessEnvPresent -Name "HTTPS_PROXY"
+  $allProxyPresent = Test-ProcessEnvPresent -Name "ALL_PROXY"
+  [ordered]@{
+    http_proxy_present = [bool]$httpProxyPresent
+    https_proxy_present = [bool]$httpsProxyPresent
+    all_proxy_present = [bool]$allProxyPresent
+    no_proxy_present = [bool](Test-ProcessEnvPresent -Name "NO_PROXY")
+    process_env_proxy_present = [bool]($httpProxyPresent -or $httpsProxyPresent -or $allProxyPresent)
+    raw_values_redacted = $true
+  }
+}
+
+function Clear-QaProxyEnv {
+  foreach ($name in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) {
+    [Environment]::SetEnvironmentVariable($name, $null, "Process")
+    Remove-Item -LiteralPath ("Env:{0}" -f $name) -ErrorAction SilentlyContinue
+  }
+  $localBypass = "localhost,127.0.0.1,::1"
+  [Environment]::SetEnvironmentVariable("NO_PROXY", $localBypass, "Process")
+  $env:NO_PROXY = $localBypass
+}
+
+function Get-SanitizedLaunchArgs {
+  param([string[]]$ArgList)
+  @(
+    foreach ($arg in $ArgList) {
+      if ($arg -like "--hope-qa-env-file=*") {
+        "--hope-qa-env-file=<redacted-path>"
+      } elseif ($arg -like "--hope-qa-base-url=*") {
+        "--hope-qa-base-url=<redacted-url-present>"
+      } elseif ($arg -like "--hope-qa-webview2-user-data-folder=*") {
+        "--hope-qa-webview2-user-data-folder=<redacted-path>"
+      } elseif ($arg -like "--hope-qa-pid-file=*") {
+        "--hope-qa-pid-file=<redacted-path>"
+      } else {
+        $arg
+      }
+    }
+  )
 }
 
 function New-WebView2BrowserArguments {
@@ -580,6 +633,23 @@ $effectiveModelEnabled = if ($ModelEnabled -eq "auto") {
 } else {
   $ModelEnabled -eq "true"
 }
+$proxyEnvBefore = Get-ProxyEnvPresence
+if ($NoProxy) {
+  Clear-QaProxyEnv
+  [Environment]::SetEnvironmentVariable("HOPE_QA_PROXY_CLEARED", "true", "Process")
+  [Environment]::SetEnvironmentVariable("HOPE_QA_PROXY_EVIDENCE", "true", "Process")
+} else {
+  [Environment]::SetEnvironmentVariable("HOPE_QA_PROXY_CLEARED", $null, "Process")
+  [Environment]::SetEnvironmentVariable("HOPE_QA_PROXY_EVIDENCE", $null, "Process")
+}
+if ($QaProviderHardFail) {
+  [Environment]::SetEnvironmentVariable("HOPE_QA_NO_LOCAL_FALLBACK", "true", "Process")
+  [Environment]::SetEnvironmentVariable("HOPE_QA_PROVIDER_TIMEOUT_SECONDS", "60", "Process")
+} else {
+  [Environment]::SetEnvironmentVariable("HOPE_QA_NO_LOCAL_FALLBACK", $null, "Process")
+  [Environment]::SetEnvironmentVariable("HOPE_QA_PROVIDER_TIMEOUT_SECONDS", $null, "Process")
+}
+$proxyEnvAfter = Get-ProxyEnvPresence
 $result = [ordered]@{
   ok = $false
   launch_id = $launchId
@@ -597,12 +667,20 @@ $result = [ordered]@{
   provider = $Provider
   model = $Model
   model_enabled = [bool]$effectiveModelEnabled
+  qa_no_proxy = [bool]$NoProxy
+  qa_provider_hard_fail = [bool]$QaProviderHardFail
+  qa_provider_timeout_seconds = if ($QaProviderHardFail) { 60 } else { $null }
+  proxy_env_before = $proxyEnvBefore
+  proxy_env_after = $proxyEnvAfter
+  process_env_proxy_present = [bool]$proxyEnvAfter.process_env_proxy_present
+  qa_proxy_cleared_in_launcher = [bool]($NoProxy -and -not $proxyEnvAfter.process_env_proxy_present)
   webview2_argument_mode = $WebView2ArgumentMode
   api_key_present = $false
   base_url_present = $false
   expected_target_url = $ExpectedTargetUrl
   cdp_args = New-WebView2BrowserArguments -Mode $WebView2ArgumentMode -LocalPort $Port
   launch_args = @("--hope-qa-cdp-port=$Port")
+  launch_args_sanitized = @("--hope-qa-cdp-port=$Port")
   webview2_user_data_folder = $null
   stdout_log = $null
   stderr_log = $null
@@ -819,7 +897,10 @@ try {
     "--hope-qa-model-enabled=$($effectiveModelEnabled.ToString().ToLowerInvariant())",
     "--hope-qa-launch-id=$launchId",
     "--hope-qa-webview2-user-data-folder=$profileDir",
-    "--hope-qa-pid-file=$pidFile"
+    "--hope-qa-pid-file=$pidFile",
+    "--hope-qa-no-proxy=$($NoProxy.ToString().ToLowerInvariant())",
+    "--hope-qa-no-local-fallback=$($QaProviderHardFail.ToString().ToLowerInvariant())",
+    "--hope-qa-provider-timeout-seconds=$(if ($QaProviderHardFail) { 60 } else { 30 })"
   )
   if (-not [string]::IsNullOrWhiteSpace($effectiveBaseUrl)) {
     $launchArgs = @($launchArgs + "--hope-qa-base-url=$effectiveBaseUrl")
@@ -830,7 +911,8 @@ try {
     $previousBrowserArgs = [Environment]::GetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "Process")
     [Environment]::SetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", $browserArgs, "Process")
   }
-  $result.launch_args = $launchArgs
+  $result.launch_args = Get-SanitizedLaunchArgs -ArgList $launchArgs
+  $result.launch_args_sanitized = $result.launch_args
   try {
     $appProc = Start-Process -FilePath $exe -ArgumentList $launchArgs -WorkingDirectory $workDir -PassThru
   } finally {

@@ -3,12 +3,26 @@
   "purpose": "Pre-403 smoke cases for source/scene/duration/accepted-rewrite drift.",
   "model": {
     "provider": "qwen",
-    "expected_model": "qwen-max"
+    "expected_model": "qwen-plus-2025-07-28"
   },
+  "model_contract": {
+    "certification_matrix": "tests/qa/desktop-model-certification-matrix.json",
+    "contract_kind": "structural_safety_contract_not_creative_style_template",
+    "requires_hard_gate_failures": true,
+    "requires_quality_warnings": true,
+    "creative_freedom_preserved": true
+  },
+  "gate_model_order": [
+    "qwen-plus-2025-07-28",
+    "qwen3.6-plus",
+    "qwen3.6-plus-2026-04-02",
+    "qvq-max-2025-03-25",
+    "qwen-plus"
+  ],
   "gate_scope": {
     "phase": "P2-P4 cross-drift carrier before 403-case",
     "script_goal": "expand",
-    "runner_requirement": "--script-goal expand --expected-provider qwen --expected-model qwen-max --assert-binding 1",
+    "runner_requirement": "--script-goal expand --expected-provider qwen --expected-model qwen-plus-2025-07-28 --assert-binding 1",
     "supports_16_case_manifest": "tests/qa/desktop-16-case-matrix.json",
     "not_403_case_execution": true
   },
@@ -23,6 +37,9 @@
     "forbidden_sources": [
       "sample_text",
       "smoke_extracts",
+      "qa_reference",
+      "source_sample_id",
+      "sample entity markers",
       "raw KB rows",
       "raw prompt body",
       "source_register",

@@ -1,8 +1,15 @@
 {
-  "name": "Hope desktop 16-case pre-403 qwen-max matrix",
+  "name": "Hope desktop 16-case pre-403 qwen-plus-2025-07-28 matrix",
   "purpose": "P1-P4 pre-403 gate manifest for scene, duration, text, and script-goal drift using the four-group business carrier.",
   "provider": "qwen",
-  "expected_model": "qwen-max",
+  "expected_model": "qwen-plus-2025-07-28",
+  "gate_model_order": [
+    "qwen-plus-2025-07-28",
+    "qwen3.6-plus",
+    "qwen3.6-plus-2026-04-02",
+    "qvq-max-2025-03-25",
+    "qwen-plus"
+  ],
   "status": "partial_executable_ready_not_executed",
   "must_not_execute_in_this_thread": [
     "403-case matrix",
@@ -13,11 +20,21 @@
     "packaging"
   ],
   "model_contract": {
-    "runner_requirement": "--script-goal <case.script_goal> --expected-provider qwen --expected-model qwen-max --assert-binding 1",
+    "certification_matrix": "tests/qa/desktop-model-certification-matrix.json",
+    "contract_kind": "structural_safety_contract_not_creative_style_template",
+    "requires_hard_gate_failures": true,
+    "requires_quality_warnings": true,
+    "creative_freedom_preserved": true,
+    "runner_requirement": "--script-goal <case.script_goal> --expected-provider qwen --expected-model qwen-plus-2025-07-28 --assert-binding 1",
     "deprecated_models": [
       {
         "model": "qwen-plus",
-        "status": "historical_compatibility_only",
+        "status": "last_fallback_candidate_requires_probe",
+        "gate_eligible": false
+      },
+      {
+        "model": "qwen-max",
+        "status": "previous_gate_model_quota_blocked",
         "gate_eligible": false
       }
     ]
@@ -73,7 +90,7 @@
         "expand"
       ],
       "case_count": 16,
-      "meaning": "Harness can independently select expand or rewrite command paths, and app-emitted QA trace exposes observed script_goal/command_path for the selected entry. Compact evidence records selected and observed command evidence, qwen/qwen-max provider, accepted snapshot, StoryFactFrame binding, marker-based prompt_text boundary evidence, rows_match/row_diffs, no_http_403, no live fallback, no validator pseudo-success, and runner_assert_failures. This is partial executable readiness only; no 16-case live run or runtime source-lineage proof is claimed."
+      "meaning": "Harness can independently select expand or rewrite command paths, and app-emitted QA trace exposes observed script_goal/command_path for the selected entry. Compact evidence records selected and observed command evidence, qwen/qwen-plus-2025-07-28 provider, accepted snapshot, StoryFactFrame binding, marker-based prompt_text boundary evidence, rows_match/row_diffs, no_http_403, no live fallback, no validator pseudo-success, and runner_assert_failures. This is partial executable readiness only; no 16-case live run or runtime source-lineage proof is claimed."
     },
     "degraded_8_case": {
       "script_goal": [],
@@ -86,7 +103,7 @@
       "selected_ui_control",
       "selected_ui_selector",
       "provider=qwen",
-      "model=qwen-max",
+      "model=qwen-plus-2025-07-28",
       "accepted_snapshot_hash",
       "accepted_rewrite_hash",
       "StoryFactFrame binding evidence",
@@ -101,6 +118,13 @@
       "overlay_json_absent",
       "rows_match",
       "row_diffs",
+      "hard_gate_failures",
+      "quality_warnings",
+      "normalizer_actions",
+      "creative_freedom_preserved",
+      "template_overconstraint_risk",
+      "sample_leakage_risk",
+      "model_output_contract_evidence",
       "no_http_403",
       "no_live_fallback",
       "no_validator_pseudo_success",
@@ -111,7 +135,7 @@
       "prompt_text_boundary_method"
     ],
     "authorization_boundary": "This manifest records harness executable readiness only. It does not claim any live 16-case pass and does not authorize 403-case, packaging, push, commit, or desktop shell execution in this thread.",
-    "unblock_condition": "Run the full 16 cases later with --script-goal set from each case, --assert-binding 1, qwen/qwen-max hard gate, StoryFactFrame, accepted snapshot, marker-based prompt_text boundary, forbidden drift, rows_match, no-http-403, no-live-fallback, and no-validator-pseudo-success evidence all clean before 403-case entry; source-lineage proof remains a live trace review requirement."
+    "unblock_condition": "Run the full 16 cases later with --script-goal set from each case, --assert-binding 1, qwen/qwen-plus-2025-07-28 hard gate, StoryFactFrame, accepted snapshot, marker-based prompt_text boundary, forbidden drift, rows_match, no-http-403, no-live-fallback, and no-validator-pseudo-success evidence all clean before 403-case entry; source-lineage proof remains a live trace review requirement."
   },
   "business_carrier": {
     "four_group_manifest": "tests/qa/desktop-four-groups.json",

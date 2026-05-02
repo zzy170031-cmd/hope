@@ -1,15 +1,32 @@
 {
-  "name": "Hope desktop four-group qwen-max trace gate",
+  "name": "Hope desktop four-group qwen-plus-2025-07-28 trace gate",
   "provider": "qwen",
-  "model": "qwen-max",
+  "model": "qwen-plus-2025-07-28",
+  "gate_model_order": [
+    "qwen-plus-2025-07-28",
+    "qwen3.6-plus",
+    "qwen3.6-plus-2026-04-02",
+    "qvq-max-2025-03-25",
+    "qwen-plus"
+  ],
   "model_contract": {
+    "certification_matrix": "tests/qa/desktop-model-certification-matrix.json",
+    "contract_kind": "structural_safety_contract_not_creative_style_template",
+    "requires_hard_gate_failures": true,
+    "requires_quality_warnings": true,
+    "creative_freedom_preserved": true,
     "provider": "qwen",
-    "expected_model": "qwen-max",
-    "runner_requirement": "--script-goal expand --expected-provider qwen --expected-model qwen-max --assert-binding 1",
+    "expected_model": "qwen-plus-2025-07-28",
+    "runner_requirement": "--script-goal expand --expected-provider qwen --expected-model qwen-plus-2025-07-28 --assert-binding 1",
     "deprecated_models": [
       {
         "model": "qwen-plus",
-        "status": "historical_compatibility_only",
+        "status": "last_fallback_candidate_requires_probe",
+        "gate_eligible": false
+      },
+      {
+        "model": "qwen-max",
+        "status": "previous_gate_model_quota_blocked",
         "gate_eligible": false
       }
     ]
@@ -19,7 +36,7 @@
     "carries_manifest": "tests/qa/desktop-16-case-matrix.json",
     "not_403_case_execution": true,
     "script_goal": "expand",
-    "runner_requirement": "--script-goal expand --expected-provider qwen --expected-model qwen-max --assert-binding 1"
+    "runner_requirement": "--script-goal expand --expected-provider qwen --expected-model qwen-plus-2025-07-28 --assert-binding 1"
   },
   "duration_seconds": 15,
   "requires_real_release_webview2": true,

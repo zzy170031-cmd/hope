@@ -18,7 +18,7 @@ machine.
 Use the repo-local launcher from a checkout of `codex/desktop-shell`:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-hope-release-cdp.ps1 -Provider qwen -Model qwen-max -StopExisting -StopOnCdpFailure -WaitSeconds 20
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-hope-release-cdp.ps1 -Provider qwen -Model qwen-plus-2025-07-28 -NoProxy -QaProviderHardFail -StopExisting -StopOnCdpFailure -WaitSeconds 20
 ```
 
 Cleanup command:
@@ -30,7 +30,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-hope-rel
 The legacy local launcher path may still exist on the original machine:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File E:\codex\tools\start-hope-release-cdp.ps1 -Provider qwen -Model qwen-max -StopExisting -StopOnCdpFailure -WaitSeconds 20
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File E:\codex\tools\start-hope-release-cdp.ps1 -Provider qwen -Model qwen-plus-2025-07-28 -StopExisting -StopOnCdpFailure -WaitSeconds 20
 ```
 
 For new machines, prefer the repo-local launcher.
@@ -61,10 +61,12 @@ Never commit:
 
 Non-secret Qwen model rule:
 
-- Current QA live default model is `qwen-max`.
-- Qwen API model candidate order is `qwen-max -> qvq-max-2025-03-25 -> qwen-math-turbo`.
-- `qwen-plus` is retained only as a historical compatibility model, not the
-  current default gate.
+- Current QA live default model is `qwen-plus-2025-07-28`.
+- Qwen API gate candidate order is `qwen-plus-2025-07-28 -> qwen3.6-plus -> qwen3.6-plus-2026-04-02 -> qvq-max-2025-03-25 -> qwen-plus`.
+- `qwen-plus` is retained only as the last fallback candidate after explicit
+  sanitized probe evidence, not the current default gate.
+- `qwen-max` is a previous gate model and must not be used for current gate
+  evidence while the provider reports entitlement/quota failure for it.
 - `qwen-plus` may still appear in app/UI/script compatibility allowlists. A
   run that starts or expects `qwen-plus` is non-gate even if the local provider
   status matches it.
@@ -72,12 +74,60 @@ Non-secret Qwen model rule:
   shell startup command and the runner `--expected-model` argument.
 - Do not silently switch models inside the UI-driven trace.
 - Do not pass QA through fallback-only behavior or fallback pseudo-success.
+- For qwen/qwen-plus-2025-07-28 release-shell QA, start with `-NoProxy -QaProviderHardFail`
+  unless the controller explicitly asks for proxy diagnostics.
+- The launcher evidence is sanitized only: `process_env_proxy_present`,
+  `proxy_env_before`, `proxy_env_after`, `qa_proxy_cleared_in_launcher`, and
+  `qa_provider_hard_fail`. It must not include raw proxy values or secrets.
+- QA hard-fail mode sets `HOPE_QA_NO_LOCAL_FALLBACK` for the launched app. If
+  qwen retry is exhausted, runtime returns a blocked QA result with
+  `text_model_qa_no_local_fallback_blocked`; it must not create or accept a
+  local candidate as a live pass.
+- QA hard-fail mode may also set a sanitized provider timeout override for
+  release gates. This is QA-only stable transport, not a product default and
+  not a user no-proxy requirement. Timeout exhaustion still fails the gate.
+
+Multi-model output contract rule:
+
+- The executable multi-model certification manifest is
+  `tests/qa/desktop-model-certification-matrix.json`.
+- The contract is a structural safety contract, not a creative style template.
+  It verifies provider/model evidence, `script_goal`, `scene_type`, duration,
+  accepted snapshot hash, StoryFactFrame hash, source text hash, rows schema,
+  prompt_text boundary, no live fallback, rows_match, and validator status.
+- The normalizer may unwrap markdown JSON, normalize row field names, normalize
+  JSON/row shape, split visual/action/camera columns when labels are explicit,
+  annotate source/forbidden fact refs, and record normalize notes. It must not
+  add user source facts, invent characters/props/places/worldview, rewrite user
+  facts to pass validators, force a fixed style template, use 21/27 sample
+  content, or present fallback/local candidate output as live provider output.
+- `hard_gate_failures[]` are reserved for source fact binding failure,
+  forbidden drift, prompt_text pollution, fallback/local candidate,
+  provider/model mismatch, scene_type or duration override, non-executable rows
+  schema, rows_match=false, stale/missing StoryFactFrame or accepted snapshot,
+  and cleanup failure.
+- `quality_warnings[]` are for product-quality review only: template-like
+  expression, weak rhythm, low visual specificity, plain prompt language, weak
+  emotion, or scene-type expression that is not distinct enough but does not
+  violate fact or boundary gates. A quality warning alone is not a hard-gate
+  failure and cannot substitute for a hard-gate pass.
+- Creative freedom must remain intact: no fixed three-row requirement, no fixed
+  shot sentence style, no fixed action tempo, no fixed camera style, and no
+  runtime use of 21/27 sample narrative structures, sample people, sample props,
+  sample places, or sample worldview.
+- Prompt text must not contain `sample_text`, `smoke_extracts`,
+  `qa_reference`, `source_sample_id`, sample entity markers, raw KB rows,
+  `source_register`, or overlay JSON. These markers are hard prompt-boundary
+  failures, not quality warnings.
+- The same contract is used for `qwen-plus-2025-07-28`, `qwen3.6-plus`,
+  `qwen3.6-plus-2026-04-02`, `qvq-max-2025-03-25`, and the final
+  `qwen-plus` alias candidate. Do not add model-specific pass logic.
 
 Before running business QA, confirm provider status from the real release shell:
 
 ```text
 provider=qwen
-model=qwen-max
+model=qwen-plus-2025-07-28
 enabled=true
 base_url_present=true
 api_key_present=true
@@ -105,7 +155,7 @@ scripts/hope-ui-driven-trace-runner.mjs
 Example invocation after the release shell CDP target is ready:
 
 ```powershell
-node .\scripts\hope-ui-driven-trace-runner.mjs --case A_hot_blood_battle --script-goal expand --scene 热血战斗 --source "废墟之上，主角单膝跪地，敌人缓步逼近。" --duration 15 --expected-provider qwen --expected-model qwen-max --assert-binding 1 --compact 1
+node .\scripts\hope-ui-driven-trace-runner.mjs --case A_hot_blood_battle --script-goal expand --scene 热血战斗 --source "废墟之上，主角单膝跪地，敌人缓步逼近。" --duration 15 --expected-provider qwen --expected-model qwen-plus-2025-07-28 --assert-binding 1 --assert-no-proxy-env 1 --compact 1
 ```
 
 Each case must:
@@ -130,8 +180,8 @@ Each case must:
 Required trace checks:
 
 - provider is `qwen`
-- expected model is `qwen-max`
-- runner passes `--script-goal expand --expected-provider qwen --expected-model qwen-max --assert-binding 1`
+- expected model is `qwen-plus-2025-07-28`
+- runner passes `--script-goal expand --expected-provider qwen --expected-model qwen-plus-2025-07-28 --assert-binding 1`
 - `/json/list` target count is recorded
 - target URL/title is recorded
 - release shell PID is recorded
@@ -144,6 +194,18 @@ Required trace checks:
 - no `model_config_disabled`
 - no `text_model_live_call_closed`
 - provider is live-ready
+- compact fallback evidence includes `retry_timeline`, `qa_proxy_evidence`, and
+  `runner_env_proxy_evidence`
+- compact model contract evidence includes `hard_gate_failures`,
+  `quality_warnings`, `normalizer_actions`, `creative_freedom_preserved`,
+  `template_overconstraint_risk`, `sample_leakage_risk`,
+  `source_fact_binding_status`, `prompt_boundary_status`, and
+  `fallback_status`
+- `retry_recovered=true` is allowed only when `fallback_used=false` and no
+  local candidate is reported
+- `retry_exhausted=true` under QA hard-fail must become a blocked provider
+  result with `text_model_qa_no_local_fallback_blocked`, not
+  `text_model_live_storyboard_fallback`
 
 ## 16-Case Pre-403 Gate
 
@@ -171,7 +233,7 @@ Current executable state:
   `.script-actions button:nth-of-type(3)`.
 - The app-emitted expand trace records observed `script_goal` and
   `command_path`; compact runner evidence records both selected and observed
-  command evidence, qwen/qwen-max provider/model, accepted snapshot evidence,
+  command evidence, qwen/qwen-plus-2025-07-28 provider/model, accepted snapshot evidence,
   StoryFactFrame binding evidence, marker-based prompt_text boundary evidence,
   rows_match/row_diffs, no_http_403, no live fallback, no validator
   pseudo-success, and `runner_assert_failures`. Runtime source-lineage proof is
@@ -186,23 +248,37 @@ Later real 16-case execution must run each manifest case with its own
 `script_goal` value:
 
 ```powershell
-node .\scripts\hope-ui-driven-trace-runner.mjs --case <case.id> --script-goal <case.script_goal> --scene <case scene label> --source "<case source text>" --duration <case.duration_seconds> --expected-provider qwen --expected-model qwen-max --assert-binding 1 --compact 1
+node .\scripts\hope-ui-driven-trace-runner.mjs --case <case.id> --script-goal <case.script_goal> --scene <case scene label> --source "<case source text>" --duration <case.duration_seconds> --expected-provider qwen --expected-model qwen-plus-2025-07-28 --assert-binding 1 --assert-no-proxy-env 1 --compact 1
 ```
 
 Every case must verify the storyboard task, storyboard `prompt_text`,
 `scene_type`, `duration_seconds`, accepted snapshot, StoryFactFrame, forbidden
 drift fields, and prompt boundary. `prompt_text` may use accepted facts,
 StoryFactFrame, scene/duration, and rule tags only. It must not include
-`sample_text`, `smoke_extracts`, raw KB rows, raw prompt body,
-`source_register`, or overlay JSON.
+`sample_text`, `smoke_extracts`, `qa_reference`, `source_sample_id`, sample
+entity markers, raw KB rows, raw prompt body, `source_register`, or overlay JSON.
 
 Prompt boundary evidence must be sanitized and must not expose raw prompt
 bodies. The runner records marker-based boundary evidence; source-lineage proof
 still requires live trace review. Required fields are: `prompt_text_hash`, `prompt_text_source_policy`,
 `prompt_text_forbidden_source_hits`, `prompt_text_raw_body_absent`,
 `sample_text_absent`, `smoke_extracts_absent`, `raw_kb_rows_absent`,
-`source_register_absent`, and `overlay_json_absent`. The compact runner summary
-must include these fields for every 16-case run.
+`qa_reference_absent`, `source_sample_id_absent`,
+`sample_entity_marker_absent`, `source_register_absent`, and
+`overlay_json_absent`. The compact runner summary must include these fields for
+every 16-case run.
+
+Before any model becomes a full16 candidate, validate the certification manifest
+and any compact evidence files with:
+
+```powershell
+node .\scripts\hope-model-contract-certifier.mjs --matrix .\tests\qa\desktop-model-certification-matrix.json
+```
+
+For live 3-case certification evidence, pass each compact runner artifact with
+`--evidence <path>`. The certifier checks only whitelisted, redacted contract
+fields and must not be given raw prompts, raw provider responses, raw env, or
+sample-library source text.
 
 ## Scene-Type Rewrite Gate
 

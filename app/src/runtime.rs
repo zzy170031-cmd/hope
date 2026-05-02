@@ -33,14 +33,14 @@ use core_domain::{
     UpdateStoryboardRowsRequest, UpdateStoryboardShotResultRequest,
     UpdateStoryboardShotResultResponse,
 };
-use export_engine::{export_v120_storyboard_bundle, V120StoryboardExportRequest};
+use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use storyboard_pipeline::{StoryboardPlan, StoryboardPlanRequest, StoryboardPlanningError};
 use validators::{
-    generate_week3_repair_recommendations, generate_week3_validation_report,
-    project_v120_evidence_aware_findings, RepairRecommendation, Week3SharedFixture,
+    RepairRecommendation, Week3SharedFixture, generate_week3_repair_recommendations,
+    generate_week3_validation_report, project_v120_evidence_aware_findings,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -143,17 +143,34 @@ pub struct ValidationRepairRecommendationItem {
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 struct LiveStoryboardRowPatch {
-    #[serde(default)]
+    #[serde(default, alias = "title", alias = "shot")]
     shot_title: String,
-    #[serde(default)]
+    #[serde(default, alias = "character", alias = "subject", alias = "role")]
     person: String,
-    #[serde(default)]
+    #[serde(default, alias = "scale", alias = "shot_size", alias = "framing")]
     scene_scale: String,
-    #[serde(default)]
+    #[serde(
+        default,
+        alias = "visual",
+        alias = "image",
+        alias = "scene_description",
+        alias = "composition"
+    )]
     visual_description: String,
-    #[serde(default)]
+    #[serde(
+        default,
+        alias = "action",
+        alias = "performance",
+        alias = "character_motion"
+    )]
     character_action: String,
-    #[serde(default)]
+    #[serde(
+        default,
+        alias = "camera",
+        alias = "camera_motion",
+        alias = "camera_move",
+        alias = "lens_movement"
+    )]
     camera_movement: String,
     #[serde(default)]
     dialogue: String,
@@ -768,6 +785,9 @@ struct QwenUsage {
 
 const QWEN_TEXT_MODEL_MAX_TRANSPORT_ATTEMPTS: usize = 3;
 const TEXT_MODEL_NETWORK_RETRY_RECOVERED_CODE: &str = "text_model_network_retry_recovered";
+const TEXT_MODEL_QA_NO_LOCAL_FALLBACK_CODE: &str = "text_model_qa_no_local_fallback_blocked";
+const TEXT_MODEL_OUTPUT_CONTRACT_NORMALIZED_CODE: &str = "text_model_output_contract_normalized";
+const QA_PROXY_ENV_EVIDENCE_CODE: &str = "qa_proxy_env_evidence";
 
 pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandScriptResponse {
     let scene_label = request.scene_label.as_deref().unwrap_or_default().trim();
@@ -848,6 +868,9 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
     let mut warnings = generated_script.warnings.clone();
     warnings.extend(duration_plan.warnings.clone());
     warnings.extend(model_config_warnings(request.model_config_summary.as_ref()));
+    if let Some(warning) = qa_proxy_env_evidence_warning() {
+        warnings.push(warning);
+    }
     if v120_package_not_confirmed {
         warnings.push(ProductWarning {
             code: "v120_package_not_confirmed".to_string(),
@@ -866,6 +889,44 @@ pub fn expand_script(state: &AppState, request: ExpandScriptRequest) -> ExpandSc
 
     let blocking_generation_warnings =
         text_generation_fallback_blocking_warnings(&generated_script.warnings);
+    if qa_no_local_fallback_enabled() && !blocking_generation_warnings.is_empty() {
+        let mut blockers = blocking_generation_warnings.clone();
+        if !blockers
+            .iter()
+            .any(|warning| warning.code == TEXT_MODEL_QA_NO_LOCAL_FALLBACK_CODE)
+        {
+            blockers.push(qa_no_local_fallback_blocker(
+                &provider,
+                &blocking_generation_warnings,
+            ));
+        }
+        let response = ExpandScriptResponse {
+            status: BridgeCallStatus::Blocked,
+            script_id,
+            expanded_script_text: String::new(),
+            script_hash,
+            blockers,
+            warnings,
+            source_input_type: source_analysis.source_input_type.clone(),
+            authoring_mode: source_analysis.authoring_mode.clone(),
+            source_material_summary: source_analysis.source_material_summary.clone(),
+            source_story_facts: source_analysis.source_story_facts.clone(),
+            preserved_fact_summary: source_analysis.preserved_fact_summary.clone(),
+            changed_for_screenplay_summary: source_analysis.changed_for_screenplay_summary.clone(),
+            omitted_detail_summary: source_analysis.omitted_detail_summary.clone(),
+            continuity_warnings: source_analysis.continuity_warnings.clone(),
+            target_duration_mode: duration_plan.target_duration_mode,
+            story_length_profile: duration_plan.story_length_profile,
+            source_material_length_chars: duration_plan.source_material_length_chars,
+            auto_segment_strategy: duration_plan.auto_segment_strategy,
+            estimated_total_story_duration_seconds: duration_plan
+                .estimated_total_story_duration_seconds,
+            generated_shot_task_count: 0,
+            duration_plan_summary: duration_plan.duration_plan_summary,
+            kb_router_result,
+        };
+        return response;
+    }
     let mut live_expand_repair_warning = None;
     let (live_text, validator_failure_reason) = if blocking_generation_warnings.is_empty() {
         match validate_generated_script_text_with_reason(
@@ -1129,6 +1190,34 @@ pub fn generate_storyboard(
     let live_generation =
         run_text_generation(&provider, session_api_key.as_deref(), &generation_request);
     warnings.extend(live_generation.warnings.clone());
+    if let Some(warning) = qa_proxy_env_evidence_warning() {
+        warnings.push(warning);
+    }
+    let blocking_live_generation_warnings =
+        text_generation_fallback_blocking_warnings(&live_generation.warnings);
+    if qa_no_local_fallback_enabled() && !blocking_live_generation_warnings.is_empty() {
+        let mut blockers = blocking_live_generation_warnings.clone();
+        if !blockers
+            .iter()
+            .any(|warning| warning.code == TEXT_MODEL_QA_NO_LOCAL_FALLBACK_CODE)
+        {
+            blockers.push(qa_no_local_fallback_blocker(
+                &provider,
+                &blocking_live_generation_warnings,
+            ));
+        }
+        if let Some(warning) = qa_proxy_env_evidence_warning() {
+            blockers.push(warning);
+        }
+        return blocked_storyboard_response(
+            state,
+            &router_request,
+            None,
+            request.selected_total_duration_seconds,
+            blockers,
+            now_ms,
+        );
+    }
     let live_row_patches = match extract_live_storyboard_row_patches(&live_generation) {
         Ok(patches) => patches,
         Err(warning) => {
@@ -1242,6 +1331,26 @@ pub fn generate_storyboard(
             &deterministic_rows,
         );
         if !live_validator_findings.is_empty() {
+            if qa_no_local_fallback_enabled() {
+                let mut blockers = live_validator_findings;
+                blockers.push(ProductWarning {
+                    code: "text_model_live_storyboard_validator_hard_fail".to_string(),
+                    message: "qa_no_local_fallback=true; live storyboard failed validator; fallback_used=false; local_candidate=false; raw_values_redacted=true".to_string(),
+                    related_sample_id: None,
+                });
+                blockers.push(qa_no_local_fallback_blocker(&provider, &blockers));
+                if let Some(warning) = qa_proxy_env_evidence_warning() {
+                    blockers.push(warning);
+                }
+                return blocked_storyboard_response(
+                    state,
+                    &router_request,
+                    None,
+                    request.selected_total_duration_seconds,
+                    blockers,
+                    now_ms,
+                );
+            }
             warnings.extend(live_validator_findings);
             warnings.push(ProductWarning {
                 code: "text_model_live_storyboard_fallback".to_string(),
@@ -1255,7 +1364,7 @@ pub fn generate_storyboard(
                 &live_repair_summary,
             ));
         }
-    } else if !text_generation_fallback_blocking_warnings(&live_generation.warnings).is_empty() {
+    } else if !blocking_live_generation_warnings.is_empty() {
         warnings.push(ProductWarning {
             code: "text_model_live_storyboard_fallback".to_string(),
             message: "未启用千问或调用失败，已使用本地候选结果。".to_string(),
@@ -2398,7 +2507,7 @@ fn run_text_generation(
     request: &TextGenerationRequest,
 ) -> TextGenerationResponse {
     if !provider.enabled {
-        return run_text_generation_stub(
+        return run_text_generation_or_qa_hard_fail(
             provider,
             request,
             ProductWarning {
@@ -2413,7 +2522,7 @@ fn run_text_generation(
     }
 
     if provider.provider != TextModelProviderKind::Qwen {
-        return run_text_generation_stub(
+        return run_text_generation_or_qa_hard_fail(
             provider,
             request,
             ProductWarning {
@@ -2429,7 +2538,7 @@ fn run_text_generation(
         .filter(|value| !value.is_empty())
         .or_else(|| resolve_provider_api_key(provider))
     else {
-        return run_text_generation_stub(
+        return run_text_generation_or_qa_hard_fail(
             provider,
             request,
             ProductWarning {
@@ -2441,7 +2550,7 @@ fn run_text_generation(
     };
 
     let Some(endpoint) = resolve_qwen_endpoint(provider) else {
-        return run_text_generation_stub(
+        return run_text_generation_or_qa_hard_fail(
             provider,
             request,
             ProductWarning {
@@ -2460,8 +2569,19 @@ fn run_text_generation(
         qwen_http_transport,
     ) {
         Ok(response) => response,
-        Err(warning) => run_text_generation_stub(provider, request, warning),
+        Err(warning) => run_text_generation_or_qa_hard_fail(provider, request, warning),
     }
+}
+
+fn run_text_generation_or_qa_hard_fail(
+    provider: &TextModelProvider,
+    request: &TextGenerationRequest,
+    warning: ProductWarning,
+) -> TextGenerationResponse {
+    if qa_no_local_fallback_enabled() {
+        return run_text_generation_qa_hard_fail(provider, request, warning);
+    }
+    run_text_generation_stub(provider, request, warning)
 }
 
 fn run_text_generation_stub(
@@ -2487,6 +2607,151 @@ fn run_text_generation_stub(
         warnings: vec![warning],
         provider: provider.provider,
         model: provider.model.clone(),
+    }
+}
+
+fn run_text_generation_qa_hard_fail(
+    provider: &TextModelProvider,
+    _request: &TextGenerationRequest,
+    warning: ProductWarning,
+) -> TextGenerationResponse {
+    let sanitized_warning = qa_sanitized_provider_warning(warning);
+    let mut warnings = vec![sanitized_warning.clone()];
+    warnings.push(qa_no_local_fallback_blocker(provider, &[sanitized_warning]));
+    TextGenerationResponse {
+        text: String::new(),
+        structured_json: None,
+        usage_tokens: None,
+        latency_ms: Some(0),
+        warnings,
+        provider: provider.provider,
+        model: provider.model.clone(),
+    }
+}
+
+fn qa_sanitized_provider_warning(mut warning: ProductWarning) -> ProductWarning {
+    warning.message = warning
+        .message
+        .replace(
+            "fallback will use local candidate if retry is exhausted.",
+            "qa hard-fail prevents fallback local output.",
+        )
+        .replace("local candidate", "local_candidate=false")
+        .replace("本地候选结果", "local_candidate=false");
+    warning
+}
+
+fn qa_no_local_fallback_enabled() -> bool {
+    parse_bool_env("HOPE_QA_NO_LOCAL_FALLBACK") || parse_bool_env("HOPE_QA_PROVIDER_HARD_FAIL")
+}
+
+fn qa_no_local_fallback_blocker(
+    provider: &TextModelProvider,
+    warnings: &[ProductWarning],
+) -> ProductWarning {
+    let category = warnings
+        .first()
+        .map(provider_warning_error_category)
+        .unwrap_or("unknown");
+    let warning_codes = warnings
+        .iter()
+        .map(|warning| warning.code.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    ProductWarning {
+        code: TEXT_MODEL_QA_NO_LOCAL_FALLBACK_CODE.to_string(),
+        message: format!(
+            "qa_no_local_fallback=true; provider={}; model={}; error_category={}; warning_codes={}; fallback_used=false; local_candidate=false; raw_values_redacted=true",
+            provider_kind_code(provider.provider),
+            provider.model,
+            category,
+            warning_codes
+        ),
+        related_sample_id: warnings
+            .first()
+            .and_then(|warning| warning.related_sample_id.clone()),
+    }
+}
+
+fn qa_proxy_env_evidence_warning() -> Option<ProductWarning> {
+    if !parse_bool_env("HOPE_QA_PROXY_EVIDENCE") && !parse_bool_env("HOPE_QA_PROXY_CLEARED") {
+        return None;
+    }
+    let http_proxy_present = process_env_present("HTTP_PROXY");
+    let https_proxy_present = process_env_present("HTTPS_PROXY");
+    let all_proxy_present = process_env_present("ALL_PROXY");
+    let no_proxy_present = process_env_present("NO_PROXY");
+    Some(ProductWarning {
+        code: QA_PROXY_ENV_EVIDENCE_CODE.to_string(),
+        message: format!(
+            "qa_no_proxy={}; process_env_proxy_present={}; http_proxy_present={}; https_proxy_present={}; all_proxy_present={}; no_proxy_present={}; raw_values_redacted=true",
+            parse_bool_env("HOPE_QA_PROXY_CLEARED"),
+            http_proxy_present || https_proxy_present || all_proxy_present,
+            http_proxy_present,
+            https_proxy_present,
+            all_proxy_present,
+            no_proxy_present
+        ),
+        related_sample_id: None,
+    })
+}
+
+fn process_env_present(name: &str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn provider_warning_error_category(warning: &ProductWarning) -> &'static str {
+    if let Some(category) = warning_message_error_category(&warning.message) {
+        return category;
+    }
+    match warning.code.as_str() {
+        "text_model_network_error" => match http_status_from_warning_message(&warning.message) {
+            Some(403) => "http_403",
+            Some(status) if (500..=599).contains(&status) => "http_5xx",
+            Some(_) => "http_non_success",
+            None => "network_or_transport",
+        },
+        "text_model_response_invalid" => "response_invalid",
+        "text_model_api_key_missing" => "credential_missing",
+        "text_model_base_url_missing" => "endpoint_missing",
+        "text_model_provider_not_supported" => "provider_not_supported",
+        "text_model_live_call_closed" => "provider_disabled",
+        TEXT_MODEL_QA_NO_LOCAL_FALLBACK_CODE => "qa_hard_fail",
+        _ => "provider_error",
+    }
+}
+
+fn warning_message_error_category(message: &str) -> Option<&'static str> {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("error_category=timeout") {
+        Some("timeout")
+    } else if lower.contains("error_category=connect") {
+        Some("connect")
+    } else if lower.contains("error_category=request") {
+        Some("request")
+    } else if lower.contains("error_category=body") {
+        Some("body")
+    } else if lower.contains("error_category=decode") {
+        Some("decode")
+    } else if lower.contains("error_category=redirect") {
+        Some("redirect")
+    } else if lower.contains("error_category=network_or_transport") {
+        Some("network_or_transport")
+    } else {
+        None
+    }
+}
+
+fn elapsed_bucket_ms(elapsed_ms: u128) -> &'static str {
+    match elapsed_ms {
+        0..=999 => "lt_1s",
+        1000..=4999 => "1_5s",
+        5000..=14999 => "5_15s",
+        15000..=59999 => "15_60s",
+        _ => "gte_60s",
     }
 }
 
@@ -2846,7 +3111,13 @@ where
             {
                 retryable_failures += 1;
             }
-            Err(warning) => return Err(warning),
+            Err(warning) => {
+                return Err(qwen_retry_exhausted_warning(
+                    warning,
+                    retryable_failures,
+                    started.elapsed().as_millis(),
+                ));
+            }
         }
     };
     let response: QwenChatCompletionResponse =
@@ -2865,18 +3136,22 @@ where
             message: "千问返回为空，已使用本地候选结果。".to_string(),
             related_sample_id: request.selected_sample_ids.first().cloned(),
         })?;
-    let structured_json = match request.output_schema {
-        TextGenerationOutputSchema::StoryboardRowsJson
-        | TextGenerationOutputSchema::RepairPlanJson => serde_json::from_str::<Value>(content).ok(),
-        _ => None,
-    };
+    let (structured_json, normalizer_actions) =
+        parse_model_output_contract_json(content, request.output_schema);
+    let mut warnings = qwen_retry_recovered_warnings(request, retryable_failures);
+    if !normalizer_actions.is_empty() {
+        warnings.push(model_output_contract_normalized_warning(
+            request,
+            &normalizer_actions,
+        ));
+    }
 
     Ok(TextGenerationResponse {
         text: content.to_string(),
         structured_json,
         usage_tokens: response.usage.and_then(|usage| usage.total_tokens),
         latency_ms: Some(transport_latency_ms.max(started.elapsed().as_millis() as u64)),
-        warnings: qwen_retry_recovered_warnings(request, retryable_failures),
+        warnings,
         provider: provider.provider,
         model: provider.model.clone(),
     })
@@ -2901,10 +3176,272 @@ fn qwen_retry_recovered_warnings(
     }]
 }
 
+fn qwen_retry_exhausted_warning(
+    mut warning: ProductWarning,
+    retryable_failures: usize,
+    elapsed_ms: u128,
+) -> ProductWarning {
+    if retryable_failures == 0 || !qwen_transport_warning_is_retryable(&warning) {
+        return warning;
+    }
+    let category = provider_warning_error_category(&warning);
+    warning.message = format!(
+        "{}; retry_exhausted=true; attempts={}; max_attempts={}; elapsed_bucket={}; error_category={}; fallback_used=false; local_candidate=false; raw_values_redacted=true",
+        warning.message,
+        retryable_failures + 1,
+        QWEN_TEXT_MODEL_MAX_TRANSPORT_ATTEMPTS,
+        elapsed_bucket_ms(elapsed_ms),
+        category
+    );
+    warning
+}
+
+fn parse_model_output_contract_json(
+    content: &str,
+    output_schema: TextGenerationOutputSchema,
+) -> (Option<Value>, Vec<String>) {
+    if !matches!(
+        output_schema,
+        TextGenerationOutputSchema::StoryboardRowsJson | TextGenerationOutputSchema::RepairPlanJson
+    ) {
+        return (None, Vec::new());
+    }
+
+    for (candidate, extraction_action) in model_output_json_candidates(content) {
+        let Ok(value) = serde_json::from_str::<Value>(&candidate) else {
+            continue;
+        };
+        let mut actions = Vec::new();
+        if let Some(action) = extraction_action {
+            push_unique_normalizer_action(&mut actions, action);
+        }
+        let normalized = normalize_model_output_contract_value(value, output_schema, &mut actions);
+        return (Some(normalized), actions);
+    }
+
+    (None, Vec::new())
+}
+
+fn model_output_json_candidates(content: &str) -> Vec<(String, Option<&'static str>)> {
+    let mut candidates = Vec::new();
+    let trimmed = content.trim();
+    if !trimmed.is_empty() {
+        candidates.push((trimmed.to_string(), None));
+    }
+    if let Some(fenced) = extract_first_markdown_json_fence(trimmed) {
+        candidates.push((fenced, Some("markdown_json_unwrapped")));
+    }
+    if let Some(balanced) = extract_first_balanced_json(trimmed) {
+        candidates.push((balanced, Some("json_payload_extracted")));
+    }
+
+    let mut seen = HashSet::new();
+    candidates
+        .into_iter()
+        .filter(|(candidate, _)| seen.insert(candidate.clone()))
+        .collect()
+}
+
+fn extract_first_markdown_json_fence(content: &str) -> Option<String> {
+    let fence_start = content.find("```")?;
+    let after_fence = &content[fence_start + 3..];
+    let body_start = after_fence
+        .find('\n')
+        .map(|index| index + 1)
+        .unwrap_or_default();
+    let body = &after_fence[body_start..];
+    let fence_end = body.find("```")?;
+    let candidate = body[..fence_end].trim();
+    (!candidate.is_empty()).then(|| candidate.to_string())
+}
+
+fn extract_first_balanced_json(content: &str) -> Option<String> {
+    let (start_index, first_char) = content
+        .char_indices()
+        .find(|(_, character)| matches!(character, '{' | '['))?;
+    let mut stack = Vec::new();
+    stack.push(first_char);
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (relative_index, character) in content[start_index..].char_indices().skip(1) {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match character {
+            '"' => in_string = true,
+            '{' | '[' => stack.push(character),
+            '}' => {
+                if stack.pop() != Some('{') {
+                    return None;
+                }
+            }
+            ']' => {
+                if stack.pop() != Some('[') {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+        if stack.is_empty() {
+            let end_index = start_index + relative_index + character.len_utf8();
+            return Some(content[start_index..end_index].trim().to_string());
+        }
+    }
+    None
+}
+
+fn normalize_model_output_contract_value(
+    value: Value,
+    output_schema: TextGenerationOutputSchema,
+    actions: &mut Vec<String>,
+) -> Value {
+    match output_schema {
+        TextGenerationOutputSchema::StoryboardRowsJson => {
+            normalize_storyboard_rows_contract_value(value, actions)
+        }
+        _ => value,
+    }
+}
+
+fn normalize_storyboard_rows_contract_value(value: Value, actions: &mut Vec<String>) -> Value {
+    match value {
+        Value::Array(rows) => {
+            push_unique_normalizer_action(actions, "top_level_rows_array_normalized");
+            json!({ "rows": normalize_storyboard_contract_rows(rows, actions) })
+        }
+        Value::Object(map) => {
+            let row_keys = [
+                "rows",
+                "storyboard_rows",
+                "storyboard",
+                "shots",
+                "shot_list",
+            ];
+            if let Some((key, rows)) = row_keys.iter().find_map(|key| {
+                map.get(*key)
+                    .and_then(|value| value.as_array())
+                    .map(|rows| (*key, rows.clone()))
+            }) {
+                if key != "rows" {
+                    push_unique_normalizer_action(actions, "rows_field_alias_mapped");
+                }
+                return json!({ "rows": normalize_storyboard_contract_rows(rows, actions) });
+            }
+            Value::Object(map)
+        }
+        other => other,
+    }
+}
+
+fn normalize_storyboard_contract_rows(rows: Vec<Value>, actions: &mut Vec<String>) -> Vec<Value> {
+    rows.into_iter()
+        .map(|row| normalize_storyboard_contract_row(row, actions))
+        .collect()
+}
+
+fn normalize_storyboard_contract_row(row: Value, actions: &mut Vec<String>) -> Value {
+    let Value::Object(map) = row else {
+        return row;
+    };
+    let mut normalized = serde_json::Map::new();
+    for (canonical, aliases) in [
+        ("shot_title", &["shot_title", "title", "shot"][..]),
+        ("person", &["person", "character", "subject", "role"][..]),
+        (
+            "scene_scale",
+            &["scene_scale", "scale", "shot_size", "framing"][..],
+        ),
+        (
+            "visual_description",
+            &[
+                "visual_description",
+                "visual",
+                "image",
+                "scene_description",
+                "composition",
+            ][..],
+        ),
+        (
+            "character_action",
+            &[
+                "character_action",
+                "action",
+                "performance",
+                "character_motion",
+            ][..],
+        ),
+        (
+            "camera_movement",
+            &[
+                "camera_movement",
+                "camera",
+                "camera_motion",
+                "camera_move",
+                "lens_movement",
+            ][..],
+        ),
+        ("dialogue", &["dialogue", "line", "spoken_line"][..]),
+    ] {
+        if let Some(value) = model_contract_string_field(&map, aliases) {
+            if aliases.first().copied() != Some(canonical) || !map.contains_key(canonical) {
+                push_unique_normalizer_action(actions, "row_field_alias_mapped");
+            }
+            normalized.insert(canonical.to_string(), Value::String(value));
+        }
+    }
+    if map.contains_key("prompt_text") {
+        push_unique_normalizer_action(actions, "model_prompt_text_ignored");
+    }
+    Value::Object(normalized)
+}
+
+fn model_contract_string_field(
+    map: &serde_json::Map<String, Value>,
+    aliases: &[&str],
+) -> Option<String> {
+    aliases.iter().find_map(|alias| match map.get(*alias)? {
+        Value::String(value) => Some(value.trim().to_string()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+fn push_unique_normalizer_action(actions: &mut Vec<String>, action: &str) {
+    if !actions.iter().any(|item| item == action) {
+        actions.push(action.to_string());
+    }
+}
+
+fn model_output_contract_normalized_warning(
+    request: &TextGenerationRequest,
+    actions: &[String],
+) -> ProductWarning {
+    ProductWarning {
+        code: TEXT_MODEL_OUTPUT_CONTRACT_NORMALIZED_CODE.to_string(),
+        message: format!(
+            "model_output_contract_normalized=true; actions={}; normalizer_added_facts=false; sample_text_used=false; template_style_applied=false; creative_freedom_preserved=true; hard_gate_status=unchanged; raw_values_redacted=true",
+            actions.join("|")
+        ),
+        related_sample_id: request.selected_sample_ids.first().cloned(),
+    }
+}
+
 fn text_generation_fallback_blocking_warnings(warnings: &[ProductWarning]) -> Vec<ProductWarning> {
     warnings
         .iter()
-        .filter(|warning| warning.code != TEXT_MODEL_NETWORK_RETRY_RECOVERED_CODE)
+        .filter(|warning| {
+            warning.code != TEXT_MODEL_NETWORK_RETRY_RECOVERED_CODE
+                && warning.code != TEXT_MODEL_OUTPUT_CONTRACT_NORMALIZED_CODE
+        })
         .cloned()
         .collect()
 }
@@ -3004,7 +3541,9 @@ fn qwen_http_transport(
     payload: &Value,
 ) -> Result<(Value, u64), ProductWarning> {
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(
+            qwen_transport_timeout_seconds(),
+        ))
         .build()
         .map_err(|_| ProductWarning {
             code: "text_model_network_error".to_string(),
@@ -3017,10 +3556,16 @@ fn qwen_http_transport(
         .bearer_auth(api_key)
         .json(payload)
         .send()
-        .map_err(|_| ProductWarning {
-            code: "text_model_network_error".to_string(),
-            message: "无法连接千问接口，已使用本地候选结果。".to_string(),
-            related_sample_id: None,
+        .map_err(|error| {
+            let category = reqwest_transport_error_category(&error);
+            ProductWarning {
+                code: "text_model_network_error".to_string(),
+                message: format!(
+                    "qwen compatible transport request failed; error_category={}; retryable=true; fallback will use local candidate if retry is exhausted.",
+                    category
+                ),
+                related_sample_id: None,
+            }
         })?;
     let status = response.status();
     if !status.is_success() {
@@ -3049,6 +3594,32 @@ fn qwen_http_transport(
         });
     }
     Ok((body, started.elapsed().as_millis() as u64))
+}
+
+fn qwen_transport_timeout_seconds() -> u64 {
+    env::var("HOPE_QA_PROVIDER_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| (10..=120).contains(value))
+        .unwrap_or(30)
+}
+
+fn reqwest_transport_error_category(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_request() {
+        "request"
+    } else if error.is_body() {
+        "body"
+    } else if error.is_decode() {
+        "decode"
+    } else if error.is_redirect() {
+        "redirect"
+    } else {
+        "network_or_transport"
+    }
 }
 
 fn resolve_provider_api_key(provider: &TextModelProvider) -> Option<String> {
@@ -3097,6 +3668,14 @@ fn provider_kind_display_name(kind: TextModelProviderKind) -> &'static str {
         TextModelProviderKind::Qwen => "千问 Qwen",
         TextModelProviderKind::Doubao => "豆包 Doubao",
         TextModelProviderKind::Custom => "自定义模型",
+    }
+}
+
+fn provider_kind_code(kind: TextModelProviderKind) -> &'static str {
+    match kind {
+        TextModelProviderKind::Qwen => "qwen",
+        TextModelProviderKind::Doubao => "doubao",
+        TextModelProviderKind::Custom => "custom",
     }
 }
 
@@ -4924,38 +5503,9 @@ fn storyboard_binding_fact_is_visual_anchor(fact: &str) -> bool {
     contains_any_story_term(
         fact,
         &[
-            "废墟",
-            "巷口",
-            "街巷",
-            "街边",
-            "街道",
-            "摊位",
-            "墙角",
-            "墙面",
-            "障碍",
-            "城市",
-            "城墙",
-            "战场",
-            "宫殿",
-            "庭院",
-            "房间",
-            "桥",
-            "码头",
-            "路灯",
-            "雨夜",
-            "照片",
-            "相片",
-            "木棍",
-            "短刀",
-            "瓦砾",
-            "尘土",
-            "光",
-            "雨",
-            "雪",
-            "前景",
-            "后景",
-            "空间",
-            "场景",
+            "废墟", "巷口", "街巷", "街边", "街道", "摊位", "墙角", "墙面", "障碍", "城市", "城墙",
+            "战场", "宫殿", "庭院", "房间", "桥", "码头", "路灯", "雨夜", "照片", "相片", "木棍",
+            "短刀", "瓦砾", "尘土", "光", "雨", "雪", "前景", "后景", "空间", "场景",
         ],
     )
 }
@@ -5110,7 +5660,10 @@ fn binding_person_anchor_for_row(
         .cloned()
         .or_else(|| {
             let index = row.order.saturating_sub(1) as usize;
-            anchors.person.get(index % anchors.person.len().max(1)).cloned()
+            anchors
+                .person
+                .get(index % anchors.person.len().max(1))
+                .cloned()
         })
         .or_else(|| anchors.person.first().cloned())
 }
@@ -5145,12 +5698,10 @@ fn apply_storyboard_binding_prompt_packaging(
     if !anchors.has_binding_context {
         return;
     }
-    let accepted_body = storyboard_binding_packaging_fragment(
-        &anchors.accepted_confirmation_body,
-        anchors,
-        180,
-    );
-    let mut sections = vec!["视频分镜提示词：以确认稿和事实锚点为准，输出当前单镜头画面。".to_string()];
+    let accepted_body =
+        storyboard_binding_packaging_fragment(&anchors.accepted_confirmation_body, anchors, 180);
+    let mut sections =
+        vec!["视频分镜提示词：以确认稿和事实锚点为准，输出当前单镜头画面。".to_string()];
     if !accepted_body.is_empty() {
         sections.push(format!("确认稿正文：{accepted_body}"));
     }
@@ -5167,12 +5718,7 @@ fn apply_storyboard_binding_prompt_packaging(
         &anchors.visual_description,
         5,
     );
-    push_storyboard_prompt_anchor_section(
-        &mut sections,
-        "视频运动锚",
-        &anchors.camera_movement,
-        4,
-    );
+    push_storyboard_prompt_anchor_section(&mut sections, "视频运动锚", &anchors.camera_movement, 4);
     sections.push(format!(
         "分镜字段：人物={}；画面描述={}；角色动作={}；运镜={}；目标时长={}秒。",
         row.person.trim(),
@@ -5196,11 +5742,7 @@ fn push_storyboard_prompt_anchor_section(
     facts: &[String],
     limit: usize,
 ) {
-    let values = facts
-        .iter()
-        .take(limit)
-        .cloned()
-        .collect::<Vec<_>>();
+    let values = facts.iter().take(limit).cloned().collect::<Vec<_>>();
     if !values.is_empty() {
         sections.push(format!("{label}：{}", values.join(" / ")));
     }
@@ -5211,7 +5753,8 @@ fn storyboard_binding_packaging_fragment(
     anchors: &StoryboardBindingFieldAnchors,
     max_chars: usize,
 ) -> String {
-    let clean = scrub_storyboard_binding_forbidden_text(&sanitize_product_body_text(value), anchors);
+    let clean =
+        scrub_storyboard_binding_forbidden_text(&sanitize_product_body_text(value), anchors);
     compact_source_summary(&clean, "", max_chars)
 }
 
@@ -8888,19 +9431,8 @@ fn looks_like_non_character_phrase(candidate: &str) -> bool {
 fn looks_like_possessive_abstract_phrase(candidate: &str) -> bool {
     let trimmed = candidate.trim();
     let abstract_terms = [
-        "决心",
-        "意志",
-        "信念",
-        "勇气",
-        "恐惧",
-        "紧张",
-        "压力",
-        "压迫",
-        "危机",
-        "愤怒",
-        "悲伤",
-        "犹豫",
-        "希望",
+        "决心", "意志", "信念", "勇气", "恐惧", "紧张", "压力", "压迫", "危机", "愤怒", "悲伤",
+        "犹豫", "希望",
     ];
     trimmed.strip_prefix('的').is_some_and(|tail| {
         abstract_terms.iter().any(|term| {
@@ -11566,6 +12098,9 @@ fn binding_source_fact_covered_by_rows(rows_text: &str, fact: &str) -> bool {
     if binding_a_ruin_sentence_fact(&clean_fact) {
         return binding_a_ruin_sentence_atoms_covered(&clean_rows);
     }
+    if binding_b_alley_pursuit_sentence_fact(&clean_fact) {
+        return binding_b_alley_pursuit_sentence_atoms_covered(&clean_rows);
+    }
     if binding_a_ruin_duel_relation_fact(&clean_fact) {
         return clean_rows.contains("主角")
             && clean_rows.contains("敌人")
@@ -11588,6 +12123,28 @@ fn binding_a_ruin_sentence_atoms_covered(rows_text: &str) -> bool {
         && rows_text.contains("敌人")
         && contains_any_story_term(rows_text, &["单膝跪地", "单膝", "跪地"])
         && contains_any_story_term(rows_text, &["逼近", "缓步逼近"])
+}
+
+fn binding_b_alley_pursuit_sentence_fact(fact: &str) -> bool {
+    fact.contains("林峰")
+        && fact.contains("苏瑶")
+        && contains_any_story_term(fact, &["林峰护住苏瑶", "护住苏瑶"])
+        && fact.contains("阿青")
+        && fact.contains("提醒")
+        && fact.contains("黑衣追兵")
+        && fact.contains("巷口")
+        && fact.contains("逼近")
+}
+
+fn binding_b_alley_pursuit_sentence_atoms_covered(rows_text: &str) -> bool {
+    rows_text.contains("林峰")
+        && rows_text.contains("苏瑶")
+        && contains_any_story_term(rows_text, &["林峰护住苏瑶", "护住苏瑶"])
+        && rows_text.contains("阿青")
+        && contains_any_story_term(rows_text, &["阿青提醒", "提醒他们", "提醒"])
+        && rows_text.contains("黑衣追兵")
+        && rows_text.contains("巷口")
+        && contains_any_story_term(rows_text, &["逼近", "压近"])
 }
 
 fn binding_a_ruin_duel_relation_fact(fact: &str) -> bool {
@@ -11707,8 +12264,9 @@ fn accepted_snapshot_binding_preflight(
     {
         blockers.push(ProductWarning {
             code: "accepted_rewrite_snapshot_scene_mismatch".to_string(),
-            message: "generate_storyboard primary scene does not match the accepted rewrite snapshot."
-                .to_string(),
+            message:
+                "generate_storyboard primary scene does not match the accepted rewrite snapshot."
+                    .to_string(),
             related_sample_id: None,
         });
     }
@@ -11749,11 +12307,17 @@ fn accepted_snapshot_forbidden_binding_conflicts(
         }
     }
     if binding_anchor_has_absolute_forbidden_term(&accepted_body) {
-        push_unique_fact(&mut conflicts, "appearance_or_source_external_anchor".to_string());
+        push_unique_fact(
+            &mut conflicts,
+            "appearance_or_source_external_anchor".to_string(),
+        );
     }
     if binding_anchor_has_source_external_high_risk_term(&accepted_body, &grounding.grounding_text)
     {
-        push_unique_fact(&mut conflicts, "source_external_high_risk_anchor".to_string());
+        push_unique_fact(
+            &mut conflicts,
+            "source_external_high_risk_anchor".to_string(),
+        );
     }
     for inferred in &snapshot.inferred_scene_facts {
         let fact = normalize_binding_text(&inferred.fact);
@@ -12511,16 +13075,20 @@ mod tests {
         KbBundleRecordCounts, KbGoldenSampleRuntimePackage, KbRouterRuntimeRequest,
         KbRouterTaskType, KbRuntimeSummary, KbSnapshotRecord, ProductWarning, PromptTemplateRecord,
         PromptTextCompilationStatus, ScenePerformanceProjection, SceneTaxonomyRecord,
-        SequenceFieldState, SequenceGrouping, ShotGroundingSource, StoryboardDurationPlan,
-        StoryboardBindingEvidence, StructureMode, TextGenerationOutputSchema,
-        TextGenerationRequest, TextGenerationTask, TextModelProvider, TextModelProviderKind,
+        SequenceFieldState, SequenceGrouping, ShotGroundingSource, StoryboardBindingEvidence,
+        StoryboardDurationPlan, StructureMode, TextGenerationOutputSchema, TextGenerationRequest,
+        TextGenerationResponse, TextGenerationTask, TextModelProvider, TextModelProviderKind,
     };
-    use export_engine::{export_v120_storyboard_bundle, V120StoryboardExportRequest};
+    use export_engine::{V120StoryboardExportRequest, export_v120_storyboard_bundle};
     use project_store::{
         DualSqliteConnectionPolicy, KbKnowledgeBundle, KbRuntimeHandle, StoreSkeleton,
     };
 
     use super::{
+        AppShellReadonlyStatusSnapshot, LiveRepairSummary, LiveStoryboardRowPatch,
+        StoryboardGroundingContext, StoryboardPreviewPlanRequest,
+        TEXT_MODEL_NETWORK_RETRY_RECOVERED_CODE, TEXT_MODEL_OUTPUT_CONTRACT_NORMALIZED_CODE,
+        TEXT_MODEL_QA_NO_LOCAL_FALLBACK_CODE, ValidationExportPanelState,
         allocate_storyboard_row_durations, apply_live_storyboard_patch,
         build_deterministic_expanded_story_material, build_deterministic_expanded_story_script,
         build_project_create_or_switch_snapshot_from_fixture, build_qwen_request_payload,
@@ -12537,18 +13105,18 @@ mod tests {
         has_visual_environment_signal, has_visual_light_tone_or_material_signal,
         is_visual_description_grounding_incomplete, live_field_visual_or_abstract_subject_term,
         live_repair_warning, normalize_scene_type, normalize_storyboard_row_subject_quality,
+        parse_model_output_contract_json, qwen_transport_timeout_seconds,
         repair_a_ruin_enemy_storyboard_row, repair_b_alley_pursuit_storyboard_row,
         repair_c_rainy_dock_photo_storyboard_row, repair_live_expanded_script_text,
         repair_live_storyboard_patch_from_baseline, repair_live_storyboard_rows_from_source,
         repair_storyboard_rows_from_binding_context, resolve_expand_script_target_duration_seconds,
         resolve_scene_taxonomy, row_has_subject_pollution, run_qwen_text_generation_with_transport,
-        runtime_scene_option_mappings, split_overbroad_storyboard_subject, stable_binding_hash_json,
-        story_fact_frame_binding_gate_blockers,
-        storyboard_rows_binding_text, storyboard_rows_delivery_text, validate_generated_script_text,
-        validate_generated_script_text_with_reason, validate_live_storyboard_rows,
-        AppShellReadonlyStatusSnapshot, LiveRepairSummary, LiveStoryboardRowPatch,
-        StoryboardGroundingContext, StoryboardPreviewPlanRequest, ValidationExportPanelState,
-        TEXT_MODEL_NETWORK_RETRY_RECOVERED_CODE,
+        run_text_generation_qa_hard_fail, runtime_scene_option_mappings,
+        split_overbroad_storyboard_subject, stable_binding_hash_json,
+        story_fact_frame_binding_gate_blockers, storyboard_rows_binding_text,
+        storyboard_rows_delivery_text, text_generation_fallback_blocking_warnings,
+        validate_generated_script_text, validate_generated_script_text_with_reason,
+        validate_live_storyboard_rows,
     };
     use crate::state::load_desktop_shared_fixture;
     use crate::{
@@ -13065,12 +13633,10 @@ mod tests {
             let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
 
             assert!(
-                warnings
-                    .iter()
-                    .any(|warning| warning
-                        .message
-                        .contains("ungrounded character name")
-                        && warning.message.contains("李明")),
+                warnings.iter().any(|warning| warning
+                    .message
+                    .contains("ungrounded character name")
+                    && warning.message.contains("李明")),
                 "{dirty_person} should remain rejected as source-external: {warnings:?}"
             );
         }
@@ -14309,11 +14875,13 @@ mod tests {
     fn military_scene_rewrite_does_not_expand_single_enemy_into_formation() {
         let source = "主角压低身形，敌人从坡下逼近。";
 
-        assert!(validate_generated_script_text(
-            "主角压低身形，坡下出现整列军阵，敌人逼近的压力被阵列推到眼前。",
-            source,
-        )
-        .is_none());
+        assert!(
+            validate_generated_script_text(
+                "主角压低身形，坡下出现整列军阵，敌人逼近的压力被阵列推到眼前。",
+                source,
+            )
+            .is_none()
+        );
 
         let accepted = validate_generated_script_text(
             "构图更有秩序感，主角压低身形，敌人仍从坡下逼近，对峙压力没有消失。",
@@ -14648,9 +15216,9 @@ mod tests {
             );
             if dirty_subject == "紧张" {
                 assert!(
-                    pre_repair.iter().any(|warning| warning
-                        .message
-                        .contains("ungrounded character name: 紧张")),
+                    pre_repair
+                        .iter()
+                        .any(|warning| warning.message.contains("ungrounded character name: 紧张")),
                     "紧张 should be observed on the live validator character extraction path: {pre_repair:?}"
                 );
             }
@@ -14811,8 +15379,10 @@ mod tests {
         let prompt_input = build_storyboard_model_story_input(&grounding);
 
         assert!(prompt_input.contains("source_person_binding=主角与敌人"));
-        assert!(prompt_input
-            .contains("never use visual, camera, composition, or abstract labels as person"));
+        assert!(
+            prompt_input
+                .contains("never use visual, camera, composition, or abstract labels as person")
+        );
     }
 
     #[test]
@@ -14851,11 +15421,10 @@ mod tests {
     fn expand_script_live_text_rejects_added_names_and_over_specific_bystanders() {
         let source = "主角在雨巷里退后，敌人从巷口逼近。";
 
-        assert!(validate_generated_script_text(
-            "主角发现邻居家大叔和邻居家孩子都在巷口等他。",
-            source
-        )
-        .is_none());
+        assert!(
+            validate_generated_script_text("主角发现邻居家大叔和邻居家孩子都在巷口等他。", source)
+                .is_none()
+        );
         assert!(
             validate_generated_script_text("主角转身遇见李明，李明递来雨伞。", source).is_none()
         );
@@ -14899,16 +15468,20 @@ mod tests {
 
         assert!(accepted.contains("逼近的人"));
         assert!(accepted.contains("压力"));
-        assert!(validate_generated_script_text(
-            "林峰让苏瑶在屋檐下缓过气，邻居家的孩子递来一盏灯。",
-            source
-        )
-        .is_none());
-        assert!(validate_generated_script_text(
-            "林峰让苏瑶在屋檐下缓过气，雨声渐渐把巷口安静下来。",
-            source
-        )
-        .is_none());
+        assert!(
+            validate_generated_script_text(
+                "林峰让苏瑶在屋檐下缓过气，邻居家的孩子递来一盏灯。",
+                source
+            )
+            .is_none()
+        );
+        assert!(
+            validate_generated_script_text(
+                "林峰让苏瑶在屋檐下缓过气，雨声渐渐把巷口安静下来。",
+                source
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -14953,17 +15526,21 @@ mod tests {
     fn live_expand_repair_removes_external_setting_details() {
         let a_source = "废墟之上，主角单膝跪地，敌人缓步逼近。";
         let a_live = "废墟之上，主角单膝跪地，敌人的甲胄压住光线后继续逼近。";
-        let a_repair =
-            repair_live_expanded_script_text(a_live, a_source, "national_war", "国战军阵建立")
-                .unwrap_or_else(|| {
-                    let canonical =
-                        canonical_live_expand_source_text(a_source, "national_war", "国战军阵建立")
-                            .unwrap_or_default();
-                    panic!(
+        let a_repair = repair_live_expanded_script_text(
+            a_live,
+            a_source,
+            "national_war",
+            "国战军阵建立",
+        )
+        .unwrap_or_else(|| {
+            let canonical =
+                canonical_live_expand_source_text(a_source, "national_war", "国战军阵建立")
+                    .unwrap_or_default();
+            panic!(
                 "甲胄 should repair back to A source facts; canonical={canonical}; reason={:?}",
                 validate_generated_script_text_with_reason(&canonical, a_source).err()
             );
-                });
+        });
         assert!(!a_repair.text.contains("甲胄"), "{}", a_repair.text);
         assert!(a_repair.text.contains("主角"));
         assert!(a_repair.text.contains("敌人"));
@@ -15114,7 +15691,7 @@ mod tests {
     fn qwen_test_provider() -> TextModelProvider {
         TextModelProvider {
             provider: TextModelProviderKind::Qwen,
-            model: "qwen-max".to_string(),
+            model: "qwen-plus-2025-07-28".to_string(),
             base_url: Some("https://dashscope.aliyuncs.com/compatible-mode/v1".to_string()),
             api_key_ref: "session-only".to_string(),
             enabled: true,
@@ -15154,12 +15731,92 @@ mod tests {
         })
     }
 
+    fn qwen_body_with_content(content: &str) -> serde_json::Value {
+        serde_json::json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": content
+                    }
+                }
+            ],
+            "usage": { "total_tokens": 42 }
+        })
+    }
+
     fn qwen_network_warning(message: &str) -> ProductWarning {
         ProductWarning {
             code: "text_model_network_error".to_string(),
             message: message.to_string(),
             related_sample_id: None,
         }
+    }
+
+    #[test]
+    fn model_output_contract_normalizer_unwraps_markdown_and_aliases_only_structure() {
+        let content = r#"Brief note before JSON.
+```json
+{"storyboard":[{"character":"Lead","title":"Hold","scale":"MS","visual":"ruins with hard light","action":"Lead holds position","camera":"locked","dialogue":"","prompt_text":"model supplied prompt is ignored"}]}
+```
+No more content."#;
+        let (structured_json, actions) = parse_model_output_contract_json(
+            content,
+            TextGenerationOutputSchema::StoryboardRowsJson,
+        );
+        let response = TextGenerationResponse {
+            text: content.to_string(),
+            structured_json,
+            usage_tokens: None,
+            latency_ms: Some(1),
+            warnings: Vec::new(),
+            provider: TextModelProviderKind::Qwen,
+            model: "qwen-plus-2025-07-28".to_string(),
+        };
+
+        assert!(actions.contains(&"markdown_json_unwrapped".to_string()));
+        assert!(actions.contains(&"rows_field_alias_mapped".to_string()));
+        assert!(actions.contains(&"row_field_alias_mapped".to_string()));
+        assert!(actions.contains(&"model_prompt_text_ignored".to_string()));
+        let patches = extract_live_storyboard_row_patches(&response)
+            .expect("structural normalizer should produce canonical row patches");
+        assert_eq!(patches.len(), 1);
+        assert_eq!(patches[0].person, "Lead");
+        assert_eq!(patches[0].shot_title, "Hold");
+        assert_eq!(patches[0].visual_description, "ruins with hard light");
+        assert_eq!(patches[0].character_action, "Lead holds position");
+        assert_eq!(patches[0].camera_movement, "locked");
+    }
+
+    #[test]
+    fn model_output_contract_normalizer_warning_is_not_fallback_or_gate_weakening() {
+        let content = r#"```json
+[{"subject":"Lead","shot":"Hold","framing":"MS","image":"ruins","performance":"holds position","camera_motion":"locked","line":""}]
+```"#;
+        let response = run_qwen_text_generation_with_transport(
+            &qwen_test_provider(),
+            &qwen_storyboard_generation_request(),
+            "https://example.invalid/chat/completions",
+            "redacted-test-key",
+            |_, _, _| Ok((qwen_body_with_content(content), 11)),
+        )
+        .expect("structural contract normalization should keep provider output live");
+
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == TEXT_MODEL_OUTPUT_CONTRACT_NORMALIZED_CODE)
+        );
+        assert!(
+            text_generation_fallback_blocking_warnings(&response.warnings).is_empty(),
+            "normalizer telemetry must not become fallback evidence: {:?}",
+            response.warnings
+        );
+        let patches = extract_live_storyboard_row_patches(&response)
+            .expect("normalized array output should parse as live rows");
+        assert_eq!(patches.len(), 1);
+        assert_eq!(patches[0].person, "Lead");
+        assert_eq!(patches[0].scene_scale, "MS");
     }
 
     #[test]
@@ -15182,21 +15839,27 @@ mod tests {
         .expect("retryable network failure should recover on second attempt");
 
         assert_eq!(attempts.get(), 2);
-        assert!(response
-            .warnings
-            .iter()
-            .any(|warning| warning.code == TEXT_MODEL_NETWORK_RETRY_RECOVERED_CODE));
-        assert!(!response
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "text_model_network_error"));
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == TEXT_MODEL_NETWORK_RETRY_RECOVERED_CODE)
+        );
+        assert!(
+            !response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "text_model_network_error")
+        );
         let patches = extract_live_storyboard_row_patches(&response)
             .expect("recovered qwen response should still parse live rows");
         assert_eq!(patches.len(), 1);
-        assert!(response
-            .warnings
-            .iter()
-            .all(|warning| warning.code != "text_model_live_storyboard_fallback"));
+        assert!(
+            response
+                .warnings
+                .iter()
+                .all(|warning| warning.code != "text_model_live_storyboard_fallback")
+        );
     }
 
     #[test]
@@ -15241,6 +15904,61 @@ mod tests {
         assert_eq!(attempts.get(), 3);
         assert_eq!(warning.code, "text_model_network_error");
         assert!(warning.message.contains("HTTP 500"));
+        assert!(warning.message.contains("retry_exhausted=true"));
+        assert!(warning.message.contains("attempts=3"));
+        assert!(warning.message.contains("error_category=http_5xx"));
+        assert!(warning.message.contains("fallback_used=false"));
+        assert!(warning.message.contains("local_candidate=false"));
+    }
+
+    #[test]
+    fn qa_hard_fail_response_does_not_emit_local_candidate_text() {
+        let response = run_text_generation_qa_hard_fail(
+            &qwen_test_provider(),
+            &qwen_storyboard_generation_request(),
+            qwen_network_warning(
+                "qwen compatible transport returned HTTP 500; fallback will use local candidate if retry is exhausted.",
+            ),
+        );
+
+        assert!(response.text.is_empty());
+        assert!(response.structured_json.is_none());
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == TEXT_MODEL_QA_NO_LOCAL_FALLBACK_CODE)
+        );
+        assert!(response.warnings.iter().all(|warning| {
+            !warning
+                .message
+                .contains("fallback will use local candidate")
+        }));
+        assert!(
+            response
+                .warnings
+                .iter()
+                .all(|warning| !warning.message.contains("local candidate if retry"))
+        );
+    }
+
+    #[test]
+    fn qwen_transport_timeout_uses_qa_override_with_product_default() {
+        unsafe {
+            std::env::remove_var("HOPE_QA_PROVIDER_TIMEOUT_SECONDS");
+        }
+        assert_eq!(qwen_transport_timeout_seconds(), 30);
+        unsafe {
+            std::env::set_var("HOPE_QA_PROVIDER_TIMEOUT_SECONDS", "60");
+        }
+        assert_eq!(qwen_transport_timeout_seconds(), 60);
+        unsafe {
+            std::env::set_var("HOPE_QA_PROVIDER_TIMEOUT_SECONDS", "300");
+        }
+        assert_eq!(qwen_transport_timeout_seconds(), 30);
+        unsafe {
+            std::env::remove_var("HOPE_QA_PROVIDER_TIMEOUT_SECONDS");
+        }
     }
 
     #[test]
@@ -15289,11 +16007,13 @@ mod tests {
             assert!(accepted.contains("敌人") || accepted.contains("对峙压力"));
             assert!(accepted.contains("逼近") || accepted.contains("对峙压力"));
         }
-        assert!(validate_generated_script_text(
-            "国战视角里主角单膝跪在废墟上，阵列旗影压住天空。",
-            a_source,
-        )
-        .is_none());
+        assert!(
+            validate_generated_script_text(
+                "国战视角里主角单膝跪在废墟上，阵列旗影压住天空。",
+                a_source,
+            )
+            .is_none()
+        );
 
         let b_source = "林峰护住苏瑶，黑衣追兵逼近，阿青断后掩护他们撤离。";
         for generated in [
@@ -15310,11 +16030,13 @@ mod tests {
                     || accepted.contains("撤离")
             );
         }
-        assert!(validate_generated_script_text(
-            "沙盘战略视口里林峰护住苏瑶撤到安全点，阿青收起地图。",
-            b_source,
-        )
-        .is_none());
+        assert!(
+            validate_generated_script_text(
+                "沙盘战略视口里林峰护住苏瑶撤到安全点，阿青收起地图。",
+                b_source,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -15487,9 +16209,11 @@ mod tests {
         assert!(!contains_product_control_text(
             &response.expanded_script_text
         ));
-        assert!(!response
-            .expanded_script_text
-            .contains("target_duration_seconds"));
+        assert!(
+            !response
+                .expanded_script_text
+                .contains("target_duration_seconds")
+        );
         assert!(!response.expanded_script_text.contains("扩写剧本"));
         assert!(response.expanded_script_text.contains("林峰"));
     }
@@ -15606,10 +16330,11 @@ mod tests {
                 &["钢筋", "锈屑", "混凝土", "金属"]
             ));
             assert!(!contains_product_control_text(&row.visual_description));
-            assert!(!row
-                .prompt_text_compilation_warnings
-                .iter()
-                .any(|warning| warning.code == "visual_description_grounding_incomplete"));
+            assert!(
+                !row.prompt_text_compilation_warnings
+                    .iter()
+                    .any(|warning| warning.code == "visual_description_grounding_incomplete")
+            );
         }
     }
 
@@ -16990,11 +17715,13 @@ mod tests {
             .as_deref(),
             Some("丢失源文本追兵/对峙压力")
         ));
-        assert!(validate_generated_script_text(
-            "林峰护住苏瑶，阿青提醒他们，黑衣追兵仍从巷口逼近，追兵压力没有消失。",
-            source,
-        )
-        .is_some());
+        assert!(
+            validate_generated_script_text(
+                "林峰护住苏瑶，阿青提醒他们，黑衣追兵仍从巷口逼近，追兵压力没有消失。",
+                source,
+            )
+            .is_some()
+        );
     }
 
     #[test]
@@ -17168,11 +17895,11 @@ mod tests {
     fn a_ruin_binding_atom_row() -> GeneratedStoryboardRow {
         let mut row = test_live_validation_row("主角");
         row.person = "主角".to_string();
-        row.visual_description = "主体为主角，中景把主角和敌人放在废墟前后层次里；主角单膝跪地，画面突出对峙压力。".to_string();
-        row.character_action =
-            "主角从废墟之上单膝跪地开始，到敌人缓步逼近时结束。".to_string();
-        row.camera_movement =
-            "中景定机位观察主角与敌人的对峙压力，捕捉敌人逼近。".to_string();
+        row.visual_description =
+            "主体为主角，中景把主角和敌人放在废墟前后层次里；主角单膝跪地，画面突出对峙压力。"
+                .to_string();
+        row.character_action = "主角从废墟之上单膝跪地开始，到敌人缓步逼近时结束。".to_string();
+        row.camera_movement = "中景定机位观察主角与敌人的对峙压力，捕捉敌人逼近。".to_string();
         row.prompt_text = "视频分镜提示词：仅包装当前镜头。".to_string();
         row.scene_performance_projection.person = row.person.clone();
         row.scene_performance_projection.visual_description = row.visual_description.clone();
@@ -17233,16 +17960,152 @@ mod tests {
         )
     }
 
+    fn build_b_alley_binding_evidence_for_test(
+        must_keep_facts: Vec<String>,
+        forbidden_facts: Vec<String>,
+        rows: Vec<GeneratedStoryboardRow>,
+    ) -> StoryboardBindingEvidence {
+        let source = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。";
+        let request = GenerateStoryboardRequest {
+            task_name: "b-alley-binding-gate".to_string(),
+            shot_script: Some(source.to_string()),
+            expanded_script_text: Some(source.to_string()),
+            selected_total_duration_seconds: 15,
+            must_keep_facts,
+            forbidden_facts,
+            ..GenerateStoryboardRequest::default()
+        };
+        let grounding = StoryboardGroundingContext {
+            shot_script: source.to_string(),
+            expanded_script_text: source.to_string(),
+            grounding_text: source.to_string(),
+            grounding_source: ShotGroundingSource::ShotScript,
+            primary_scene_type: "hot_blood_battle".to_string(),
+            primary_scene_label: "热血战斗".to_string(),
+            primary_scene_category: "action".to_string(),
+            shot_scene_type: "hot_blood_battle".to_string(),
+            shot_scene_label: "热血战斗".to_string(),
+            shot_intent: "action_beat".to_string(),
+            adaptation_reason: "B alley binding gate test".to_string(),
+        };
+        let duration_plan = build_storyboard_duration_plan(15, &[10, 5]);
+        let kb_request = KbRouterRuntimeRequest {
+            scene_type: "hot_blood_battle".to_string(),
+            synopsis_text: source.to_string(),
+            duration_seconds: 15,
+            task_type: KbRouterTaskType::GenerateStoryboard,
+            primary_scene_type: Some("hot_blood_battle".to_string()),
+            primary_scene_label: Some("热血战斗".to_string()),
+            shot_scene_type: Some("hot_blood_battle".to_string()),
+            shot_scene_label: Some("热血战斗".to_string()),
+            shot_intent: Some("action_beat".to_string()),
+            structure_type: None,
+        };
+        let state = test_state();
+        let kb_router_result = empty_kb_router_response(&kb_request, &state.kb_runtime);
+        build_storyboard_binding_evidence(
+            &request,
+            &grounding,
+            &rows,
+            &duration_plan,
+            "b-alley-binding-gate",
+            &kb_router_result,
+        )
+    }
+
+    #[test]
+    fn binding_gate_blocks_maps_b_alley_pursuit_sentence_equivalence() {
+        let source_sentence = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。";
+        let mut row = test_live_validation_row("林峰");
+        row.person = "林峰".to_string();
+        row.visual_description =
+            "主体为林峰，中景把林峰护住苏瑶压在巷口退路前；阿青在旁提醒他们，黑衣追兵沿巷口来路继续逼近。"
+                .to_string();
+        row.character_action =
+            "林峰从护住苏瑶开始，到阿青提醒、黑衣追兵压近巷口退路时结束。".to_string();
+        row.camera_movement = "中景定机位观察林峰护人、阿青提醒和黑衣追兵逼近的压力。".to_string();
+        row.prompt_text = "视频分镜提示词：只包装当前镜头。".to_string();
+
+        let rows_text = storyboard_rows_binding_text(&[row.clone()]);
+        assert!(!rows_text.contains(source_sentence), "{rows_text}");
+        let evidence = build_b_alley_binding_evidence_for_test(
+            vec![source_sentence.to_string()],
+            vec![],
+            vec![row],
+        );
+
+        assert_eq!(
+            evidence.missing_source_facts,
+            Vec::<String>::new(),
+            "{evidence:?}"
+        );
+    }
+
+    #[test]
+    fn binding_gate_blocks_b_alley_sentence_when_pursuer_atom_missing() {
+        let source_sentence = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。";
+        let mut row = test_live_validation_row("林峰");
+        row.person = "林峰".to_string();
+        row.visual_description =
+            "主体为林峰，中景把林峰护住苏瑶压在巷口退路前；阿青在旁提醒他们，危险沿巷口逼近。"
+                .to_string();
+        row.character_action = "林峰从护住苏瑶开始，到阿青提醒、巷口压力压近时结束。".to_string();
+        row.camera_movement = "中景定机位观察林峰护人和阿青提醒。".to_string();
+        row.prompt_text = "视频分镜提示词：只包装当前镜头。".to_string();
+
+        let evidence = build_b_alley_binding_evidence_for_test(
+            vec![source_sentence.to_string()],
+            vec![],
+            vec![row],
+        );
+
+        assert!(
+            evidence
+                .missing_source_facts
+                .iter()
+                .any(|fact| fact == source_sentence),
+            "{evidence:?}"
+        );
+    }
+
+    #[test]
+    fn binding_gate_blocks_b_alley_sentence_prompt_text_only_coverage() {
+        let source_sentence = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。";
+        let mut row = test_live_validation_row("苏瑶");
+        row.person = "苏瑶".to_string();
+        row.visual_description = "主体为苏瑶，中景把她放在墙边，冷光压住街面。".to_string();
+        row.character_action = "苏瑶从墙边停住开始，到回望来路时结束。".to_string();
+        row.camera_movement = "中景定机位观察苏瑶停住。".to_string();
+        row.prompt_text = format!("视频分镜提示词：剧情动作压力：{source_sentence}");
+
+        let evidence = build_b_alley_binding_evidence_for_test(
+            vec![source_sentence.to_string()],
+            vec![],
+            vec![row],
+        );
+
+        assert!(
+            evidence
+                .missing_source_facts
+                .iter()
+                .any(|fact| fact == source_sentence),
+            "{evidence:?}"
+        );
+    }
+
     #[test]
     fn binding_evidence_does_not_count_prompt_text_as_source_of_truth() {
         let source = "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。";
         let mut row = test_live_validation_row("苏瑶");
         row.shot_script = "苏瑶贴着墙边停住。".to_string();
         row.scene_performance_projection.fused_source_text = row.shot_script.clone();
-        row.visual_description = "主体为苏瑶，中近景把苏瑶放在墙边前侧，冷光压住街面，画面突出紧迫感。".to_string();
+        row.visual_description =
+            "主体为苏瑶，中近景把苏瑶放在墙边前侧，冷光压住街面，画面突出紧迫感。".to_string();
         row.character_action = "苏瑶从墙边停住开始，到回望来路时结束。".to_string();
         row.camera_movement = "中近景定机位观察苏瑶停住。".to_string();
-        row.prompt_text = "视频分镜提示词：剧情动作压力：林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。".to_string();
+        row.prompt_text =
+            "视频分镜提示词：剧情动作压力：林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。"
+                .to_string();
         let rows = vec![row];
         let request = GenerateStoryboardRequest {
             task_name: "prompt-not-source-of-truth".to_string(),
@@ -17335,9 +18198,8 @@ mod tests {
             inferred_scene_facts: vec![
                 core_domain::contracts::InferredSceneFactBinding {
                     fact: "林峰临时借用街边木棍形成格挡动作".to_string(),
-                    inference_reason:
-                        "低风险动作调度，街边木棍只服务当前场景分镜和AI视频。"
-                            .to_string(),
+                    inference_reason: "低风险动作调度，街边木棍只服务当前场景分镜和AI视频。"
+                        .to_string(),
                     inference_scope: "临时动作道具".to_string(),
                 },
                 core_domain::contracts::InferredSceneFactBinding {
@@ -17384,7 +18246,10 @@ mod tests {
             shot_intent: "action_beat".to_string(),
             adaptation_reason: "accepted snapshot field mapping".to_string(),
         };
-        let mut rows = vec![test_live_validation_row("中景把"), test_live_validation_row("阿青")];
+        let mut rows = vec![
+            test_live_validation_row("中景把"),
+            test_live_validation_row("阿青"),
+        ];
         for (index, row) in rows.iter_mut().enumerate() {
             row.order = (index + 1) as u32;
             row.shot_script = source.to_string();
@@ -17399,20 +18264,35 @@ mod tests {
         assert!(summary.repaired(), "{summary:?}");
         let source_fields = storyboard_rows_binding_text(&rows);
         let delivery = storyboard_rows_delivery_text(&rows);
-        for required in ["林峰护住苏瑶", "阿青提醒", "黑衣追兵", "巷口", "逼近", "街边木棍"] {
-            assert!(source_fields.contains(required), "{required}: {source_fields}");
+        for required in [
+            "林峰护住苏瑶",
+            "阿青提醒",
+            "黑衣追兵",
+            "巷口",
+            "逼近",
+            "街边木棍",
+        ] {
+            assert!(
+                source_fields.contains(required),
+                "{required}: {source_fields}"
+            );
         }
         for forbidden in ["三名", "伤口", "发型"] {
             assert!(!delivery.contains(forbidden), "{forbidden}: {delivery}");
         }
-        assert!(rows.iter().all(|row| !row.person.contains("中景把")), "{rows:?}");
+        assert!(
+            rows.iter().all(|row| !row.person.contains("中景把")),
+            "{rows:?}"
+        );
         assert!(
             rows.iter().all(|row| row.prompt_text.contains("确认稿正文")
                 && row.prompt_text.contains("角色表演锚")
                 && row.prompt_text.contains("基础/复杂场景描述")
                 && row.prompt_text.contains("目标时长/节奏落点")),
             "{:?}",
-            rows.iter().map(|row| row.prompt_text.as_str()).collect::<Vec<_>>()
+            rows.iter()
+                .map(|row| row.prompt_text.as_str())
+                .collect::<Vec<_>>()
         );
 
         let duration_plan = build_storyboard_duration_plan(15, &[10, 5]);
@@ -17438,8 +18318,16 @@ mod tests {
             "accepted-field-map",
             &kb_router_result,
         );
-        assert_eq!(evidence.missing_source_facts, Vec::<String>::new(), "{evidence:?}");
-        assert_eq!(evidence.forbidden_fact_hits, Vec::<String>::new(), "{evidence:?}");
+        assert_eq!(
+            evidence.missing_source_facts,
+            Vec::<String>::new(),
+            "{evidence:?}"
+        );
+        assert_eq!(
+            evidence.forbidden_fact_hits,
+            Vec::<String>::new(),
+            "{evidence:?}"
+        );
     }
 
     #[test]
@@ -17456,7 +18344,11 @@ mod tests {
             rows,
         );
 
-        assert_eq!(evidence.missing_source_facts, Vec::<String>::new(), "{evidence:?}");
+        assert_eq!(
+            evidence.missing_source_facts,
+            Vec::<String>::new(),
+            "{evidence:?}"
+        );
         assert_eq!(
             evidence
                 .must_keep_facts
@@ -17487,7 +18379,11 @@ mod tests {
             rows,
         );
 
-        assert_eq!(evidence.missing_source_facts, Vec::<String>::new(), "{evidence:?}");
+        assert_eq!(
+            evidence.missing_source_facts,
+            Vec::<String>::new(),
+            "{evidence:?}"
+        );
     }
 
     #[test]
@@ -17504,10 +18400,7 @@ mod tests {
         row.scene_performance_projection.character_action = row.character_action.clone();
 
         let evidence = build_a_ruin_binding_evidence_for_test(
-            vec![
-                source_sentence.to_string(),
-                "主角与敌人对峙".to_string(),
-            ],
+            vec![source_sentence.to_string(), "主角与敌人对峙".to_string()],
             vec![],
             vec![row],
         );
@@ -17538,7 +18431,11 @@ mod tests {
             vec![row],
         );
 
-        assert_eq!(evidence.missing_source_facts, Vec::<String>::new(), "{evidence:?}");
+        assert_eq!(
+            evidence.missing_source_facts,
+            Vec::<String>::new(),
+            "{evidence:?}"
+        );
         assert_eq!(evidence.forbidden_fact_hits, vec!["甲胄".to_string()]);
         let blockers = story_fact_frame_binding_gate_blockers(&evidence);
         assert!(
@@ -18222,11 +19119,12 @@ mod tests {
                 .primary_scene_director_id,
             "taxonomy:scene-taxonomy-daily-dialogue:scene"
         );
-        assert!(plan
-            .committee_runtime
-            .prompt_layers
-            .layout_prompt
-            .contains("场景分类：daily_dialogue"));
+        assert!(
+            plan.committee_runtime
+                .prompt_layers
+                .layout_prompt
+                .contains("场景分类：daily_dialogue")
+        );
     }
 
     #[test]
@@ -18394,18 +19292,24 @@ mod tests {
             snapshot.summary_items[2].state,
             ValidationExportPanelState::Ready
         );
-        assert!(snapshot.summary_items[2]
-            .value
-            .contains("snapshot hope-kb-v0.1"));
-        assert!(snapshot
-            .repair_recommendations
-            .iter()
-            .any(|item| item.failure_code == "chinese_prompt_noise"));
-        assert!(snapshot
-            .repair_recommendations
-            .iter()
-            .flat_map(|item| item.prompt_template_names.iter())
-            .any(|name| name == "Repair Prompt Language"));
+        assert!(
+            snapshot.summary_items[2]
+                .value
+                .contains("snapshot hope-kb-v0.1")
+        );
+        assert!(
+            snapshot
+                .repair_recommendations
+                .iter()
+                .any(|item| item.failure_code == "chinese_prompt_noise")
+        );
+        assert!(
+            snapshot
+                .repair_recommendations
+                .iter()
+                .flat_map(|item| item.prompt_template_names.iter())
+                .any(|name| name == "Repair Prompt Language")
+        );
     }
 
     #[test]

@@ -6,6 +6,22 @@
   "fixed_case_count": 378,
   "long_text_case_count": 21,
   "total_case_count": 403,
+  "gate_model_order": [
+    "qwen-plus-2025-07-28",
+    "qwen3.6-plus",
+    "qwen3.6-plus-2026-04-02",
+    "qvq-max-2025-03-25",
+    "qwen-plus"
+  ],
+  "model_contract": {
+    "certification_matrix": "tests/qa/desktop-model-certification-matrix.json",
+    "contract_kind": "structural_safety_contract_not_creative_style_template",
+    "requires_one_model_passing_3_case_certification": true,
+    "requires_hard_gate_failures": true,
+    "requires_quality_warnings": true,
+    "creative_freedom_preserved": true,
+    "not_authorized_by_this_thread": true
+  },
   "long_text_sample": {
     "original_machine_path": "C:\\Users\\Administrator\\Desktop\\九州剧本文字版2.docx",
     "note": "Do not commit the private docx unless ownership is explicitly opened. Record the expected path and use a local copy on the target machine."
@@ -35,11 +51,12 @@
   ],
   "entry_gate": [
     "four_group_qwen_trace_passed",
-    "qwen_max_expected_model_confirmed",
+    "qwen_plus_2025_07_28_expected_model_confirmed",
     "desktop_16_case_matrix_manifest_reviewed",
     "desktop_16_case_expand_8_case_passed",
     "desktop_16_case_rewrite_8_case_harness_unblocked",
     "desktop_16_case_full_16_case_passed",
+    "model_contract_3_case_certification_passed",
     "provider_live_ready_true",
     "response_rows_match_ui_rows",
     "webview2_cdp_stable",

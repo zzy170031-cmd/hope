@@ -10,10 +10,13 @@ const args = Object.fromEntries(
 );
 
 const allowedQwenTextModels = [
-  "qwen-max",
+  "qwen-plus-2025-07-28",
+  "qwen3.6-plus",
+  "qwen3.6-plus-2026-04-02",
   "qvq-max-2025-03-25",
-  "qwen-math-turbo",
   "qwen-plus",
+  "qwen-max",
+  "qwen-math-turbo",
   "qwen3-max-preview",
   "qwen3-max-2025-09-23",
   "qwen3-max",
@@ -24,9 +27,11 @@ const allowedQwenTextModels = [
 ];
 
 const modelPriority = [
-  "qwen-max",
+  "qwen-plus-2025-07-28",
+  "qwen3.6-plus",
+  "qwen3.6-plus-2026-04-02",
   "qvq-max-2025-03-25",
-  "qwen-math-turbo",
+  "qwen-plus",
 ];
 
 const allowedScriptGoals = ["rewrite", "expand"];
@@ -44,11 +49,44 @@ const input = {
   durationSeconds: Number(args.duration ?? 15),
   scriptGoal: requestedScriptGoal,
   expectedProvider: args["expected-provider"] || "qwen",
-  expectedModel: args["expected-model"] || "qwen-max",
+  expectedModel: args["expected-model"] || "qwen-plus-2025-07-28",
   allowedModels: allowedQwenTextModels,
   modelPriority,
   assertBinding: args["assert-binding"] !== "0",
+  assertNoProxyEnv: args["assert-no-proxy-env"] === "1" || args["assert-no-proxy-env"] === "true",
+  expectQaHardFail: args["expect-qa-hard-fail"] === "1" || args["expect-qa-hard-fail"] === "true",
 };
+
+function processEnvPresent(name) {
+  return typeof process.env[name] === "string" && process.env[name].trim().length > 0;
+}
+
+function collectRunnerProxyEnvEvidence() {
+  const httpProxyPresent = processEnvPresent("HTTP_PROXY");
+  const httpsProxyPresent = processEnvPresent("HTTPS_PROXY");
+  const allProxyPresent = processEnvPresent("ALL_PROXY");
+  return {
+    http_proxy_present: httpProxyPresent,
+    https_proxy_present: httpsProxyPresent,
+    all_proxy_present: allProxyPresent,
+    no_proxy_present: processEnvPresent("NO_PROXY"),
+    process_env_proxy_present: httpProxyPresent || httpsProxyPresent || allProxyPresent,
+    raw_values_redacted: true,
+  };
+}
+
+const runnerEnvProxyEvidence = collectRunnerProxyEnvEvidence();
+if (input.assertNoProxyEnv && runnerEnvProxyEvidence.process_env_proxy_present) {
+  console.log(JSON.stringify({
+    result: {
+      ok: false,
+      stage: "runner_proxy_env",
+      caseId: input.caseId,
+      runner_env_proxy_evidence: runnerEnvProxyEvidence,
+    },
+  }, null, 2));
+  process.exit(1);
+}
 
 function getJson(url) {
   return new Promise((resolve, reject) => {
@@ -127,7 +165,7 @@ function browserWorkflowExpression(payload) {
   const modelPriority = Array.isArray(input.modelPriority) ? input.modelPriority.map(String) : [];
   const options = {
     expectedProvider: String(input.expectedProvider ?? "qwen"),
-    expectedModel: String(input.expectedModel ?? "qwen-max"),
+    expectedModel: String(input.expectedModel ?? "qwen-plus-2025-07-28"),
   };
   const scriptGoal = input.scriptGoal === "rewrite" ? "rewrite" : "expand";
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -591,6 +629,9 @@ function compactPromptTextBoundaryEvidence(value) {
     },
     { field: "source_register_absent", label: "source_register", patterns: [/source_register/i] },
     { field: "overlay_json_absent", label: "overlay_json", patterns: [/overlay[_\s-]?json/i] },
+    { field: "qa_reference_absent", label: "qa_reference", patterns: [/qa[_\s-]?reference/i] },
+    { field: "source_sample_id_absent", label: "source_sample_id", patterns: [/source[_\s-]?sample[_\s-]?id/i] },
+    { field: "sample_entity_marker_absent", label: "sample_entity_marker", patterns: [/sample[_\s-]?(?:character|prop|place|world|entity)/i] },
   ];
   const promptTextForbiddenSourceHits = checks
     .filter((check) => matchAny(joinedPromptText, check.patterns))
@@ -794,10 +835,315 @@ function compactFallbackGateFailures(evidence) {
   if (!evidence.no_live_fallback) {
     failures.push("live_fallback_detected");
   }
-  if (!evidence.no_validator_pseudo_success) {
+  if (!evidence.qa_hard_fail && !evidence.no_validator_pseudo_success) {
     failures.push("validator_pseudo_success_risk");
   }
+  if (input.expectQaHardFail && !evidence.qa_hard_fail) {
+    failures.push("qa_hard_fail_evidence_missing");
+  }
   return failures;
+}
+
+function compactProviderHardFailFailures(evidence) {
+  return evidence.qa_hard_fail ? ["provider_retry_exhausted_hard_fail"] : [];
+}
+
+function collectLiveFallbackSignals(traces) {
+  const signals = [];
+  const fallbackUsedFalsePattern = /fallback[_\s-]?used\s*[:=]\s*false/gi;
+  const localCandidateFalsePattern = /local[_\s-]?candidate\s*[:=]\s*false/gi;
+  const fallbackUsedTruePattern = /fallback[_\s-]?used\s*[:=]\s*true/i;
+  const explicitFallbackPattern =
+    /(^|\b|_)(fallback[-_\s]?only|live[-_\s]?fallback|fallback[-_\s]?result|fallback[-_\s]?mode|model_config_disabled|text_model_live_call_closed|text_model_live_(?:storyboard|expand)_fallback)\b/i;
+  const fallbackStatusPattern = /(^|\b)status\s*[:=]\s*fallback\b/i;
+  const localCandidateFallbackPattern = /(已使用本地候选结果|本地候选结果|local[-_\s]?candidate)/i;
+
+  const inspect = (source, text) => {
+    const value = String(text ?? "");
+    if (!value.trim()) {
+      return;
+    }
+    if (fallbackUsedTruePattern.test(value)) {
+      signals.push(`${source}:fallback_used=true`);
+      return;
+    }
+    const withoutFalseMarkers = value.replace(fallbackUsedFalsePattern, "").replace(localCandidateFalsePattern, "");
+    if (
+      fallbackStatusPattern.test(withoutFalseMarkers) ||
+      explicitFallbackPattern.test(withoutFalseMarkers) ||
+      localCandidateFallbackPattern.test(withoutFalseMarkers)
+    ) {
+      signals.push(`${source}:${withoutFalseMarkers.slice(0, 160)}`);
+    }
+  };
+
+  traces.forEach((trace, index) => {
+    const prefix = `trace_${index + 1}`;
+    inspect(`${prefix}.status`, trace?.status);
+    inspect(`${prefix}.fallback_reason`, trace?.fallback_reason);
+    inspect(`${prefix}.validator_reason`, trace?.validator_reason);
+    asArray(trace?.warning_codes).forEach((code, warningIndex) => inspect(`${prefix}.warning_code_${warningIndex + 1}`, code));
+    asArray(trace?.warnings).forEach((warning, warningIndex) => {
+      inspect(`${prefix}.warning_${warningIndex + 1}.code`, warning?.code);
+      inspect(`${prefix}.warning_${warningIndex + 1}.message`, warning?.message);
+    });
+  });
+
+  return Array.from(new Set(signals));
+}
+
+function collectTraceWarningRecords(traces) {
+  return traces.flatMap((trace, traceIndex) => {
+    const prefix = `trace_${traceIndex + 1}`;
+    return [
+      { source: `${prefix}.fallback_reason`, code: "", message: trace?.fallback_reason ?? "" },
+      { source: `${prefix}.validator_reason`, code: "", message: trace?.validator_reason ?? "" },
+      ...asArray(trace?.warning_codes).map((code, warningIndex) => ({
+        source: `${prefix}.warning_code_${warningIndex + 1}`,
+        code: String(code ?? ""),
+        message: "",
+      })),
+      ...asArray(trace?.warnings).map((warning, warningIndex) => ({
+        source: `${prefix}.warning_${warningIndex + 1}`,
+        code: String(warning?.code ?? ""),
+        message: String(warning?.message ?? ""),
+      })),
+    ];
+  }).filter((item) => `${item.code} ${item.message}`.trim());
+}
+
+function collectRetryTimelineEvidence(traces) {
+  const records = collectTraceWarningRecords(traces);
+  const retryRecovered = records.filter((item) =>
+    /text_model_network_retry_recovered|retry_recovered=true|retry recovered/i.test(`${item.code} ${item.message}`),
+  );
+  const retryExhausted = records.filter((item) =>
+    /retry_exhausted\s*[:=]\s*true|text_model_qa_no_local_fallback_blocked/i.test(`${item.code} ${item.message}`),
+  );
+  const qaHardFail = records.filter((item) =>
+    /text_model_qa_no_local_fallback_blocked|qa_no_local_fallback\s*[:=]\s*true/i.test(`${item.code} ${item.message}`),
+  );
+  const fallbackUsedTrue = records.filter((item) =>
+    /fallback[_\s-]?used\s*[:=]\s*true/i.test(`${item.code} ${item.message}`),
+  );
+  const localCandidateTrue = records.filter((item) =>
+    /local[_\s-]?candidate\s*[:=]\s*true/i.test(`${item.code} ${item.message}`),
+  );
+  const attemptValues = records
+    .map((item) => `${item.code} ${item.message}`.match(/attempts\s*[:=]\s*(\d+)/i)?.[1])
+    .filter(Boolean)
+    .map(Number);
+  const elapsedBuckets = records
+    .map((item) => `${item.code} ${item.message}`.match(/elapsed_bucket\s*[:=]\s*([A-Za-z0-9_]+)/i)?.[1])
+    .filter(Boolean);
+  const errorCategories = records
+    .map((item) => `${item.code} ${item.message}`.match(/error_category\s*[:=]\s*([A-Za-z0-9_]+)/i)?.[1])
+    .filter(Boolean);
+  return {
+    retry_recovered: retryRecovered.length > 0,
+    retry_recovered_count: retryRecovered.length,
+    retry_exhausted: retryExhausted.length > 0,
+    retry_exhausted_count: retryExhausted.length,
+    qa_hard_fail: qaHardFail.length > 0,
+    fallback_used: fallbackUsedTrue.length > 0,
+    local_candidate: localCandidateTrue.length > 0,
+    attempts_observed: Array.from(new Set(attemptValues)),
+    elapsed_buckets: Array.from(new Set(elapsedBuckets)),
+    error_categories: Array.from(new Set(errorCategories)),
+    evidence_codes: Array.from(new Set(records.map((item) => item.code).filter(Boolean))),
+  };
+}
+
+function collectQaProxyEvidence(traces) {
+  const records = collectTraceWarningRecords(traces).filter((item) =>
+    /qa_proxy_env_evidence/i.test(`${item.code} ${item.message}`),
+  );
+  const processEnvProxyPresent = records.some((item) =>
+    /process_env_proxy_present\s*[:=]\s*true/i.test(item.message),
+  );
+  return {
+    app_proxy_evidence_present: records.length > 0,
+    app_process_env_proxy_present: processEnvProxyPresent,
+    app_process_env_proxy_cleared: records.length > 0 && !processEnvProxyPresent,
+    raw_values_redacted: true,
+  };
+}
+
+function uniqueStrings(values) {
+  return Array.from(new Set(values.map((value) => String(value ?? "")).filter((value) => value.trim())));
+}
+
+function collectNormalizerActions(traces) {
+  const records = collectTraceWarningRecords(traces).filter((item) =>
+    /text_model_output_contract_normalized/i.test(`${item.code} ${item.message}`),
+  );
+  const actions = records.flatMap((item) => {
+    const match = item.message.match(/actions\s*=\s*([^;]+)/i);
+    return match ? match[1].split("|").map((value) => value.trim()) : [];
+  });
+  return uniqueStrings(actions);
+}
+
+function compactQualityWarnings(value, creativeFreedomEvidence) {
+  const traces = [value?.expandTrace, value?.generateTrace].filter(Boolean);
+  const traceWarnings = collectTraceWarningRecords(traces)
+    .filter((item) => /quality[_\s-]?review|creative[_\s-]?freedom|template[_\s-]?overconstraint/i.test(`${item.code} ${item.message}`))
+    .map((item) => ({
+      source: item.source,
+      code: item.code || "quality_review",
+      category: "quality_review",
+      raw_values_redacted: true,
+    }));
+  const structuralWarnings = [];
+  if (creativeFreedomEvidence.template_overconstraint_risk.risk) {
+    structuralWarnings.push({
+      source: "runner.creative_freedom",
+      code: "template_overconstraint_risk",
+      category: "quality_review",
+      raw_values_redacted: true,
+    });
+  }
+  return [...traceWarnings, ...structuralWarnings];
+}
+
+function compactCreativeFreedomEvidence(value, promptTextBoundaryEvidence) {
+  const rows = asArray(value?.generateTrace?.ui_rows).length
+    ? asArray(value.generateTrace.ui_rows)
+    : asArray(value?.generateTrace?.response_rows);
+  const rowCount = rows.length;
+  const cameraValues = uniqueStrings(rows.map((row) => row?.camera_movement));
+  const actionValues = uniqueStrings(rows.map((row) => row?.character_action));
+  const repeatedCameraOnly = rowCount > 1 && cameraValues.length === 1;
+  const repeatedActionOnly = rowCount > 1 && actionValues.length === 1;
+  const sampleLeakageRisk = asArray(promptTextBoundaryEvidence.prompt_text_forbidden_source_hits)
+    .some((hit) => /sample|qa_reference|source_sample|raw_kb|source_register|overlay_json/i.test(String(hit)));
+  const templateRisk = {
+    risk: false,
+    fixed_row_count_required: false,
+    fixed_three_row_requirement_detected: false,
+    fixed_sentence_style_required: false,
+    repeated_camera_language_observed: repeatedCameraOnly,
+    repeated_action_language_observed: repeatedActionOnly,
+    note: "creative style differences are not hard-gated; only fact, boundary, fallback, schema, rows, provider, and cleanup gates are hard.",
+  };
+  return {
+    creative_freedom_preserved: !sampleLeakageRisk,
+    row_count: rowCount,
+    row_count_is_contract_fixed: false,
+    natural_language_variance_allowed: true,
+    model_style_variance_allowed: true,
+    quality_review_is_not_hard_gate: true,
+    template_overconstraint_risk: templateRisk,
+    sample_leakage_risk: sampleLeakageRisk,
+  };
+}
+
+function compactModelOutputContractEvidence({
+  value,
+  validatorGateEvidence,
+  acceptedSnapshotEvidence,
+  storyFactFrameEvidence,
+  promptTextBoundaryEvidence,
+  fallbackGateEvidence,
+  hardGateFailures,
+  qualityWarnings,
+  creativeFreedomEvidence,
+}) {
+  const traces = [value?.expandTrace, value?.generateTrace].filter(Boolean);
+  const rows = asArray(value?.generateTrace?.ui_rows).length
+    ? asArray(value.generateTrace.ui_rows)
+    : asArray(value?.generateTrace?.response_rows);
+  const rowContracts = rows.map((row, index) => ({
+    row_index: index + 1,
+    person_present: String(row?.person ?? "").trim().length > 0,
+    visual_description_present: String(row?.visual_description ?? "").trim().length > 0,
+    character_action_present: String(row?.character_action ?? "").trim().length > 0,
+    camera_movement_present: String(row?.camera_movement ?? "").trim().length > 0,
+    prompt_text_present: String(row?.prompt_text ?? "").trim().length > 0,
+    prompt_text_hash: stableEvidenceHash(String(row?.prompt_text ?? "")),
+    duration_seconds: Number(row?.duration_seconds ?? 0),
+    source_fact_refs: [`story_fact_frame.required#row_${index + 1}`],
+    forbidden_fact_refs: [`story_fact_frame.forbidden#row_${index + 1}`],
+  }));
+  const normalizerActions = collectNormalizerActions(traces);
+  const hardGateFailureList = uniqueStrings(hardGateFailures);
+  const promptBoundaryPassed = promptTextBoundaryEvidence.prompt_text_boundary_passed === true;
+  const sourceBindingPassed = storyFactFrameEvidence?.present === true &&
+    storyFactFrameEvidence.stale_binding_detected === false &&
+    asArray(storyFactFrameEvidence.missing_source_facts).length === 0 &&
+    asArray(storyFactFrameEvidence.forbidden_fact_hits).length === 0;
+  const fallbackPassed = fallbackGateEvidence.no_live_fallback === true &&
+    fallbackGateEvidence.fallback_used !== true &&
+    fallbackGateEvidence.local_candidate !== true;
+  return {
+    contract_version: "desktop_model_output_contract_v1",
+    contract_kind: "structural_safety_contract_not_creative_style_template",
+    provider: value?.expectedProvider ?? input.expectedProvider,
+    model: value?.expectedModel ?? input.expectedModel,
+    script_goal: value?.scriptGoal ?? input.scriptGoal,
+    scene_type: storyFactFrameEvidence?.scene_type ?? "",
+    duration: storyFactFrameEvidence?.duration_seconds ?? null,
+    accepted_snapshot_hash: acceptedSnapshotEvidence.accepted_snapshot_hash,
+    story_fact_frame_hash: storyFactFrameEvidence?.story_fact_frame_hash ?? "",
+    source_text_hash: storyFactFrameEvidence?.source_text_hash ?? "",
+    source_fact_refs: {
+      source: "StoryFactFrame.must_keep_facts",
+      count: storyFactFrameEvidence?.must_keep_facts_count ?? 0,
+      raw_values_redacted: true,
+    },
+    required_fact_refs: {
+      source: "StoryFactFrame.must_keep_facts",
+      count: storyFactFrameEvidence?.must_keep_facts_count ?? 0,
+      raw_values_redacted: true,
+    },
+    forbidden_fact_refs: {
+      source: "StoryFactFrame.forbidden_facts",
+      count: storyFactFrameEvidence?.forbidden_facts_count ?? 0,
+      raw_values_redacted: true,
+    },
+    rows: rowContracts,
+    prompt_text_boundary: promptBoundaryPassed,
+    no_fallback_evidence: {
+      no_live_fallback: fallbackGateEvidence.no_live_fallback,
+      fallback_used: fallbackGateEvidence.fallback_used,
+      local_candidate: fallbackGateEvidence.local_candidate,
+      no_http_403: fallbackGateEvidence.no_http_403,
+    },
+    validator_status: hardGateFailureList.length === 0 ? "passed" : "hard_fail",
+    validator_gate_status: validatorGateEvidence.validator_gate_passed === true ? "passed" : "hard_fail",
+    hard_gate_failures: hardGateFailureList,
+    quality_warnings: qualityWarnings,
+    normalizer_actions: normalizerActions,
+    source_fact_binding_status: sourceBindingPassed ? "passed" : "hard_fail",
+    prompt_boundary_status: promptBoundaryPassed ? "passed" : "hard_fail",
+    fallback_status: fallbackPassed ? "passed" : "hard_fail",
+    creative_freedom_preserved: creativeFreedomEvidence.creative_freedom_preserved,
+    template_overconstraint_risk: creativeFreedomEvidence.template_overconstraint_risk,
+    sample_leakage_risk: creativeFreedomEvidence.sample_leakage_risk,
+    raw_prompt_redacted: true,
+    raw_provider_response_redacted: true,
+  };
+}
+
+function compactModelCertificationSummary(contractEvidence) {
+  const failures = asArray(contractEvidence.hard_gate_failures);
+  const hasFailure = (pattern) => failures.some((failure) => pattern.test(String(failure)));
+  const qualityWarningOnly = failures.length === 0 && asArray(contractEvidence.quality_warnings).length > 0;
+  return {
+    provider: contractEvidence.provider,
+    model: contractEvidence.model,
+    output_contract_ready: failures.length === 0,
+    storyboard_gate_ready: failures.length === 0,
+    prompt_text_gate_ready: contractEvidence.prompt_boundary_status === "passed",
+    current_gate_candidate: failures.length === 0 && contractEvidence.fallback_status === "passed",
+    blocked_by_provider: hasFailure(/provider|http_403|qa_hard_fail/i),
+    blocked_by_format: hasFailure(/response_invalid|schema|validator_gate_missing/i),
+    blocked_by_fact_binding: hasFailure(/story_fact_frame|missing_source_facts|forbidden_fact_hits|stale_binding/i),
+    blocked_by_prompt_boundary: hasFailure(/prompt_text/i),
+    blocked_by_output_contract: hasFailure(/rows_mismatch|accepted_snapshot|duration|scene_type/i),
+    blocked_by_fallback: hasFailure(/fallback|local_candidate/i),
+    blocked_by_quality_warning_only: qualityWarningOnly,
+  };
 }
 
 function compactFallbackGateEvidence(value, validatorGateEvidence, promptTextBoundaryEvidence) {
@@ -811,9 +1157,19 @@ function compactFallbackGateEvidence(value, validatorGateEvidence, promptTextBou
     ])
     .join("\n");
   const rowDiffs = asArray(validatorGateEvidence.row_diffs);
+  const liveFallbackSignals = collectLiveFallbackSignals(traces);
+  const retryTimeline = collectRetryTimelineEvidence(traces);
   return {
     no_http_403: !/(^|\D)403(\D|$)|http_403|forbidden/i.test(warningText),
-    no_live_fallback: !/fallback/i.test(warningText),
+    no_live_fallback: liveFallbackSignals.length === 0,
+    live_fallback_signals: liveFallbackSignals,
+    retry_timeline: retryTimeline,
+    qa_proxy_evidence: collectQaProxyEvidence(traces),
+    qa_hard_fail: retryTimeline.qa_hard_fail,
+    retry_recovered: retryTimeline.retry_recovered,
+    retry_exhausted: retryTimeline.retry_exhausted,
+    fallback_used: retryTimeline.fallback_used,
+    local_candidate: retryTimeline.local_candidate,
     no_validator_pseudo_success:
       validatorGateEvidence.validator_gate_present === true &&
       validatorGateEvidence.validator_gate_passed === true &&
@@ -849,25 +1205,53 @@ try {
   const promptTextBoundaryEvidence = compactPromptTextBoundaryEvidence(value);
   const promptTextBoundaryFailures = compactPromptTextBoundaryFailures(promptTextBoundaryEvidence);
   const fallbackGateEvidence = compactFallbackGateEvidence(value, validatorGateEvidence, promptTextBoundaryEvidence);
+  const creativeFreedomEvidence = compactCreativeFreedomEvidence(value, promptTextBoundaryEvidence);
+  const providerHardFailFailures = compactProviderHardFailFailures(fallbackGateEvidence);
+  const downstreamGateFailures = fallbackGateEvidence.qa_hard_fail
+    ? []
+    : [
+        ...compactAcceptedSnapshotFailures(acceptedSnapshotEvidence),
+        ...compactStoryFactFrameFailures(storyFactFrameEvidence),
+        ...promptTextBoundaryFailures,
+      ];
   const assertGateFailures = [
     ...compactScriptGoalFailures(scriptGoalEvidence),
-    ...compactAcceptedSnapshotFailures(acceptedSnapshotEvidence),
-    ...compactStoryFactFrameFailures(storyFactFrameEvidence),
-    ...promptTextBoundaryFailures,
+    ...downstreamGateFailures,
     ...compactFallbackGateFailures(fallbackGateEvidence),
+    ...providerHardFailFailures,
   ];
   const runnerAssertFailures = input.assertBinding ? Array.from(new Set(assertGateFailures)) : [];
+  const qualityWarnings = compactQualityWarnings(value, creativeFreedomEvidence);
+  const modelOutputContractEvidence = compactModelOutputContractEvidence({
+    value,
+    validatorGateEvidence,
+    acceptedSnapshotEvidence,
+    storyFactFrameEvidence,
+    promptTextBoundaryEvidence,
+    fallbackGateEvidence,
+    hardGateFailures: runnerAssertFailures,
+    qualityWarnings,
+    creativeFreedomEvidence,
+  });
+  const modelCertificationSummary = compactModelCertificationSummary(modelOutputContractEvidence);
   const resultOk = runnerAssertFailures.length ? false : value?.ok;
-  const resultStage = runnerAssertFailures.length ? "prompt_text_boundary" : value?.stage;
+  const resultStage = providerHardFailFailures.length
+    ? "provider_hard_fail"
+    : runnerAssertFailures.length
+      ? "prompt_text_boundary"
+      : value?.stage;
   const payload = args.compact
     ? {
         cdp_target: { id: cdp.target.id, url: cdp.target.url, title: cdp.target.title },
         result: {
           ok: resultOk,
           stage: resultStage,
+          runner_env_proxy_evidence: runnerEnvProxyEvidence,
           warningCodes: value?.warningCodes,
           bindingFailures: [...asArray(value?.bindingFailures), ...runnerAssertFailures],
           runner_assert_failures: runnerAssertFailures,
+          hard_gate_failures: runnerAssertFailures,
+          quality_warnings: qualityWarnings,
           bindingEvidence: value?.bindingEvidence,
           caseId: value?.caseId,
           script_goal: scriptGoalEvidence.script_goal,
@@ -883,6 +1267,18 @@ try {
           prompt_text_boundary_evidence: promptTextBoundaryEvidence,
           prompt_text_boundary_failures: promptTextBoundaryFailures,
           fallback_gate_evidence: fallbackGateEvidence,
+          model_output_contract_evidence: modelOutputContractEvidence,
+          model_certification_summary: modelCertificationSummary,
+          normalizer_actions: modelOutputContractEvidence.normalizer_actions,
+          creative_freedom_protection: creativeFreedomEvidence,
+          creative_freedom_preserved: creativeFreedomEvidence.creative_freedom_preserved,
+          template_overconstraint_risk: creativeFreedomEvidence.template_overconstraint_risk,
+          sample_leakage_risk: creativeFreedomEvidence.sample_leakage_risk,
+          source_fact_binding_status: modelOutputContractEvidence.source_fact_binding_status,
+          prompt_boundary_status: modelOutputContractEvidence.prompt_boundary_status,
+          fallback_status: modelOutputContractEvidence.fallback_status,
+          retry_timeline_artifact: fallbackGateEvidence.retry_timeline,
+          qa_proxy_evidence: fallbackGateEvidence.qa_proxy_evidence,
           no_http_403: fallbackGateEvidence.no_http_403,
           no_live_fallback: fallbackGateEvidence.no_live_fallback,
           no_validator_pseudo_success: fallbackGateEvidence.no_validator_pseudo_success,
@@ -890,7 +1286,7 @@ try {
           durationSelection: value?.durationSelection,
           providerStatus: value?.providerStatus,
           expandButtonText: value?.expandButtonText,
-          expandedText: value?.expandedText,
+          expandedTextPresent: typeof value?.expandedText === "string" && value.expandedText.trim().length > 0,
           expandTrace: value?.expandTrace
             ? {
                 status: value.expandTrace.status,
