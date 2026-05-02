@@ -138,8 +138,8 @@
     {
       "id": "cert_previous_hard_fail",
       "script_goal": "expand",
-      "source_case_ref": "tests/qa/desktop-cross-drift-smoke.json#cases[id=cross_same_script_different_scene]",
-      "source_case_ref_reason": "accepted_snapshot_scene_drift appeared only as the broken matrix reference and has no actual desktop-cross-drift-smoke source case in git history; cross_same_script_different_scene is the existing cross-drift case that keeps source/duration stable while changing scene_type and requiring accepted_rewrite_hash/storyboard_rows_hash differences.",
+      "source_case_ref": "tests/qa/desktop-cross-drift-smoke.json#cases[case_id=cross_same_script_different_scene]",
+      "source_case_ref_reason": "accepted_snapshot_scene_drift appeared only as the broken matrix reference and has no actual desktop-cross-drift-smoke source case in git history; cross_same_script_different_scene is the existing cross-drift case that keeps source/duration stable while changing scene_type and requiring accepted_rewrite_hash/storyboard_rows_hash differences. The desktop-cross-drift-smoke source uses case_id rather than id, so this selector is corrected to match the real source field and is not a silent substitution.",
       "case_kind": "previous_hard_fail",
       "required_evidence": "model_output_contract_evidence"
     }
