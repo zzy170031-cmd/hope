@@ -47,6 +47,7 @@ type GenerateStoryboardRequestWithTargetDuration = GenerateStoryboardRequest & {
 };
 
 type HopeQaCommand = "expand_script" | "generate_storyboard";
+type HopeQaScriptGoal = "expand" | "rewrite";
 
 interface HopeQaTraceWarning {
   source: string;
@@ -74,6 +75,9 @@ interface HopeQaTraceRowDiff {
 interface HopeQaTrace {
   version: number;
   command: HopeQaCommand;
+  script_goal?: HopeQaScriptGoal;
+  command_path?: string;
+  ui_control_label?: string;
   captured_at_ms: number;
   status: string;
   warning_codes: string[];
@@ -1536,7 +1540,11 @@ export function App() {
         omitted_detail_summary: requestAnalysis.omittedDetailSummary,
         synopsis_text: rawStoryInput,
       });
-      publishQaTrace(buildExpandScriptQaTrace(response));
+      publishQaTrace(buildExpandScriptQaTrace(response, {
+        scriptGoal: "expand",
+        commandPath: "ui.script_actions.handleExpandStory",
+        uiControlLabel: "expand_story_button",
+      }));
       const storyBody = response.expanded_script_text.trim();
       const responseDurationSeconds = requestIsLongText
         ? resolveResponseStoryDurationSeconds(response, requestDurationSeconds)
@@ -1618,7 +1626,11 @@ export function App() {
         omitted_detail_summary: requestAnalysis.omittedDetailSummary,
         synopsis_text: rawSourceText,
       });
-      publishQaTrace(buildExpandScriptQaTrace(response));
+      publishQaTrace(buildExpandScriptQaTrace(response, {
+        scriptGoal: "rewrite",
+        commandPath: "ui.script_actions.handleExpandScript",
+        uiControlLabel: "rewrite_script_button",
+      }));
       const responseSourceType = normalizeSourceInputType(
         response.source_input_type || requestAnalysis.sourceInputType,
       );
@@ -4958,7 +4970,14 @@ function formatTextModelRunMessage(warnings: ProductWarning[]) {
     : "千问文本生成已完成";
 }
 
-function buildExpandScriptQaTrace(response: ExpandScriptResponse): HopeQaTrace {
+function buildExpandScriptQaTrace(
+  response: ExpandScriptResponse,
+  commandEvidence: {
+    scriptGoal: HopeQaScriptGoal;
+    commandPath: string;
+    uiControlLabel: string;
+  },
+): HopeQaTrace {
   const warnings = collectQaTraceWarnings([
     { source: "warnings", warnings: response.warnings },
     { source: "blockers", warnings: response.blockers ?? [] },
@@ -4967,6 +4986,9 @@ function buildExpandScriptQaTrace(response: ExpandScriptResponse): HopeQaTrace {
 
   return buildHopeQaTrace({
     command: "expand_script",
+    scriptGoal: commandEvidence.scriptGoal,
+    commandPath: commandEvidence.commandPath,
+    uiControlLabel: commandEvidence.uiControlLabel,
     status: response.status ?? "Ready",
     warnings,
     responseRows: [],
@@ -4999,6 +5021,9 @@ function buildGenerateStoryboardQaTrace(
 
 function buildHopeQaTrace(input: {
   command: HopeQaCommand;
+  scriptGoal?: HopeQaScriptGoal;
+  commandPath?: string;
+  uiControlLabel?: string;
   status: string;
   warnings: HopeQaTraceWarning[];
   responseRows: HopeQaTraceRow[];
@@ -5019,6 +5044,9 @@ function buildHopeQaTrace(input: {
   return {
     version: QA_TRACE_VERSION,
     command: input.command,
+    script_goal: input.scriptGoal,
+    command_path: input.commandPath ? sanitizeQaText(input.commandPath) : undefined,
+    ui_control_label: input.uiControlLabel ? sanitizeQaText(input.uiControlLabel) : undefined,
     captured_at_ms: Date.now(),
     status: sanitizeQaText(input.status),
     warning_codes: input.warnings.map((warning) => warning.code),

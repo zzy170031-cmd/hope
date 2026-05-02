@@ -8,24 +8,39 @@
   "gate_scope": {
     "phase": "P2-P4 cross-drift carrier before 403-case",
     "script_goal": "expand",
-    "runner_requirement": "--expected-provider qwen --expected-model qwen-max",
+    "runner_requirement": "--script-goal expand --expected-provider qwen --expected-model qwen-max --assert-binding 1",
     "supports_16_case_manifest": "tests/qa/desktop-16-case-matrix.json",
     "not_403_case_execution": true
   },
   "prompt_text_boundary": {
-    "allowed_sources": ["accepted facts", "StoryFactFrame", "scene_type", "duration", "rule tags"],
-    "forbidden_sources": ["sample_text", "smoke_extracts", "raw KB rows", "raw prompt body", "source_register", "overlay JSON"]
+    "allowed_sources": [
+      "accepted facts",
+      "StoryFactFrame",
+      "scene_type",
+      "duration",
+      "rule tags"
+    ],
+    "forbidden_sources": [
+      "sample_text",
+      "smoke_extracts",
+      "raw KB rows",
+      "raw prompt body",
+      "source_register",
+      "overlay JSON"
+    ]
   },
   "gates": [
     "no_http_403",
-    "no_text_model_network_error",
-    "no_live_expand_fallback",
-    "no_live_storyboard_fallback",
-    "rows_match_true",
-    "binding_evidence_present",
-    "stale_binding_detected_false",
-    "missing_source_facts_empty",
-    "forbidden_fact_hits_empty"
+    "no_live_fallback",
+    "no_validator_pseudo_success",
+    "validator_gate_evidence.rows_match=true",
+    "validator_gate_evidence.row_diffs=[]",
+    "story_fact_frame_binding_evidence.present",
+    "story_fact_frame_binding_evidence.stale_binding_detected=false",
+    "story_fact_frame_binding_evidence.missing_source_facts=[]",
+    "story_fact_frame_binding_evidence.forbidden_fact_hits=[]",
+    "prompt_text_boundary_evidence.prompt_text_boundary_passed=true",
+    "runner_assert_failures=[]"
   ],
   "cases": [
     {
@@ -34,8 +49,19 @@
       "source": "废墟之上，主角单膝跪地，敌人缓步逼近。",
       "scene": "热血战斗",
       "duration_seconds": 15,
-      "must_keep": ["主角", "敌人", "废墟", "单膝跪地", "逼近"],
-      "must_not_include": ["甲胄", "剑柄", "断戟", "军阵规模"]
+      "must_keep": [
+        "主角",
+        "敌人",
+        "废墟",
+        "单膝跪地",
+        "逼近"
+      ],
+      "must_not_include": [
+        "甲胄",
+        "剑柄",
+        "断戟",
+        "军阵规模"
+      ]
     },
     {
       "case_id": "cross_same_script_same_scene_duration_30",
@@ -43,10 +69,24 @@
       "source": "废墟之上，主角单膝跪地，敌人缓步逼近。",
       "scene": "热血战斗",
       "duration_seconds": 30,
-      "must_keep": ["主角", "敌人", "废墟", "单膝跪地", "逼近"],
-      "must_not_include": ["甲胄", "剑柄", "断戟", "军阵规模"],
+      "must_keep": [
+        "主角",
+        "敌人",
+        "废墟",
+        "单膝跪地",
+        "逼近"
+      ],
+      "must_not_include": [
+        "甲胄",
+        "剑柄",
+        "断戟",
+        "军阵规模"
+      ],
       "expected_difference_from": "cross_same_script_same_scene_duration_15",
-      "expected_difference": ["duration_plan_hash", "storyboard_rows_hash"]
+      "expected_difference": [
+        "duration_plan_hash",
+        "storyboard_rows_hash"
+      ]
     },
     {
       "case_id": "cross_same_script_different_scene",
@@ -54,10 +94,25 @@
       "source": "废墟之上，主角单膝跪地，敌人缓步逼近。",
       "scene": "国战军阵建立",
       "duration_seconds": 15,
-      "must_keep": ["主角", "敌人", "废墟", "单膝跪地", "逼近"],
-      "must_not_include": ["甲胄", "剑柄", "断戟", "军阵规模"],
+      "must_keep": [
+        "主角",
+        "敌人",
+        "废墟",
+        "单膝跪地",
+        "逼近"
+      ],
+      "must_not_include": [
+        "甲胄",
+        "剑柄",
+        "断戟",
+        "军阵规模"
+      ],
       "expected_difference_from": "cross_same_script_same_scene_duration_15",
-      "expected_difference": ["scene_type", "accepted_rewrite_hash", "storyboard_rows_hash"]
+      "expected_difference": [
+        "scene_type",
+        "accepted_rewrite_hash",
+        "storyboard_rows_hash"
+      ]
     },
     {
       "case_id": "cross_different_script_same_scene",
@@ -65,10 +120,28 @@
       "source": "林峰护住苏瑶，阿青提醒他们，黑衣追兵从巷口逼近。",
       "scene": "热血战斗",
       "duration_seconds": 15,
-      "must_keep": ["林峰", "苏瑶", "阿青", "黑衣追兵", "巷口", "逼近"],
-      "must_not_include": ["三名", "刀锋", "衣袖裂口", "左臂", "伤口"],
+      "must_keep": [
+        "林峰",
+        "苏瑶",
+        "阿青",
+        "黑衣追兵",
+        "巷口",
+        "逼近"
+      ],
+      "must_not_include": [
+        "三名",
+        "刀锋",
+        "衣袖裂口",
+        "左臂",
+        "伤口"
+      ],
       "expected_difference_from": "cross_same_script_same_scene_duration_15",
-      "expected_difference": ["source_text_hash", "story_fact_frame_hash", "accepted_rewrite_hash", "storyboard_rows_hash"]
+      "expected_difference": [
+        "source_text_hash",
+        "story_fact_frame_hash",
+        "accepted_rewrite_hash",
+        "storyboard_rows_hash"
+      ]
     },
     {
       "case_id": "cross_same_duration_same_scene_different_script",
@@ -76,10 +149,27 @@
       "source": "雨夜码头，女主攥紧旧照片，追来的陌生人停在路灯外。",
       "scene": "热血战斗",
       "duration_seconds": 15,
-      "must_keep": ["女主", "旧照片", "陌生人", "路灯"],
-      "must_not_include": ["林峰", "苏瑶", "阿青", "黑衣追兵", "废墟", "敌人"],
+      "must_keep": [
+        "女主",
+        "旧照片",
+        "陌生人",
+        "路灯"
+      ],
+      "must_not_include": [
+        "林峰",
+        "苏瑶",
+        "阿青",
+        "黑衣追兵",
+        "废墟",
+        "敌人"
+      ],
       "expected_difference_from": "cross_different_script_same_scene",
-      "expected_difference": ["source_text_hash", "story_fact_frame_hash", "accepted_rewrite_hash", "storyboard_rows_hash"]
+      "expected_difference": [
+        "source_text_hash",
+        "story_fact_frame_hash",
+        "accepted_rewrite_hash",
+        "storyboard_rows_hash"
+      ]
     }
   ]
 }

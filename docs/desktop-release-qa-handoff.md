@@ -105,7 +105,7 @@ scripts/hope-ui-driven-trace-runner.mjs
 Example invocation after the release shell CDP target is ready:
 
 ```powershell
-node .\scripts\hope-ui-driven-trace-runner.mjs --case A_hot_blood_battle --scene 热血战斗 --source "废墟之上，主角单膝跪地，敌人缓步逼近。" --duration 15 --expected-provider qwen --expected-model qwen-max --compact 1
+node .\scripts\hope-ui-driven-trace-runner.mjs --case A_hot_blood_battle --script-goal expand --scene 热血战斗 --source "废墟之上，主角单膝跪地，敌人缓步逼近。" --duration 15 --expected-provider qwen --expected-model qwen-max --assert-binding 1 --compact 1
 ```
 
 Each case must:
@@ -115,7 +115,8 @@ Each case must:
 - select scene type
 - select 15 seconds
 - enter source text
-- run expand story or expand script
+- run the selected script-goal command path; four-group smoke uses
+  `--script-goal expand --assert-binding 1`
 - confirm the expanded text
 - create a shot task
 - add it to the queue
@@ -130,7 +131,7 @@ Required trace checks:
 
 - provider is `qwen`
 - expected model is `qwen-max`
-- runner passes `--expected-provider qwen --expected-model qwen-max`
+- runner passes `--script-goal expand --expected-provider qwen --expected-model qwen-max --assert-binding 1`
 - `/json/list` target count is recorded
 - target URL/title is recorded
 - release shell PID is recorded
@@ -162,16 +163,31 @@ manifest as the business carrier and varies:
 
 Current executable state:
 
-- `expand` cases are executable now through `scripts/hope-ui-driven-trace-runner.mjs`
-  with `--expected-provider qwen --expected-model qwen-max`, but execution alone
-  is not a full gate pass unless the required sanitized evidence fields are
-  present.
-- `rewrite` cases are the degraded 8-case half until the runner supports an
-  explicit `script_goal=rewrite|expand` selector, command-path evidence, and
-  accepted snapshot assertions for rewrite-mode behavior.
-- Do not describe the degraded 8-case state as a completed 16-case pass.
-- A degraded 8-case record may continue P1-P4 preparation only. It is not
-  403-case entry, packaging readiness, or release readiness.
+- The runner supports explicit `--script-goal expand` and
+  `--script-goal rewrite`.
+- `expand` selects `ui.script_actions.handleExpandStory` through
+  `.script-actions button:nth-of-type(2)`.
+- `rewrite` selects `ui.script_actions.handleExpandScript` through
+  `.script-actions button:nth-of-type(3)`.
+- The app-emitted expand trace records observed `script_goal` and
+  `command_path`; compact runner evidence records both selected and observed
+  command evidence, qwen/qwen-max provider/model, accepted snapshot evidence,
+  StoryFactFrame binding evidence, marker-based prompt_text boundary evidence,
+  rows_match/row_diffs, no_http_403, no live fallback, no validator
+  pseudo-success, and `runner_assert_failures`. Runtime source-lineage proof is
+  still a live trace review requirement and is not claimed by marker evidence
+  alone.
+- This is executable readiness only. Do not describe it as a real 16-case pass
+  until all 16 live WebView2/CDP runs have completed with clean evidence.
+- Harness readiness is not 403-case entry, packaging readiness, or release
+  readiness.
+
+Later real 16-case execution must run each manifest case with its own
+`script_goal` value:
+
+```powershell
+node .\scripts\hope-ui-driven-trace-runner.mjs --case <case.id> --script-goal <case.script_goal> --scene <case scene label> --source "<case source text>" --duration <case.duration_seconds> --expected-provider qwen --expected-model qwen-max --assert-binding 1 --compact 1
+```
 
 Every case must verify the storyboard task, storyboard `prompt_text`,
 `scene_type`, `duration_seconds`, accepted snapshot, StoryFactFrame, forbidden
@@ -181,11 +197,12 @@ StoryFactFrame, scene/duration, and rule tags only. It must not include
 `source_register`, or overlay JSON.
 
 Prompt boundary evidence must be sanitized and must not expose raw prompt
-bodies. Required fields are: `prompt_text_hash`, `prompt_text_source_policy`,
+bodies. The runner records marker-based boundary evidence; source-lineage proof
+still requires live trace review. Required fields are: `prompt_text_hash`, `prompt_text_source_policy`,
 `prompt_text_forbidden_source_hits`, `prompt_text_raw_body_absent`,
 `sample_text_absent`, `smoke_extracts_absent`, `raw_kb_rows_absent`,
 `source_register_absent`, and `overlay_json_absent`. The compact runner summary
-is not sufficient by itself for this gate unless these fields are present.
+must include these fields for every 16-case run.
 
 ## Scene-Type Rewrite Gate
 
@@ -241,7 +258,7 @@ C:\Users\Administrator\Desktop\九州剧本文字版2.docx
 
 Do not run the 403-case matrix until the four-group trace gate, scene-type
 rewrite gate, full 16-case pre-403 gate, and cross rewrite drift smoke gate
-pass. A documented degraded 8-case record does not authorize 403-case entry
+pass. Harness executable readiness alone does not authorize 403-case entry
 unless a separate controller dispatch explicitly opens that reduced 403 gate.
 
 ## Story Fact Frame Binding Gate

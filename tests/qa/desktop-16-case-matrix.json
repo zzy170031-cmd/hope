@@ -3,7 +3,7 @@
   "purpose": "P1-P4 pre-403 gate manifest for scene, duration, text, and script-goal drift using the four-group business carrier.",
   "provider": "qwen",
   "expected_model": "qwen-max",
-  "status": "manifest_ready_not_executed",
+  "status": "partial_executable_ready_not_executed",
   "must_not_execute_in_this_thread": [
     "403-case matrix",
     "desktop shell",
@@ -13,7 +13,7 @@
     "packaging"
   ],
   "model_contract": {
-    "runner_requirement": "--expected-provider qwen --expected-model qwen-max",
+    "runner_requirement": "--script-goal <case.script_goal> --expected-provider qwen --expected-model qwen-max --assert-binding 1",
     "deprecated_models": [
       {
         "model": "qwen-plus",
@@ -23,35 +23,95 @@
     ]
   },
   "dimensions": {
-    "script_goal": ["rewrite", "expand"],
-    "scene_delta": ["same", "different"],
-    "duration_delta": ["same", "different"],
-    "text_delta": ["same", "different"],
+    "script_goal": [
+      "rewrite",
+      "expand"
+    ],
+    "scene_delta": [
+      "same",
+      "different"
+    ],
+    "duration_delta": [
+      "same",
+      "different"
+    ],
+    "text_delta": [
+      "same",
+      "different"
+    ],
     "expected_total_case_count": 16
   },
   "runner_support": {
     "current_runner": "scripts/hope-ui-driven-trace-runner.mjs",
-    "current_runner_supported_goal": "expand",
-    "current_runner_goal_selector": false,
+    "current_runner_supported_goal": [
+      "rewrite",
+      "expand"
+    ],
+    "current_runner_goal_selector": true,
+    "script_goal_argument": "--script-goal rewrite|expand",
+    "selected_command_path_evidence": {
+      "expand": {
+        "script_goal": "expand",
+        "selected_command_path": "ui.script_actions.handleExpandStory",
+        "selected_ui_selector": ".script-actions button:nth-of-type(2)",
+        "expected_trace_command": "expand_script",
+        "observed_app_script_goal": "expand",
+        "observed_app_command_path": "ui.script_actions.handleExpandStory"
+      },
+      "rewrite": {
+        "script_goal": "rewrite",
+        "selected_command_path": "ui.script_actions.handleExpandScript",
+        "selected_ui_selector": ".script-actions button:nth-of-type(3)",
+        "expected_trace_command": "expand_script",
+        "observed_app_script_goal": "rewrite",
+        "observed_app_command_path": "ui.script_actions.handleExpandScript"
+      }
+    },
     "executable_now": {
-      "script_goal": ["expand"],
-      "case_count": 8,
-      "meaning": "The current runner can drive the expand workflow for these 8 cases. Full gate acceptance still requires the evidence fields below; execution alone is not proof of prompt_text or binding safety."
+      "script_goal": [
+        "rewrite",
+        "expand"
+      ],
+      "case_count": 16,
+      "meaning": "Harness can independently select expand or rewrite command paths, and app-emitted QA trace exposes observed script_goal/command_path for the selected entry. Compact evidence records selected and observed command evidence, qwen/qwen-max provider, accepted snapshot, StoryFactFrame binding, marker-based prompt_text boundary evidence, rows_match/row_diffs, no_http_403, no live fallback, no validator pseudo-success, and runner_assert_failures. This is partial executable readiness only; no 16-case live run or runtime source-lineage proof is claimed."
     },
     "degraded_8_case": {
-      "script_goal": ["rewrite"],
-      "case_count": 8,
-      "reason": "The current UI-driven runner clicks the first available expand/rewrite story button and waits for command=expand_script. It has no script_goal selector and cannot separately prove rewrite-mode behavior."
+      "script_goal": [],
+      "case_count": 0,
+      "reason": "Resolved at harness level by explicit --script-goal selector and per-run command-path evidence. Actual rewrite gate acceptance still requires a future live 16-case run with all required evidence clean."
     },
-    "missing_harness": [
-      "Runner argument or manifest field for script_goal=rewrite|expand.",
-      "UI command selection that targets rewrite and expand separately instead of the first matching button.",
-      "Trace evidence field that records script_goal and selected command path.",
-      "Post-run assertion that rewrite cases update accepted snapshot without being reported as expand-only success.",
-      "Sanitized prompt_text boundary evidence fields: prompt_text_hash, prompt_text_source_policy, prompt_text_forbidden_source_hits, prompt_text_raw_body_absent, sample_text_absent, smoke_extracts_absent, raw_kb_rows_absent, source_register_absent, overlay_json_absent."
+    "required_runner_evidence": [
+      "script_goal",
+      "selected_command_path",
+      "selected_ui_control",
+      "selected_ui_selector",
+      "provider=qwen",
+      "model=qwen-max",
+      "accepted_snapshot_hash",
+      "accepted_rewrite_hash",
+      "StoryFactFrame binding evidence",
+      "prompt_text_hash",
+      "prompt_text_source_policy",
+      "prompt_text_forbidden_source_hits",
+      "prompt_text_raw_body_absent",
+      "sample_text_absent",
+      "smoke_extracts_absent",
+      "raw_kb_rows_absent",
+      "source_register_absent",
+      "overlay_json_absent",
+      "rows_match",
+      "row_diffs",
+      "no_http_403",
+      "no_live_fallback",
+      "no_validator_pseudo_success",
+      "observed_app_script_goal",
+      "observed_app_command_path",
+      "runner_assert_failures",
+      "prompt_text_boundary_passed",
+      "prompt_text_boundary_method"
     ],
-    "authorization_boundary": "This manifest records the missing harness as a blocker only. It does not authorize edits to scripts, app, crates, ui, or runtime source of truth; any harness repair requires a separate controller dispatch.",
-    "unblock_condition": "Add the missing harness fields without weakening the qwen-max, StoryFactFrame, accepted snapshot, prompt_text, forbidden drift, rows_match, and no-fallback gates; then re-run the full 16 cases before 403-case entry."
+    "authorization_boundary": "This manifest records harness executable readiness only. It does not claim any live 16-case pass and does not authorize 403-case, packaging, push, commit, or desktop shell execution in this thread.",
+    "unblock_condition": "Run the full 16 cases later with --script-goal set from each case, --assert-binding 1, qwen/qwen-max hard gate, StoryFactFrame, accepted snapshot, marker-based prompt_text boundary, forbidden drift, rows_match, no-http-403, no-live-fallback, and no-validator-pseudo-success evidence all clean before 403-case entry; source-lineage proof remains a live trace review requirement."
   },
   "business_carrier": {
     "four_group_manifest": "tests/qa/desktop-four-groups.json",
@@ -85,6 +145,8 @@
     }
   },
   "per_case_required_evidence": [
+    "runner records script_goal and selected command path for the case",
+    "runner selected UI selector matches the case script_goal",
     "script task is created from the accepted snapshot for the case",
     "storyboard prompt_text is generated from accepted facts, StoryFactFrame, scene_type, duration, and rule tags only",
     "scene_type in trace and generated rows matches the case scene target",
@@ -92,7 +154,7 @@
     "accepted_rewrite_hash changes only when source, scene, duration, or script_goal requires it",
     "StoryFactFrame source facts remain bound to the selected source text",
     "forbidden drift fields remain empty: missing_source_facts=[], forbidden_fact_hits=[], stale_binding_detected=false",
-    "prompt_text does not contain sample_text, smoke_extracts, raw KB rows, raw prompt body, source_register, or overlay JSON",
+    "marker-based prompt_text boundary evidence reports no forbidden source markers; live source-lineage review still required",
     "rows_match=true and row_diffs=[]",
     "no_http_403, no live fallback, and no validator pseudo-success"
   ],
@@ -108,7 +170,11 @@
       "duration_seconds": 15,
       "executable_now": true,
       "degraded_8_case": false,
-      "validation_focus": ["baseline accepted snapshot", "StoryFactFrame stability", "prompt_text boundary"]
+      "validation_focus": [
+        "baseline accepted snapshot",
+        "StoryFactFrame stability",
+        "prompt_text boundary"
+      ]
     },
     {
       "id": "expand_scene_same_duration_same_text_different",
@@ -121,7 +187,11 @@
       "duration_seconds": 15,
       "executable_now": true,
       "degraded_8_case": false,
-      "validation_focus": ["source_text_hash changes", "StoryFactFrame changes", "forbidden cross-text drift stays empty"]
+      "validation_focus": [
+        "source_text_hash changes",
+        "StoryFactFrame changes",
+        "forbidden cross-text drift stays empty"
+      ]
     },
     {
       "id": "expand_scene_same_duration_different_text_same",
@@ -134,7 +204,11 @@
       "duration_seconds": 30,
       "executable_now": true,
       "degraded_8_case": false,
-      "validation_focus": ["duration_plan_hash changes", "scene_type stable", "StoryFactFrame stable"]
+      "validation_focus": [
+        "duration_plan_hash changes",
+        "scene_type stable",
+        "StoryFactFrame stable"
+      ]
     },
     {
       "id": "expand_scene_same_duration_different_text_different",
@@ -147,7 +221,11 @@
       "duration_seconds": 30,
       "executable_now": true,
       "degraded_8_case": false,
-      "validation_focus": ["source_text_hash changes", "duration_plan_hash changes", "prompt_text excludes other carrier facts"]
+      "validation_focus": [
+        "source_text_hash changes",
+        "duration_plan_hash changes",
+        "prompt_text excludes other carrier facts"
+      ]
     },
     {
       "id": "expand_scene_different_duration_same_text_same",
@@ -160,7 +238,11 @@
       "duration_seconds": 15,
       "executable_now": true,
       "degraded_8_case": false,
-      "validation_focus": ["scene_type changes", "accepted snapshot changes for scene expression", "source facts preserved"]
+      "validation_focus": [
+        "scene_type changes",
+        "accepted snapshot changes for scene expression",
+        "source facts preserved"
+      ]
     },
     {
       "id": "expand_scene_different_duration_same_text_different",
@@ -173,7 +255,11 @@
       "duration_seconds": 15,
       "executable_now": true,
       "degraded_8_case": false,
-      "validation_focus": ["scene_type changes", "source_text_hash changes", "forbidden scene-fit inventions absent"]
+      "validation_focus": [
+        "scene_type changes",
+        "source_text_hash changes",
+        "forbidden scene-fit inventions absent"
+      ]
     },
     {
       "id": "expand_scene_different_duration_different_text_same",
@@ -186,7 +272,11 @@
       "duration_seconds": 30,
       "executable_now": true,
       "degraded_8_case": false,
-      "validation_focus": ["scene_type changes", "duration_plan_hash changes", "accepted snapshot stays source-bound"]
+      "validation_focus": [
+        "scene_type changes",
+        "duration_plan_hash changes",
+        "accepted snapshot stays source-bound"
+      ]
     },
     {
       "id": "expand_scene_different_duration_different_text_different",
@@ -199,7 +289,11 @@
       "duration_seconds": 30,
       "executable_now": true,
       "degraded_8_case": false,
-      "validation_focus": ["source, scene, and duration all change", "StoryFactFrame follows new source", "prompt_text excludes baseline facts"]
+      "validation_focus": [
+        "source, scene, and duration all change",
+        "StoryFactFrame follows new source",
+        "prompt_text excludes baseline facts"
+      ]
     },
     {
       "id": "rewrite_scene_same_duration_same_text_same",
@@ -210,9 +304,14 @@
       "base_carrier": "A_hot_blood_battle",
       "compare_carrier": "A_hot_blood_battle",
       "duration_seconds": 15,
-      "executable_now": false,
-      "degraded_8_case": true,
-      "blocked_by": "missing script_goal rewrite harness"
+      "executable_now": true,
+      "degraded_8_case": false,
+      "validation_focus": [
+        "explicit rewrite command path",
+        "accepted snapshot rewrite evidence",
+        "StoryFactFrame stability",
+        "prompt_text boundary"
+      ]
     },
     {
       "id": "rewrite_scene_same_duration_same_text_different",
@@ -223,9 +322,14 @@
       "base_carrier": "A_hot_blood_battle",
       "compare_carrier": "B_hot_blood_battle",
       "duration_seconds": 15,
-      "executable_now": false,
-      "degraded_8_case": true,
-      "blocked_by": "missing script_goal rewrite harness"
+      "executable_now": true,
+      "degraded_8_case": false,
+      "validation_focus": [
+        "explicit rewrite command path",
+        "accepted snapshot rewrite evidence",
+        "StoryFactFrame stability",
+        "prompt_text boundary"
+      ]
     },
     {
       "id": "rewrite_scene_same_duration_different_text_same",
@@ -236,9 +340,14 @@
       "base_carrier": "A_hot_blood_battle",
       "compare_carrier": "A_hot_blood_battle",
       "duration_seconds": 30,
-      "executable_now": false,
-      "degraded_8_case": true,
-      "blocked_by": "missing script_goal rewrite harness"
+      "executable_now": true,
+      "degraded_8_case": false,
+      "validation_focus": [
+        "explicit rewrite command path",
+        "accepted snapshot rewrite evidence",
+        "StoryFactFrame stability",
+        "prompt_text boundary"
+      ]
     },
     {
       "id": "rewrite_scene_same_duration_different_text_different",
@@ -249,9 +358,14 @@
       "base_carrier": "A_hot_blood_battle",
       "compare_carrier": "B_hot_blood_battle",
       "duration_seconds": 30,
-      "executable_now": false,
-      "degraded_8_case": true,
-      "blocked_by": "missing script_goal rewrite harness"
+      "executable_now": true,
+      "degraded_8_case": false,
+      "validation_focus": [
+        "explicit rewrite command path",
+        "accepted snapshot rewrite evidence",
+        "StoryFactFrame stability",
+        "prompt_text boundary"
+      ]
     },
     {
       "id": "rewrite_scene_different_duration_same_text_same",
@@ -262,9 +376,14 @@
       "base_carrier": "A_hot_blood_battle",
       "compare_carrier": "A_chinese_war_formation",
       "duration_seconds": 15,
-      "executable_now": false,
-      "degraded_8_case": true,
-      "blocked_by": "missing script_goal rewrite harness"
+      "executable_now": true,
+      "degraded_8_case": false,
+      "validation_focus": [
+        "explicit rewrite command path",
+        "accepted snapshot rewrite evidence",
+        "StoryFactFrame stability",
+        "prompt_text boundary"
+      ]
     },
     {
       "id": "rewrite_scene_different_duration_same_text_different",
@@ -275,9 +394,14 @@
       "base_carrier": "A_hot_blood_battle",
       "compare_carrier": "B_slg_sandbox_view",
       "duration_seconds": 15,
-      "executable_now": false,
-      "degraded_8_case": true,
-      "blocked_by": "missing script_goal rewrite harness"
+      "executable_now": true,
+      "degraded_8_case": false,
+      "validation_focus": [
+        "explicit rewrite command path",
+        "accepted snapshot rewrite evidence",
+        "StoryFactFrame stability",
+        "prompt_text boundary"
+      ]
     },
     {
       "id": "rewrite_scene_different_duration_different_text_same",
@@ -288,9 +412,14 @@
       "base_carrier": "A_hot_blood_battle",
       "compare_carrier": "A_chinese_war_formation",
       "duration_seconds": 30,
-      "executable_now": false,
-      "degraded_8_case": true,
-      "blocked_by": "missing script_goal rewrite harness"
+      "executable_now": true,
+      "degraded_8_case": false,
+      "validation_focus": [
+        "explicit rewrite command path",
+        "accepted snapshot rewrite evidence",
+        "StoryFactFrame stability",
+        "prompt_text boundary"
+      ]
     },
     {
       "id": "rewrite_scene_different_duration_different_text_different",
@@ -301,9 +430,14 @@
       "base_carrier": "A_hot_blood_battle",
       "compare_carrier": "B_slg_sandbox_view",
       "duration_seconds": 30,
-      "executable_now": false,
-      "degraded_8_case": true,
-      "blocked_by": "missing script_goal rewrite harness"
+      "executable_now": true,
+      "degraded_8_case": false,
+      "validation_focus": [
+        "explicit rewrite command path",
+        "accepted snapshot rewrite evidence",
+        "StoryFactFrame stability",
+        "prompt_text boundary"
+      ]
     }
   ]
 }

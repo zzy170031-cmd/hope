@@ -29,16 +29,25 @@ const modelPriority = [
   "qwen-math-turbo",
 ];
 
+const allowedScriptGoals = ["rewrite", "expand"];
+const requestedScriptGoal = String(args["script-goal"] || args.script_goal || args.goal || "expand")
+  .trim()
+  .toLowerCase();
+if (!allowedScriptGoals.includes(requestedScriptGoal)) {
+  throw new Error(`Unsupported --script-goal=${requestedScriptGoal}; expected rewrite or expand`);
+}
+
 const input = {
   caseId: args.case ?? "case",
   sceneLabel: args.scene ?? "",
   sourceText: args.source ?? "",
   durationSeconds: Number(args.duration ?? 15),
+  scriptGoal: requestedScriptGoal,
   expectedProvider: args["expected-provider"] || "qwen",
   expectedModel: args["expected-model"] || "qwen-max",
   allowedModels: allowedQwenTextModels,
   modelPriority,
-  assertBinding: args["assert-binding"] === "1",
+  assertBinding: args["assert-binding"] !== "0",
 };
 
 function getJson(url) {
@@ -120,6 +129,7 @@ function browserWorkflowExpression(payload) {
     expectedProvider: String(input.expectedProvider ?? "qwen"),
     expectedModel: String(input.expectedModel ?? "qwen-max"),
   };
+  const scriptGoal = input.scriptGoal === "rewrite" ? "rewrite" : "expand";
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const textOf = (element) => (element?.textContent || "").replace(/\\s+/g, " ").trim();
   const visible = (element) => Boolean(element && (element.offsetWidth || element.offsetHeight || element.getClientRects().length));
@@ -177,6 +187,39 @@ function browserWorkflowExpression(payload) {
       }
     }
     throw new Error("button not found: " + labels.join(" or ") + "; buttons=" + buttons().map(textOf).join(" | "));
+  };
+  const commandPlanForScriptGoal = (goal) => goal === "rewrite"
+    ? {
+        script_goal: "rewrite",
+        command_path: "ui.script_actions.handleExpandScript",
+        selector: ".script-actions button:nth-of-type(3)",
+        trace_command: "expand_script",
+      }
+    : {
+        script_goal: "expand",
+        command_path: "ui.script_actions.handleExpandStory",
+        selector: ".script-actions button:nth-of-type(2)",
+        trace_command: "expand_script",
+      };
+  const clickScriptGoalCommand = async (goal) => {
+    const plan = commandPlanForScriptGoal(goal);
+    const button = document.querySelector(plan.selector);
+    if (!button || !visible(button)) {
+      throw new Error("script_goal command control not found: " + JSON.stringify(plan) + "; buttons=" + buttons().map(textOf).join(" | "));
+    }
+    if (button.disabled) {
+      throw new Error("script_goal command control disabled: " + JSON.stringify({ ...plan, button_text: textOf(button) }));
+    }
+    button.scrollIntoView({ block: "center", inline: "center" });
+    const buttonText = textOf(button);
+    button.click();
+    await sleep(350);
+    return {
+      ...plan,
+      selected_ui_control: "button",
+      selected_ui_text: buttonText,
+      selected_by: "script_goal",
+    };
   };
   const selectByLabel = (label) => {
     const labels = Array.from(document.querySelectorAll("label"));
@@ -301,6 +344,7 @@ function browserWorkflowExpression(payload) {
     return {
       ok: false,
       stage: "expected_model_not_allowed",
+      scriptGoal,
       expectedProvider: options.expectedProvider,
       expectedModel: options.expectedModel,
       allowedModels,
@@ -317,6 +361,7 @@ function browserWorkflowExpression(payload) {
       ok: false,
       stage: "provider_status",
       providerStatus: status,
+      scriptGoal,
       expectedProvider: options.expectedProvider,
       expectedModel: options.expectedModel,
       allowedModels,
@@ -335,17 +380,13 @@ function browserWorkflowExpression(payload) {
   await clickButton("保存文本", { within: ".text-dialog" });
   await waitFor(() => !document.querySelector(".text-dialog"), "story material dialog closed", 30000);
 
-  const expandButton =
-    findButton("扩写剧本", { enabled: true }) ||
-    findButton("改写剧本", { enabled: true }) ||
-    findButton("扩写故事", { enabled: true });
-  if (!expandButton) {
-    throw new Error("expand button not found");
-  }
-  const expandButtonText = textOf(expandButton);
-  expandButton.scrollIntoView({ block: "center", inline: "center" });
-  expandButton.click();
-  await waitFor(() => currentTrace()?.command === "expand_script" && !buttons().some((button) => ["扩写中", "处理中"].some((item) => textOf(button).includes(item))), "expand_script trace", 180000);
+  const selectedScriptCommand = await clickScriptGoalCommand(scriptGoal);
+  await waitFor(
+    () => currentTrace()?.command === selectedScriptCommand.trace_command &&
+      !buttons().some((button) => ["扩写中", "处理中"].some((item) => textOf(button).includes(item))),
+    scriptGoal + " " + selectedScriptCommand.trace_command + " trace",
+    180000,
+  );
   const expandTrace = currentTrace();
   const expandTraceAttr = readTraceAttr();
 
@@ -380,6 +421,8 @@ function browserWorkflowExpression(payload) {
       stage: "generate_storyboard_blocked",
       warningCodes: generateTrace.warning_codes ?? [],
       caseId: input.caseId,
+      scriptGoal,
+      selectedScriptCommand,
       expectedProvider: options.expectedProvider,
       expectedModel: options.expectedModel,
       providerStatus: status,
@@ -430,6 +473,8 @@ function browserWorkflowExpression(payload) {
         bindingFailures: Array.from(new Set(bindingFailures)),
         bindingEvidence,
         caseId: input.caseId,
+        scriptGoal,
+        selectedScriptCommand,
         expectedProvider: options.expectedProvider,
         expectedModel: options.expectedModel,
         providerStatus: status,
@@ -445,6 +490,8 @@ function browserWorkflowExpression(payload) {
   return {
     ok: true,
     caseId: input.caseId,
+    scriptGoal,
+    selectedScriptCommand,
     expectedProvider: options.expectedProvider,
     expectedModel: options.expectedModel,
     allowedModels,
@@ -453,7 +500,7 @@ function browserWorkflowExpression(payload) {
     durationSelection,
     sourceEditorNormalization,
     providerStatus: status,
-    expandButtonText,
+    expandButtonText: selectedScriptCommand.selected_ui_text,
     expandedDialogEntryText,
     expandedText,
     expandTrace,
@@ -507,6 +554,280 @@ function compactValidatorGateEvidence(value) {
   };
 }
 
+function stableEvidenceHash(value) {
+  const source = JSON.stringify(value ?? null);
+  let hash = 2166136261;
+  for (const byte of new TextEncoder().encode(source)) {
+    hash ^= byte;
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function matchAny(source, patterns) {
+  return patterns.some((pattern) => pattern.test(source));
+}
+
+function compactPromptTextBoundaryEvidence(value) {
+  const trace = value?.generateTrace;
+  const rows = asArray(trace?.ui_rows).length ? asArray(trace.ui_rows) : asArray(trace?.response_rows);
+  const promptTexts = rows.map((row) => String(row?.prompt_text ?? ""));
+  const promptTextMissingRows = promptTexts
+    .map((promptText, index) => (promptText.trim() ? null : index + 1))
+    .filter((index) => index !== null);
+  const joinedPromptText = promptTexts.join("\n");
+  const checks = [
+    {
+      field: "prompt_text_raw_body_absent",
+      label: "raw_prompt_body",
+      patterns: [/raw[_\s-]?prompt[_\s-]?body/i, /task_type\s*=/i, /output_schema\s*=/i, /constraints\s*=/i],
+    },
+    { field: "sample_text_absent", label: "sample_text", patterns: [/sample_text/i] },
+    { field: "smoke_extracts_absent", label: "smoke_extracts", patterns: [/smoke_extracts/i] },
+    {
+      field: "raw_kb_rows_absent",
+      label: "raw_kb_rows",
+      patterns: [/raw[_\s-]?kb[_\s-]?rows/i, /kb_context_summary\s*=/i, /selected_sample_ids\s*=/i, /selected_kb_rules\s*=/i],
+    },
+    { field: "source_register_absent", label: "source_register", patterns: [/source_register/i] },
+    { field: "overlay_json_absent", label: "overlay_json", patterns: [/overlay[_\s-]?json/i] },
+  ];
+  const promptTextForbiddenSourceHits = checks
+    .filter((check) => matchAny(joinedPromptText, check.patterns))
+    .map((check) => check.label);
+  const absentChecks = Object.fromEntries(checks.map((check) => [check.field, !promptTextForbiddenSourceHits.includes(check.label)]));
+  const promptTextMissing = rows.length === 0 || promptTextMissingRows.length > 0;
+  return {
+    prompt_text_hash: stableEvidenceHash(promptTexts),
+    prompt_text_row_count: rows.length,
+    prompt_text_nonempty_row_count: promptTexts.length - promptTextMissingRows.length,
+    prompt_text_present: !promptTextMissing,
+    prompt_text_missing: promptTextMissing,
+    prompt_text_missing_rows: promptTextMissingRows,
+    prompt_text_source_policy: "accepted_facts_story_fact_frame_scene_duration_rule_tags_only_marker_check",
+    prompt_text_boundary_method: "marker_absence_check; runtime source-lineage proof still requires live trace review",
+    prompt_text_forbidden_source_hits: promptTextForbiddenSourceHits,
+    ...absentChecks,
+    prompt_text_boundary_passed: !promptTextMissing && promptTextForbiddenSourceHits.length === 0,
+  };
+}
+
+function compactPromptTextBoundaryFailures(evidence) {
+  const failures = [];
+  if (evidence.prompt_text_missing) {
+    failures.push("prompt_text_missing");
+  }
+  for (const hit of asArray(evidence.prompt_text_forbidden_source_hits)) {
+    failures.push(`prompt_text_forbidden_source:${hit}`);
+  }
+  return failures;
+}
+
+function compactAcceptedSnapshotEvidence(value) {
+  const bindingEvidence = compactBindingEvidence(value?.generateTrace?.binding_evidence ?? value?.bindingEvidence);
+  return bindingEvidence
+    ? {
+        current_case_id: bindingEvidence.current_case_id ?? "",
+        accepted_snapshot_hash: bindingEvidence.accepted_rewrite_hash ?? "",
+        accepted_rewrite_hash: bindingEvidence.accepted_rewrite_hash ?? "",
+        task_script_hash: bindingEvidence.task_script_hash ?? "",
+        story_fact_frame_hash: bindingEvidence.story_fact_frame_hash ?? "",
+        source_text_hash: bindingEvidence.source_text_hash ?? "",
+        duration_plan_hash: bindingEvidence.duration_plan_hash ?? "",
+        evidence_source: "generateTrace.binding_evidence",
+      }
+    : {
+        current_case_id: "",
+        accepted_snapshot_hash: "",
+        accepted_rewrite_hash: "",
+        task_script_hash: "",
+        story_fact_frame_hash: "",
+        source_text_hash: "",
+        duration_plan_hash: "",
+        evidence_source: "missing",
+      };
+}
+
+function compactStoryFactFrameEvidence(value) {
+  const bindingEvidence = compactBindingEvidence(value?.generateTrace?.binding_evidence ?? value?.bindingEvidence);
+  return bindingEvidence
+    ? {
+        present: true,
+        current_case_id: bindingEvidence.current_case_id ?? "",
+        source_text_hash: bindingEvidence.source_text_hash ?? "",
+        story_fact_frame_hash: bindingEvidence.story_fact_frame_hash ?? "",
+        source_profile: bindingEvidence.source_profile ?? "",
+        scene_type: bindingEvidence.scene_type ?? "",
+        duration_seconds: bindingEvidence.duration_seconds ?? null,
+        duration_plan_hash: bindingEvidence.duration_plan_hash ?? "",
+        storyboard_rows_hash: bindingEvidence.storyboard_rows_hash ?? "",
+        must_keep_facts_present: Array.isArray(bindingEvidence.must_keep_facts),
+        must_keep_facts_count: asArray(bindingEvidence.must_keep_facts).length,
+        missing_source_facts: asArray(bindingEvidence.missing_source_facts),
+        forbidden_facts_present: Array.isArray(bindingEvidence.forbidden_facts),
+        forbidden_facts_count: asArray(bindingEvidence.forbidden_facts).length,
+        forbidden_fact_hits: asArray(bindingEvidence.forbidden_fact_hits),
+        stale_binding_detected: bindingEvidence.stale_binding_detected === false ? false : Boolean(bindingEvidence.stale_binding_detected),
+        kb_rule_pack_ids_present: Array.isArray(bindingEvidence.kb_rule_pack_ids),
+        kb_rule_pack_ids: asArray(bindingEvidence.kb_rule_pack_ids),
+        kb_snapshot_hash: bindingEvidence.kb_snapshot_hash ?? "",
+      }
+    : { present: false };
+}
+
+function compactScriptGoalEvidence(value) {
+  const selected = value?.selectedScriptCommand ?? {};
+  const goal = value?.scriptGoal ?? selected.script_goal ?? input.scriptGoal;
+  const expectedTraceCommand = selected.trace_command ?? "expand_script";
+  const observedExpandTraceCommand = value?.expandTrace?.command ?? "";
+  const observedGenerateTraceCommand = value?.generateTrace?.command ?? "";
+  const observedAppScriptGoal = value?.expandTrace?.script_goal ?? "";
+  const observedAppCommandPath = value?.expandTrace?.command_path ?? "";
+  return {
+    script_goal: goal,
+    selected_command_path: selected.command_path ?? "",
+    selected_ui_control: selected.selected_ui_control ?? "",
+    selected_ui_selector: selected.selector ?? "",
+    runner_selected_command_path: selected.command_path ?? "",
+    runner_selected_ui_control: selected.selected_ui_control ?? "",
+    runner_selected_ui_selector: selected.selector ?? "",
+    selected_ui_text: selected.selected_ui_text ?? value?.expandButtonText ?? "",
+    evidence_source: "runner_selected_ui_control",
+    expected_trace_command: expectedTraceCommand,
+    observed_expand_trace_command: observedExpandTraceCommand,
+    observed_generate_trace_command: observedGenerateTraceCommand,
+    observed_app_script_goal: observedAppScriptGoal,
+    observed_app_command_path: observedAppCommandPath,
+    observed_app_ui_control_label: value?.expandTrace?.ui_control_label ?? "",
+    observed_trace_matches_expected:
+      observedExpandTraceCommand === expectedTraceCommand &&
+      observedGenerateTraceCommand === "generate_storyboard" &&
+      observedAppScriptGoal === goal &&
+      observedAppCommandPath === (selected.command_path ?? ""),
+    selected_command_path_matches_goal:
+      goal === "rewrite"
+        ? (selected.command_path ?? "").endsWith("handleExpandScript")
+        : (selected.command_path ?? "").endsWith("handleExpandStory"),
+  };
+}
+
+function compactScriptGoalFailures(evidence) {
+  const failures = [];
+  if (!evidence.selected_command_path_matches_goal) {
+    failures.push("selected_command_path_mismatch");
+  }
+  if (!evidence.observed_trace_matches_expected) {
+    failures.push("observed_script_goal_trace_mismatch");
+  }
+  if (evidence.observed_app_script_goal !== evidence.script_goal) {
+    failures.push("observed_app_script_goal_mismatch");
+  }
+  if (evidence.observed_app_command_path !== evidence.selected_command_path) {
+    failures.push("observed_app_command_path_mismatch");
+  }
+  return failures;
+}
+
+function compactAcceptedSnapshotFailures(evidence) {
+  const requiredFields = [
+    "current_case_id",
+    "accepted_snapshot_hash",
+    "accepted_rewrite_hash",
+    "task_script_hash",
+    "story_fact_frame_hash",
+    "source_text_hash",
+    "duration_plan_hash",
+  ];
+  return requiredFields
+    .filter((field) => !String(evidence?.[field] ?? "").trim())
+    .map((field) => `accepted_snapshot_missing:${field}`);
+}
+
+function compactStoryFactFrameFailures(evidence) {
+  if (!evidence?.present) {
+    return ["story_fact_frame_evidence_missing"];
+  }
+  const failures = [];
+  for (const field of [
+    "current_case_id",
+    "source_text_hash",
+    "story_fact_frame_hash",
+    "source_profile",
+    "scene_type",
+    "duration_plan_hash",
+    "storyboard_rows_hash",
+    "kb_snapshot_hash",
+  ]) {
+    if (!String(evidence[field] ?? "").trim()) {
+      failures.push(`story_fact_frame_missing:${field}`);
+    }
+  }
+  if (!Number.isFinite(Number(evidence.duration_seconds)) || Number(evidence.duration_seconds) <= 0) {
+    failures.push("story_fact_frame_missing:duration_seconds");
+  }
+  if (!evidence.must_keep_facts_present) {
+    failures.push("story_fact_frame_missing:must_keep_facts");
+  }
+  if (!evidence.forbidden_facts_present) {
+    failures.push("story_fact_frame_missing:forbidden_facts");
+  }
+  if (!evidence.kb_rule_pack_ids_present) {
+    failures.push("story_fact_frame_missing:kb_rule_pack_ids");
+  }
+  if (evidence.stale_binding_detected !== false) {
+    failures.push("stale_binding_detected");
+  }
+  if (asArray(evidence.missing_source_facts).length) {
+    failures.push("missing_source_facts");
+  }
+  if (asArray(evidence.forbidden_fact_hits).length) {
+    failures.push("forbidden_fact_hits");
+  }
+  return failures;
+}
+
+function compactFallbackGateFailures(evidence) {
+  const failures = [];
+  if (!evidence.no_http_403) {
+    failures.push("http_403_detected");
+  }
+  if (!evidence.no_live_fallback) {
+    failures.push("live_fallback_detected");
+  }
+  if (!evidence.no_validator_pseudo_success) {
+    failures.push("validator_pseudo_success_risk");
+  }
+  return failures;
+}
+
+function compactFallbackGateEvidence(value, validatorGateEvidence, promptTextBoundaryEvidence) {
+  const traces = [value?.expandTrace, value?.generateTrace].filter(Boolean);
+  const warningText = traces
+    .flatMap((trace) => [
+      trace?.fallback_reason,
+      trace?.validator_reason,
+      ...asArray(trace?.warning_codes),
+      ...asArray(trace?.warnings).map((warning) => `${warning?.code ?? ""} ${warning?.message ?? ""}`),
+    ])
+    .join("\n");
+  const rowDiffs = asArray(validatorGateEvidence.row_diffs);
+  return {
+    no_http_403: !/(^|\D)403(\D|$)|http_403|forbidden/i.test(warningText),
+    no_live_fallback: !/fallback/i.test(warningText),
+    no_validator_pseudo_success:
+      validatorGateEvidence.validator_gate_present === true &&
+      validatorGateEvidence.validator_gate_passed === true &&
+      validatorGateEvidence.rows_match === true &&
+      rowDiffs.length === 0 &&
+      promptTextBoundaryEvidence.prompt_text_boundary_passed === true,
+    rows_match: validatorGateEvidence.rows_match === true,
+    row_diffs: rowDiffs,
+    validator_gate_present: validatorGateEvidence.validator_gate_present,
+    validator_gate_passed: validatorGateEvidence.validator_gate_passed,
+    validator_gate_failures: validatorGateEvidence.validator_gate_failures,
+  };
+}
+
 const cdp = await connectCdp();
 try {
   await cdp.send("Runtime.enable");
@@ -522,21 +843,49 @@ try {
   }
   const value = evaluation.result.value;
   const validatorGateEvidence = compactValidatorGateEvidence(value);
+  const scriptGoalEvidence = compactScriptGoalEvidence(value);
+  const acceptedSnapshotEvidence = compactAcceptedSnapshotEvidence(value);
+  const storyFactFrameEvidence = compactStoryFactFrameEvidence(value);
+  const promptTextBoundaryEvidence = compactPromptTextBoundaryEvidence(value);
+  const promptTextBoundaryFailures = compactPromptTextBoundaryFailures(promptTextBoundaryEvidence);
+  const fallbackGateEvidence = compactFallbackGateEvidence(value, validatorGateEvidence, promptTextBoundaryEvidence);
+  const assertGateFailures = [
+    ...compactScriptGoalFailures(scriptGoalEvidence),
+    ...compactAcceptedSnapshotFailures(acceptedSnapshotEvidence),
+    ...compactStoryFactFrameFailures(storyFactFrameEvidence),
+    ...promptTextBoundaryFailures,
+    ...compactFallbackGateFailures(fallbackGateEvidence),
+  ];
+  const runnerAssertFailures = input.assertBinding ? Array.from(new Set(assertGateFailures)) : [];
+  const resultOk = runnerAssertFailures.length ? false : value?.ok;
+  const resultStage = runnerAssertFailures.length ? "prompt_text_boundary" : value?.stage;
   const payload = args.compact
     ? {
         cdp_target: { id: cdp.target.id, url: cdp.target.url, title: cdp.target.title },
         result: {
-          ok: value?.ok,
-          stage: value?.stage,
+          ok: resultOk,
+          stage: resultStage,
           warningCodes: value?.warningCodes,
-          bindingFailures: value?.bindingFailures,
+          bindingFailures: [...asArray(value?.bindingFailures), ...runnerAssertFailures],
+          runner_assert_failures: runnerAssertFailures,
           bindingEvidence: value?.bindingEvidence,
           caseId: value?.caseId,
+          script_goal: scriptGoalEvidence.script_goal,
+          selected_command: value?.selectedScriptCommand,
+          script_goal_evidence: scriptGoalEvidence,
           expectedProvider: value?.expectedProvider,
           expectedModel: value?.expectedModel,
           allowedModels: value?.allowedModels,
           modelPriority: value?.modelPriority,
           validator_gate_evidence: validatorGateEvidence,
+          accepted_snapshot_evidence: acceptedSnapshotEvidence,
+          story_fact_frame_binding_evidence: storyFactFrameEvidence,
+          prompt_text_boundary_evidence: promptTextBoundaryEvidence,
+          prompt_text_boundary_failures: promptTextBoundaryFailures,
+          fallback_gate_evidence: fallbackGateEvidence,
+          no_http_403: fallbackGateEvidence.no_http_403,
+          no_live_fallback: fallbackGateEvidence.no_live_fallback,
+          no_validator_pseudo_success: fallbackGateEvidence.no_validator_pseudo_success,
           sceneSelection: value?.sceneSelection,
           durationSelection: value?.durationSelection,
           providerStatus: value?.providerStatus,
@@ -582,6 +931,9 @@ try {
       }
     : { cdp_target: { id: cdp.target.id, url: cdp.target.url, title: cdp.target.title }, result: value };
   console.log(JSON.stringify(payload, null, 2));
+  if (runnerAssertFailures.length) {
+    process.exitCode = 1;
+  }
 } finally {
   cdp.ws.close();
 }
