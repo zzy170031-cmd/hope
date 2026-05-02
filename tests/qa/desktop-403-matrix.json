@@ -35,6 +35,11 @@
   ],
   "entry_gate": [
     "four_group_qwen_trace_passed",
+    "qwen_max_expected_model_confirmed",
+    "desktop_16_case_matrix_manifest_reviewed",
+    "desktop_16_case_expand_8_case_passed",
+    "desktop_16_case_rewrite_8_case_harness_unblocked",
+    "desktop_16_case_full_16_case_passed",
     "provider_live_ready_true",
     "response_rows_match_ui_rows",
     "webview2_cdp_stable",

@@ -5,6 +5,17 @@
     "provider": "qwen",
     "expected_model": "qwen-max"
   },
+  "gate_scope": {
+    "phase": "P2-P4 cross-drift carrier before 403-case",
+    "script_goal": "expand",
+    "runner_requirement": "--expected-provider qwen --expected-model qwen-max",
+    "supports_16_case_manifest": "tests/qa/desktop-16-case-matrix.json",
+    "not_403_case_execution": true
+  },
+  "prompt_text_boundary": {
+    "allowed_sources": ["accepted facts", "StoryFactFrame", "scene_type", "duration", "rule tags"],
+    "forbidden_sources": ["sample_text", "smoke_extracts", "raw KB rows", "raw prompt body", "source_register", "overlay JSON"]
+  },
   "gates": [
     "no_http_403",
     "no_text_model_network_error",

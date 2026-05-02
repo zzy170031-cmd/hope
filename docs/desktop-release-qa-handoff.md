@@ -65,6 +65,9 @@ Non-secret Qwen model rule:
 - Qwen API model candidate order is `qwen-max -> qvq-max-2025-03-25 -> qwen-math-turbo`.
 - `qwen-plus` is retained only as a historical compatibility model, not the
   current default gate.
+- `qwen-plus` may still appear in app/UI/script compatibility allowlists. A
+  run that starts or expects `qwen-plus` is non-gate even if the local provider
+  status matches it.
 - Every QA run must explicitly confirm the active model in both the release
   shell startup command and the runner `--expected-model` argument.
 - Do not silently switch models inside the UI-driven trace.
@@ -125,6 +128,14 @@ Each case must:
 
 Required trace checks:
 
+- provider is `qwen`
+- expected model is `qwen-max`
+- runner passes `--expected-provider qwen --expected-model qwen-max`
+- `/json/list` target count is recorded
+- target URL/title is recorded
+- release shell PID is recorded
+- runner execution is recorded
+- trace generation is recorded
 - response rows hash equals UI rows hash
 - `rows_match=true`
 - `row_diffs=[]`
@@ -132,6 +143,49 @@ Required trace checks:
 - no `model_config_disabled`
 - no `text_model_live_call_closed`
 - provider is live-ready
+
+## 16-Case Pre-403 Gate
+
+The 16-case manifest is stored in:
+
+```text
+tests/qa/desktop-16-case-matrix.json
+```
+
+This is a P1-P4 pre-403 gate, not 403-case execution. It uses the four-group
+manifest as the business carrier and varies:
+
+- script goal: `rewrite` / `expand`
+- scene: same / different
+- duration: same / different
+- source text: same / different
+
+Current executable state:
+
+- `expand` cases are executable now through `scripts/hope-ui-driven-trace-runner.mjs`
+  with `--expected-provider qwen --expected-model qwen-max`, but execution alone
+  is not a full gate pass unless the required sanitized evidence fields are
+  present.
+- `rewrite` cases are the degraded 8-case half until the runner supports an
+  explicit `script_goal=rewrite|expand` selector, command-path evidence, and
+  accepted snapshot assertions for rewrite-mode behavior.
+- Do not describe the degraded 8-case state as a completed 16-case pass.
+- A degraded 8-case record may continue P1-P4 preparation only. It is not
+  403-case entry, packaging readiness, or release readiness.
+
+Every case must verify the storyboard task, storyboard `prompt_text`,
+`scene_type`, `duration_seconds`, accepted snapshot, StoryFactFrame, forbidden
+drift fields, and prompt boundary. `prompt_text` may use accepted facts,
+StoryFactFrame, scene/duration, and rule tags only. It must not include
+`sample_text`, `smoke_extracts`, raw KB rows, raw prompt body,
+`source_register`, or overlay JSON.
+
+Prompt boundary evidence must be sanitized and must not expose raw prompt
+bodies. Required fields are: `prompt_text_hash`, `prompt_text_source_policy`,
+`prompt_text_forbidden_source_hits`, `prompt_text_raw_body_absent`,
+`sample_text_absent`, `smoke_extracts_absent`, `raw_kb_rows_absent`,
+`source_register_absent`, and `overlay_json_absent`. The compact runner summary
+is not sufficient by itself for this gate unless these fields are present.
 
 ## Scene-Type Rewrite Gate
 
@@ -186,7 +240,9 @@ C:\Users\Administrator\Desktop\九州剧本文字版2.docx
 ```
 
 Do not run the 403-case matrix until the four-group trace gate, scene-type
-rewrite gate, and cross rewrite drift smoke gate pass.
+rewrite gate, full 16-case pre-403 gate, and cross rewrite drift smoke gate
+pass. A documented degraded 8-case record does not authorize 403-case entry
+unless a separate controller dispatch explicitly opens that reduced 403 gate.
 
 ## Story Fact Frame Binding Gate
 
@@ -251,6 +307,8 @@ Do not start packaging until:
 
 - four-group qwen trace passes
 - 403-case matrix passes or the controller explicitly accepts a reduced gate
+- any reduced gate is explicitly scoped by the controller and is not inferred
+  from a degraded 16-case preparation record
 - dirty ownership is resolved
 - non-secret automation and resources are pushed
 - release rebuild is repeatable

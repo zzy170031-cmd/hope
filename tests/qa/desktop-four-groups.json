@@ -1,7 +1,24 @@
 {
-  "name": "Hope desktop four-group qwen trace gate",
+  "name": "Hope desktop four-group qwen-max trace gate",
   "provider": "qwen",
-  "model": "qwen-plus",
+  "model": "qwen-max",
+  "model_contract": {
+    "provider": "qwen",
+    "expected_model": "qwen-max",
+    "runner_requirement": "--expected-provider qwen --expected-model qwen-max",
+    "deprecated_models": [
+      {
+        "model": "qwen-plus",
+        "status": "historical_compatibility_only",
+        "gate_eligible": false
+      }
+    ]
+  },
+  "gate_scope": {
+    "phase": "P1 four-group carrier before P2-P4 and 403-case",
+    "carries_manifest": "tests/qa/desktop-16-case-matrix.json",
+    "not_403_case_execution": true
+  },
   "duration_seconds": 15,
   "requires_real_release_webview2": true,
   "requires_one_shell_per_case": true,
