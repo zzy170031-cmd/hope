@@ -14,6 +14,38 @@ global constitution changes, sync this file as a docs-only change.
 - Hope / Codex coordination defaults to Chinese. Code identifiers, commit
   messages, commands, and raw error text may stay in English.
 
+## Controller Thread Constitution Sync
+
+This repo inherits the thin controller-thread constitution in
+`E:\codex\AGENTS.md`. Project-local rules in this file still override the global
+file for Hope desktop routing, thread naming, gate, and desktop-shell cleanup
+details.
+
+- A Hope desktop controller coordinates, dispatches, accepts evidence, blocks
+  unsafe progress, and carries state forward; it is not the default worker for
+  implementation, verification, desktop shell, CDP, runner, package, commit, or
+  push.
+- Precedence is: newest user message > this project-local rule file > global
+  `E:\codex\AGENTS.md` > shared policy references.
+- New controller threads must begin from live repo state: thread label, branch /
+  HEAD, origin alignment, `git status`, dirty ownership, current gate, latest
+  accepted conclusion, current blocker, and next authorized action.
+- Before acting, a controller must check the latest message, current anchor
+  commit, and live repository state; recaps and handoffs are not execution
+  evidence.
+- After any dispatch, report, recap, or key-node update, jump to the latest
+  message before continuing and verify that no newer instruction supersedes the
+  current task.
+- Evidence-complete reports with a minor wrapper mistake may be accepted when
+  the node is otherwise closed and the boundary is clear; missing execution,
+  cleanup, or dirty-ownership evidence still requires a corrected report.
+- Reports that claim execution, tests, environment setup, validation, trace, or
+  cleanup must include exact commands, key stdout/stderr summary, relevant
+  artifact path or trace fields, before/after `git status`, and cleanup status
+  when applicable.
+- These rules do not authorize `/goal`, desktop shell, CDP, runners, full16,
+  403-case, package, commit, or push without explicit dispatch authorization.
+
 ## Thread Handoff Rule
 
 When the user says the thread is near its context/background limit, at or above
@@ -32,13 +64,17 @@ Handoff mode:
 
 ## Copy-Ready Communication Rule
 
-Cross-thread instructions, controller recaps, worker reports, handoff packets,
-acceptance checklists, and archive packets should be directly pasteable.
+Cross-thread instructions, worker reports, handoff packets, acceptance
+checklists, and archive packets should be directly pasteable. Controller recaps
+should be directly readable ordinary prose.
 
 Rules:
 
-- Use a fenced `text` block by default.
-- Keep prose outside the block to one short sentence when possible.
+- Use fenced `text` blocks by default for dispatches, reports, handoffs,
+  acceptance checklists, and archive packets.
+- Controller recaps must be ordinary prose, not fenced `text` blocks.
+- When a controller both recaps and dispatches, put the plain-language recap
+  first, then a separate standalone fenced `text` dispatch block.
 - Commands must be listed one per line.
 - Forbidden items must be explicit under `Forbidden:` or an equivalent section.
 - If instructions conflict with live Git, live file state, or live process
@@ -55,6 +91,9 @@ Controller-to-worker instruction blocks must start with:
 沿用线程：对应线程---><继续使用的现有线程；没有则写 无>
 更名线程：更名线程---><执行后应显示的线程名；不改名则写 不更名>
 替代线程：<被替代或退休的旧线程；没有则写 无>
+线程名：<status-prefixed workstream thread name>
+模型建议：<model tier and reasoning level>
+关键节点提醒：请立即刷新线程标签、锚点提交、工作树状态和边界说明。
 ```
 
 Worker-to-controller reports must start with:
@@ -65,17 +104,17 @@ Worker-to-controller reports must start with:
 来源线程：<reporting worker thread>
 ```
 
-Controller recaps use:
-
-```text
-总控复盘：
-...
-```
+Controller recaps must be ordinary prose, not fenced `text` blocks. They should
+state which report was reviewed, what was accepted, rejected, or blocked, why
+the next step is being dispatched, and any remaining risk.
 
 Rules:
 
 - `线程动作` is mandatory and must be one of `新开`, `沿用`, `重启`, `待命`,
   `结束`, or `归档`.
+- Every dispatch must include `模型建议：`.
+- Dispatches and reports that mark a key node must include
+  `关键节点提醒：请立即刷新线程标签、锚点提交、工作树状态和边界说明。`.
 - Put the thread that needs renaming first on `指令发给`.
 - Put the action relationship on `沿用线程`.
 - Put the post-action visible name on `更名线程`.
@@ -97,6 +136,68 @@ Rules:
   the `（结束）` prefix.
 - `归档`: send to the current thread; `沿用线程` names it; `更名线程` should carry
   the `（归档）` prefix.
+
+## Stale Evidence and Runtime State Rule
+
+Hope desktop gate decisions must use evidence from the current code path,
+current runtime, and current generated artifacts. After any change to runtime
+code, release-shell scripts, diagnostic scripts, validator logic, or packaging
+inputs, old binaries, old QA artifacts, old diagnostic logs, old WebView2
+profiles, old CDP ports, and old process state are stale unless the report
+proves they were produced by the new code.
+
+- A report must not use stale artifacts, stale logs, stale profiles, stale
+  binaries, or stale process state as current pass/fail evidence.
+- If `app/src/main.rs`, `app/src/runtime.rs`, release-shell code, or packaging
+  inputs changed, the next release-shell or WebView2 report must prove the new
+  build/runtime was used before claiming the fix passed or failed.
+- Historical QA artifacts may remain for comparison only when labeled
+  `reference-only` or `stale`; they must not be used as fresh gate evidence.
+- After a report or key node, cleanup must stop or isolate generated/runtime
+  state that can affect the next run: Hope shell processes, WebView2/CDP
+  processes, port `9224`, temporary WebView2 profiles, per-run diagnostic logs,
+  and generated QA artifacts.
+- Cleanup must not remove or modify source/tracked files, docs, tests, secrets,
+  env files, or user-owned work unless a controller dispatch explicitly
+  authorizes that exact cleanup.
+- If stale generated/runtime state cannot be safely cleaned, the report must
+  mark it as a blocker or risk and state exactly what the next thread must
+  ignore.
+
+## Repeated Issue Closed-Loop and Bounded Goal Rule
+
+When the same Hope desktop issue or the same failure class repeats, controller
+dispatches should stop the ordinary one-fix-one-report cycle and move the work
+into a closed loop.
+
+- First occurrence: a normal bounded implementation, QA, environment, or docs
+  thread may diagnose, repair, validate, and report.
+- Second occurrence of the same issue, or a clear sibling variant of the same
+  root cause: the controller should upgrade the thread to
+  `five-agent-closed-loop-governance`. The thread should continue repair,
+  validation, five-agent review, Core Challenger review, and Audit Specialist
+  review when evidence is involved until the issue closes or a blocker appears.
+- Third occurrence of the same issue or same failure class: the controller
+  should default to authorizing bounded `/goal` repair when the dispatch can
+  state allowed files, forbidden files, validation commands, forbidden actions,
+  and stop conditions clearly.
+- If the second occurrence already proves the same underlying contract gap, the
+  controller may authorize bounded `/goal` immediately instead of waiting for a
+  third occurrence.
+- Bounded `/goal` is a repair executor, not a permission expansion. It must stay
+  inside the dispatch's allowed files, commands, gates, and stop conditions.
+- Bounded `/goal` should keep repairing and re-running validation until one of
+  these stop states is reached: all specified validation passes and review
+  accepts; fresh QA or the next gate is ready; a blocker appears; scope conflict
+  appears; the environment blocks progress; a forbidden action would be needed;
+  or a newer user/controller instruction supersedes the task.
+- For Hope desktop validator, provider, runner, release-shell, CDP, UI trace,
+  dirty ownership, artifact, package, or gate-adjacent work, Audit Specialist
+  review is required after each `/goal` repair cycle before success can be
+  reported.
+- Bounded `/goal` must not weaken validators, hide warnings, accept fallback-only
+  output, enter live3, full16, 403-case, package, commit, push, or decide release
+  readiness unless that exact action is explicitly authorized.
 
 ## Thread Naming Rule
 
