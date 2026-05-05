@@ -68,13 +68,32 @@ const QA_MODEL_ARG: &str = "--hope-qa-model=";
 const QA_MODEL_ENABLED_ARG: &str = "--hope-qa-model-enabled=";
 const QA_PID_FILE_ARG: &str = "--hope-qa-pid-file=";
 const QA_PROVIDER_ARG: &str = "--hope-qa-provider=";
+const QA_SHUTDOWN_SIGNAL_FILE_ARG: &str = "--hope-qa-shutdown-signal-file=";
 const QA_WEBVIEW2_USER_DATA_ARG: &str = "--hope-qa-webview2-user-data-folder=";
-const WEBVIEW2_DEFAULT_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,\
-msSmartScreenProtection --noerrdialogs --disable-crash-reporter --disable-breakpad";
+const QA_DIAGNOSTIC_LOG_PATH_ENV: &str = "HOPE_SHELL_DIAGNOSTIC_LOG_PATH";
+const QA_LAUNCH_ID_ENV: &str = "HOPE_QA_LAUNCH_ID";
+const QA_SHUTDOWN_SIGNAL_FILE_ENV: &str = "HOPE_QA_SHUTDOWN_SIGNAL_FILE";
+const QA_SHUTDOWN_POLL_INTERVAL_MS: u64 = 200;
+const WEBVIEW2_QA_BROWSER_ARGS_POLICY: &str = "hardened-no-popup-suppression";
+const WEBVIEW2_QA_HARDENED_BROWSER_ARGS: &str =
+    "--no-first-run --no-default-browser-check --disable-background-networking \
+--disable-component-update --disable-domain-reliability --disable-sync \
+--disable-gpu --disable-gpu-compositing --disable-client-side-phishing-detection \
+--disable-component-extensions-with-background-pages --metrics-recording-only \
+--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,OptimizationHints,\
+AutofillServerCommunication,CertificateTransparencyComponentUpdater";
 
 fn main() {
     install_shell_diagnostic_panic_hook();
-    append_shell_diagnostic("process_start");
+    append_shell_diagnostic(&format!(
+        "process_start pid={} launch_id={}",
+        process::id(),
+        current_qa_launch_id()
+    ));
+    append_shell_diagnostic(&format!(
+        "diagnostic_log_path={}",
+        sanitize_diagnostic_value(&current_shell_diagnostic_log_path().display().to_string())
+    ));
     let args = std::env::args().collect::<Vec<_>>();
     if args.iter().any(|arg| arg == "--contracts") {
         print_contract_smoke();
@@ -104,6 +123,7 @@ fn configure_qa_webview2_from_args(args: &[String]) {
         .find_map(|arg| arg.strip_prefix(QA_LAUNCH_ID_ARG))
         .filter(|value| !value.trim().is_empty())
     {
+        set_process_env_var(QA_LAUNCH_ID_ENV, launch_id);
         append_shell_diagnostic(&format!("launch_id={launch_id}"));
     }
 
@@ -157,7 +177,7 @@ fn configure_qa_webview2_from_args(args: &[String]) {
     {
         set_process_env_var(
             "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-            &format!("{WEBVIEW2_DEFAULT_BROWSER_ARGS} --remote-debugging-port={port}"),
+            &qa_webview2_browser_args(port),
         );
     }
 
@@ -176,6 +196,34 @@ fn configure_qa_webview2_from_args(args: &[String]) {
     {
         let _ = fs::write(pid_file, process::id().to_string());
     }
+
+    if let Some(shutdown_signal_file) = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix(QA_SHUTDOWN_SIGNAL_FILE_ARG))
+        .filter(|value| !value.trim().is_empty())
+    {
+        set_process_env_var(QA_SHUTDOWN_SIGNAL_FILE_ENV, shutdown_signal_file);
+    }
+
+    append_shell_diagnostic(&format!(
+        "webview2_additional_browser_args={}",
+        std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| sanitize_diagnostic_value(&value))
+            .unwrap_or_else(|| "<unset>".to_string())
+    ));
+    append_shell_diagnostic(&format!(
+        "webview2_browser_args_policy={WEBVIEW2_QA_BROWSER_ARGS_POLICY}"
+    ));
+    append_shell_diagnostic(&format!(
+        "webview2_user_data_folder={}",
+        std::env::var("WEBVIEW2_USER_DATA_FOLDER")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| sanitize_diagnostic_value(&value))
+            .unwrap_or_else(|| "<unset>".to_string())
+    ));
 }
 
 fn apply_qa_env_file(path: &str) {
@@ -212,6 +260,10 @@ fn is_valid_tcp_port(value: &str) -> bool {
     value.parse::<u16>().is_ok_and(|port| port > 0)
 }
 
+fn qa_webview2_browser_args(port: &str) -> String {
+    format!("{WEBVIEW2_QA_HARDENED_BROWSER_ARGS} --remote-debugging-port={port}")
+}
+
 fn parse_qa_bool(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Some(true),
@@ -237,7 +289,11 @@ fn print_contract_smoke() {
 }
 
 fn run_native_host() {
-    append_shell_diagnostic("before_builder_run");
+    append_shell_diagnostic(&format!(
+        "before_builder_run pid={} launch_id={}",
+        process::id(),
+        current_qa_launch_id()
+    ));
     let run_result = tauri::Builder::default()
         .setup(|app| {
             append_shell_diagnostic("setup_enter");
@@ -245,12 +301,37 @@ fn run_native_host() {
                 .is_ok_and(|value| value.contains("--remote-debugging-port="));
             let has_webview2_user_data_folder = std::env::var("WEBVIEW2_USER_DATA_FOLDER")
                 .is_ok_and(|value| !value.trim().is_empty());
+            let has_webview2_popup_suppression_args =
+                std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_ok_and(|value| {
+                    value.contains("--noerrdialogs")
+                        || value.contains("--disable-breakpad")
+                        || value.contains("--disable-crash-reporter")
+                });
             append_shell_diagnostic(&format!(
                 "webview2_remote_debugging_arg_present={has_webview2_cdp_args}"
             ));
             append_shell_diagnostic(&format!(
                 "webview2_user_data_folder_present={has_webview2_user_data_folder}"
             ));
+            append_shell_diagnostic(&format!(
+                "webview2_popup_suppression_arg_present={has_webview2_popup_suppression_args}"
+            ));
+            if let Ok(value) = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
+                if !value.trim().is_empty() {
+                    append_shell_diagnostic(&format!(
+                        "webview2_additional_browser_args_runtime={}",
+                        sanitize_diagnostic_value(&value)
+                    ));
+                }
+            }
+            if let Ok(value) = std::env::var("WEBVIEW2_USER_DATA_FOLDER") {
+                if !value.trim().is_empty() {
+                    append_shell_diagnostic(&format!(
+                        "webview2_user_data_folder_runtime={}",
+                        sanitize_diagnostic_value(&value)
+                    ));
+                }
+            }
 
             let window = ensure_main_window(app).map_err(|error| {
                 append_shell_diagnostic(&format!(
@@ -259,11 +340,13 @@ fn run_native_host() {
                 ));
                 error
             })?;
+            install_qa_shutdown_signal_watcher(app.handle().clone());
             append_shell_diagnostic("main_window_found");
             append_shell_diagnostic("main_window=found");
             let _ = window.show();
             let _ = window.set_focus();
             append_shell_diagnostic("setup_exit");
+            install_post_setup_window_probes(app.handle().clone());
 
             Ok(())
         })
@@ -289,13 +372,98 @@ fn run_native_host() {
         ])
         .run(tauri::generate_context!());
 
-    if let Err(error) = run_result {
-        append_shell_diagnostic(&format!(
-            "builder_run_error={}",
-            sanitize_diagnostic_value(&error.to_string())
-        ));
-        panic!("failed to run Hope desktop native host: {error}");
+    match run_result {
+        Ok(()) => append_shell_diagnostic("builder_run_returned_ok"),
+        Err(error) => {
+            append_shell_diagnostic(&format!(
+                "builder_run_error={}",
+                sanitize_diagnostic_value(&error.to_string())
+            ));
+            panic!("failed to run Hope desktop native host: {error}");
+        }
     }
+}
+
+fn install_qa_shutdown_signal_watcher<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) {
+    let Some(shutdown_signal_file) = std::env::var(QA_SHUTDOWN_SIGNAL_FILE_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        append_shell_diagnostic("shutdown_signal_watcher=disabled");
+        return;
+    };
+
+    append_shell_diagnostic(&format!(
+        "shutdown_signal_watcher=armed path={}",
+        sanitize_diagnostic_value(&shutdown_signal_file)
+    ));
+    std::thread::spawn(move || {
+        let shutdown_signal_path = PathBuf::from(&shutdown_signal_file);
+        loop {
+            if shutdown_signal_path.exists() {
+                append_shell_diagnostic(&format!(
+                    "shutdown_signal_received path={}",
+                    sanitize_diagnostic_value(&shutdown_signal_file)
+                ));
+                let _ = fs::remove_file(&shutdown_signal_path);
+                app_handle.exit(0);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(
+                QA_SHUTDOWN_POLL_INTERVAL_MS,
+            ));
+        }
+    });
+}
+
+fn install_post_setup_window_probes<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) {
+    for delay_ms in [1_000_u64, 5_000_u64] {
+        let delayed_handle = app_handle.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            let probe_handle = delayed_handle.clone();
+            if let Err(error) = delayed_handle.run_on_main_thread(move || {
+                append_post_setup_window_probe(&probe_handle, delay_ms);
+            }) {
+                append_shell_diagnostic(&format!(
+                    "post_setup_window_probe_schedule_error delay_ms={} error={}",
+                    delay_ms,
+                    sanitize_diagnostic_value(&error.to_string())
+                ));
+            }
+        });
+    }
+}
+
+fn append_post_setup_window_probe<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+    delay_ms: u64,
+) {
+    let Some(window) = app_handle.get_webview_window("main") else {
+        append_shell_diagnostic(&format!(
+            "post_setup_window_probe delay_ms={} main_window_present=false launch_id={}",
+            delay_ms,
+            current_qa_launch_id()
+        ));
+        return;
+    };
+
+    append_shell_diagnostic(&format!(
+        "post_setup_window_probe delay_ms={} main_window_present=true visible={} focused={} title={} url={} launch_id={}",
+        delay_ms,
+        format_probe_result(window.is_visible()),
+        format_probe_result(window.is_focused()),
+        format_probe_result(window.title()),
+        format_probe_result(window.url().map(|url| url.to_string())),
+        current_qa_launch_id()
+    ));
+}
+
+fn format_probe_result<T: ToString>(result: tauri::Result<T>) -> String {
+    result
+        .map(|value| sanitize_diagnostic_value(&value.to_string()))
+        .unwrap_or_else(|error| format!("error:{}", sanitize_diagnostic_value(&error.to_string())))
 }
 
 fn ensure_main_window<R: tauri::Runtime>(app: &mut tauri::App<R>) -> tauri::Result<WebviewWindow<R>> {
@@ -362,11 +530,34 @@ fn sanitize_diagnostic_value(value: &str) -> String {
     sanitized
 }
 
+fn current_qa_launch_id() -> String {
+    std::env::var(QA_LAUNCH_ID_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn current_shell_diagnostic_log_path() -> PathBuf {
+    std::env::var(QA_DIAGNOSTIC_LOG_PATH_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("hope-shell-diagnostic.log"))
+}
+
 fn append_shell_diagnostic(line: &str) {
+    let path = current_shell_diagnostic_log_path();
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = fs::create_dir_all(parent);
+        }
+    }
     let Ok(mut file) = fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("hope-shell-diagnostic.log")
+        .open(path)
     else {
         return;
     };

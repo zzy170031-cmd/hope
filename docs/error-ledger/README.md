@@ -12,6 +12,11 @@
 - [项目进度查错文档 DOCX](project-progress-error-ledger.docx)
   <small>Project progress error ledger in DOCX</small>
 
+## 配套契约入口
+<small>Companion contract entry points</small>
+
+- [Shell / WebView2 / CDP 启动契约](../desktop-shell-webview2-cdp-startup-contract.md)
+  <small>Shell / WebView2 / CDP startup hard gate contract</small>
 ## 更新规则
 <small>Update rules</small>
 

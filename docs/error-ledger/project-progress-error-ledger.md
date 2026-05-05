@@ -119,8 +119,8 @@
 <small>`HOPE-PROV-002`: provider retry telemetry vs validator hard-fail confusion; closed because matrix stage naming and hard-fail taxonomy are now fixed.</small>
 - `HOPE-EVID-003`：raw compact evidence 字段不自含；关闭依据是 raw `provider_retry_evidence` 回填与 fresh raw telemetry 复证。
 <small>`HOPE-EVID-003`: raw compact evidence was not self-contained; closed by raw `provider_retry_evidence` backfill and fresh raw telemetry re-verification.</small>
-- `HOPE-SHELL-004`：WebView2 弹窗、child 未生成、zero target、devUrl target mismatch；关闭依据是 launch-diagnostic-only、target URL 与 StopOnly 规则已文档化。
-<small>`HOPE-SHELL-004`: WebView2 popup, missing child, zero target, and devUrl target mismatch; closed by documented launch-diagnostic-only, target URL, and StopOnly rules.</small>
+- `HOPE-SHELL-004`：WebView2 弹窗、child 未生成、zero target、devUrl target mismatch；Shell Gate 已在 anchor `1728d50d883d1d064d953cf3dfadb5ec3661ee62` 与 release exe hash `93EE526330896A0588027BFFCC4AE04F44DC4EF47748DC27B0324B814B990366` 上窄口径 stabilized；provider/live3/full16/403-case/package 仍未解锁。
+<small>`HOPE-SHELL-004`: WebView2 popup, missing child, zero target, and devUrl target mismatch; the Shell Gate is narrowly stabilized at anchor `1728d50d883d1d064d953cf3dfadb5ec3661ee62` with release exe hash `93EE526330896A0588027BFFCC4AE04F44DC4EF47748DC27B0324B814B990366`; provider/live3/full16/403-case/package remain locked.</small>
 - `HOPE-EVID-005`：stale artifact / stale binary / stale profile / stale env 污染 gate；关闭依据是 stale evidence 规则已经写入全局与项目规则。
 <small>`HOPE-EVID-005`: stale artifact, stale binary, stale profile, and stale env gate pollution; closed by global and project stale-evidence rules.</small>
 - `HOPE-BUILD-006`：direct cargo build 与 Tauri release-like provenance 混淆；关闭依据是 plain Cargo output 已被明确排除出 accepted release provenance。
@@ -153,6 +153,8 @@
 
 - `HOPE-SAMPLE-014`：21/27 样本集当前只能作为 QA/reference 材料，不能作为 runtime truth 或 formal import gate evidence。
 <small>`HOPE-SAMPLE-014`: the 21/27 sample sets can currently serve only as QA/reference material, not runtime truth or formal-import gate evidence.</small>
+- `HOPE-SHELL-004` 的 2026-05-04 `launch-diagnostic-minimal-noproxy-reproof.json` 与配套 `stoponly-final.json` 只可作为第 5 次复发的 comparison/reference-only；Shell Gate 当前依据是 anchor `1728d50d883d1d064d953cf3dfadb5ec3661ee62` 与 release exe hash `93EE526330896A0588027BFFCC4AE04F44DC4EF47748DC27B0324B814B990366`，不是旧 artifact。
+<small>The 2026-05-04 `launch-diagnostic-minimal-noproxy-reproof.json` and paired `stoponly-final.json` for `HOPE-SHELL-004` are comparison/reference-only for the fifth recurrence; the current Shell Gate basis is anchor `1728d50d883d1d064d953cf3dfadb5ec3661ee62` and release exe hash `93EE526330896A0588027BFFCC4AE04F44DC4EF47748DC27B0324B814B990366`, not the old artifact.</small>
 - `HOPE-CONTRACT-007` 的 pre-fix validator review 与 pre-fix provider artifact 只能作为参考背景，不能关闭当前 token/source grounding 项。
 <small>The pre-fix validator review and pre-fix provider artifacts for `HOPE-CONTRACT-007` are background only and cannot close the current token/source-grounding issue.</small>
 - proxy-blocked artifact、wrong-target shell artifact、plain Cargo build artifact 与旧 binary artifact 都只能作为 `reference-only` 或 `stale` 提醒。
@@ -284,12 +286,12 @@
 <small>Root-cause type: process-boundary failure</small>
 - 为什么当时没挡住：shell 诊断、provider 运行与 release provenance 没有被拆成独立检查点。
 <small>Why it escaped: Shell diagnostics, provider runs, and release provenance were not separated into independent checkpoints.</small>
-- 解决过程：先试图把 zero-target 与 wrong-target 一起归类成“壳层不稳定”，这条路无法指导下一步；随后把 zero-target 转到 `LaunchDiagnosticOnly`，把 wrong-target 归入 release provenance blocker，并要求每个 shell 生命周期以 `StopOnly` 结束。
-<small>Resolution: The first attempt grouped zero-target and wrong-target into a vague shell-instability bucket and did not guide the next action; the later step routed zero-target to `LaunchDiagnosticOnly`, wrong-target to release-provenance blocking, and enforced `StopOnly` at the end of each shell lifecycle.</small>
-- 修复验证证据：`E:\codex\hope-desktop-shell\docs\desktop-release-qa-handoff.md` 已写明 `LaunchDiagnosticOnly`、target URL 要求与 `StopOnly` cleanup。
-<small>Verification evidence: `E:\codex\hope-desktop-shell\docs\desktop-release-qa-handoff.md` documents `LaunchDiagnosticOnly`, target URL requirements, and `StopOnly` cleanup.</small>
-- 如何防范：以后每次 CDP 汇报都必须同时带 target count、target URL/title、PID、trace 状态与 cleanup 结果。
-<small>Prevention: Every future CDP report must include target count, target URL/title, PID, trace status, and cleanup result together.</small>
+- 解决过程：先试图把 zero-target 与 wrong-target 一起归类成“壳层不稳定”，这条路无法指导下一步；随后把 zero-target 转到 `LaunchDiagnosticOnly`，把 wrong-target 归入 release provenance blocker，并要求每个 shell 生命周期以 `StopOnly` 结束。第 5 次复发证明“仅有规则文字”不足以关单，因此本次新增 shell startup hard gate contract，把 `AppDefault + LaunchDiagnosticOnly`、`before_main_window_build`、`0x80000003` popup、`tauri.localhost` target 与 cleanup 全部升级成强制 gate。
+<small>Resolution: The first attempt grouped zero-target and wrong-target into a vague shell-instability bucket and did not guide the next action; the later step routed zero-target to `LaunchDiagnosticOnly`, wrong-target to release-provenance blocking, and enforced `StopOnly` at the end of each shell lifecycle. The fifth recurrence proved that text-only rules were insufficient for closure, so this cycle adds a shell-startup hard-gate contract covering `AppDefault + LaunchDiagnosticOnly`, `before_main_window_build`, `0x80000003` popup handling, the `tauri.localhost` target, and cleanup.</small>
+- 修复验证证据：`E:\codex\hope-desktop-shell\docs\desktop-release-qa-handoff.md` 与新增 `E:\codex\hope-desktop-shell\docs\desktop-shell-webview2-cdp-startup-contract.md` 已写明正式 shell gate、wrong-target blocker、host-window blocker 与 `StopOnly` cleanup；Shell Gate 已在 anchor `1728d50d883d1d064d953cf3dfadb5ec3661ee62`、release exe hash `93EE526330896A0588027BFFCC4AE04F44DC4EF47748DC27B0324B814B990366` 上窄口径 stabilized。该证据只关闭 shell startup / CDP target 启动层，不解锁 provider/live3/full16/403-case/package。
+<small>Verification evidence: `E:\codex\hope-desktop-shell\docs\desktop-release-qa-handoff.md` and the new `E:\codex\hope-desktop-shell\docs\desktop-shell-webview2-cdp-startup-contract.md` now define the formal shell gate, wrong-target blocker, host-window blocker, and `StopOnly` cleanup; the Shell Gate is narrowly stabilized at anchor `1728d50d883d1d064d953cf3dfadb5ec3661ee62` with release exe hash `93EE526330896A0588027BFFCC4AE04F44DC4EF47748DC27B0324B814B990366`. This evidence closes only the shell startup / CDP target startup layer and does not unlock provider/live3/full16/403-case/package.</small>
+- 如何防范：以后每次 CDP 汇报都必须同时带 target count、target URL/title、PID、trace 状态与 cleanup 结果；shell gate 不绿时一律禁止 provider / runner / live3 / pool / `full16` / `403-case` / package。
+<small>Prevention: Every future CDP report must include target count, target URL/title, PID, trace status, and cleanup result together; when the shell gate is not green, provider, runner, live3, pool, `full16`, `403-case`, and package work are all forbidden.</small>
 - Playbook · 第一检查项：先判断是 zero-target、wrong-target，还是 child-process absence，再决定是否进入 provider 讨论。
 <small>Playbook · First Check: Decide whether the issue is zero-target, wrong-target, or missing child process before touching provider discussion.</small>
 - Playbook · 必要证据：`/json/list` 摘要、PID、diagnostic log 摘要、StopOnly 结果。
@@ -302,8 +304,8 @@
 <small>Playbook · Forbidden Shortcut: Do not treat `127.0.0.1:5173` or popup-only observation as release-shell evidence.</small>
 - 禁止重复排查：在没有先分清 zero-target 与 wrong-target 前，不要重开 provider 根因。
 <small>Do not reopen: Do not reopen provider root-cause discussion before separating zero-target from wrong-target.</small>
-- 当前状态：closed
-<small>Status: closed</small>
+- 当前状态：shell-gate-stabilized
+<small>Status: shell-gate-stabilized</small>
 
 ### `HOPE-EVID-005`：stale artifact / stale binary / stale profile / stale env 污染 gate
 <small>`HOPE-EVID-005`: Stale artifact, stale binary, stale profile, and stale env polluted gate judgment</small>

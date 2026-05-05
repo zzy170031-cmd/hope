@@ -18,7 +18,7 @@ machine.
 Use the repo-local launcher from a checkout of `codex/desktop-shell`:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-hope-release-cdp.ps1 -Provider qwen -Model qwen-plus-2025-07-28 -NoProxy -QaProviderHardFail -StopExisting -StopOnCdpFailure -WaitSeconds 20
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-hope-release-cdp.ps1 -Provider qwen -Model qwen-plus-2025-07-28 -NoProxy -QaProviderHardFail -WebView2ArgumentMode AppDefault -StopExisting -StopOnCdpFailure -WaitSeconds 20
 ```
 
 Cleanup command:
@@ -27,6 +27,16 @@ Cleanup command:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-hope-release-cdp.ps1 -StopOnly
 ```
 
+WebView2 / CDP environment-only diagnostic command:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-hope-release-cdp.ps1 -LaunchDiagnosticOnly -WebView2ArgumentMode AppDefault -StopExisting -StopOnCdpFailure -WaitSeconds 20
+```
+
+This mode does not launch provider runner work. It is only for confirming how far
+the release shell and WebView2 startup progressed when `hope-app` starts but
+`cdp_ready=false` and `target_count=0`.
+
 The legacy local launcher path may still exist on the original machine:
 
 ```powershell
@@ -34,6 +44,103 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File E:\codex\tools\start-hop
 ```
 
 For new machines, prefer the repo-local launcher.
+
+## WebView2 Environment-Blocked Evidence
+
+When the release shell starts `hope-app` but no CDP target materializes, collect
+launch-only evidence before retrying provider or validator work:
+
+- the only formal shell startup gate is
+  `-LaunchDiagnosticOnly -WebView2ArgumentMode AppDefault`
+- `Minimal` and `FullDefault` are diagnostic comparison only and cannot unlock
+  provider, runner, live3, required pool, `full16`, `403-case`, or package
+- `AppDefault` uses the Hope-2 compatible hardened WebView2 browser arguments
+  plus the diagnostic CDP port, but it must not use `--noerrdialogs`,
+  `--disable-breakpad`, or `--disable-crash-reporter`; hiding a popup is not a
+  startup pass
+- if the diagnostic log stops at `before_main_window_build`, treat it as a
+  host-window build blocker
+- if a WebView2 popup shows `0x80000003`, route it to an environment thread,
+  not provider or validator diagnosis
+- if `target_url` resolves to `http://127.0.0.1:5173/`, treat it as a
+  devUrl/stale-build blocker, not shell success
+- use `-LaunchDiagnosticOnly` and do not pass provider / model / runner inputs
+- keep the per-launch diagnostic log under
+  `%TEMP%\hope-webview2-cdp\<launch_id>\hope-shell-diagnostic.log`
+- confirm launch anchors for the same launch:
+  `process_start`, `before_builder_run`, `setup_enter`,
+  `main_window=created_in_setup`, `setup_exit`, `builder_run_returned_ok` or
+  `builder_run_error`, and any `panic=...`
+- when the diagnostic reaches `setup_exit` but `target_count=0`, collect
+  post-setup liveness anchors such as
+  `post_setup_window_probe delay_ms=1000/5000 main_window_present=...`
+- every formal shell run must persist immutable per-run CDP artifacts under
+  `%TEMP%\hope-webview2-cdp\<launch_id>\`: `cdp-json-version-poll-*.json`,
+  `cdp-json-list-poll-*.json`, `post-setup-probe-poll-*.json`, and
+  `hope-launch-result.json`
+- every `StopOnly` cleanup must persist an immutable
+  `hope-stoponly-cleanup-result.json` artifact and report its
+  `cleanup_artifact_path`
+- `/json/list` acceptance must cite the saved artifact path, not only terminal
+  summary output
+- reviewer acceptance must come from saved JSON artifact paths such as
+  `cdp_json_list_latest_artifact_path`, `post_setup_probe_latest_artifact_path`,
+  and `result_artifact_path`; mutable fields like `last_targets` or console
+  summaries are context only
+- post-setup probes must record main-window presence, CDP port state, WebView2
+  process count, expected profile usage, diagnostic last line, and the
+  `target_materialization_stage`
+- confirm runtime-entry lines for
+  `webview2_additional_browser_args_runtime` and
+  `webview2_user_data_folder_runtime`
+- confirm process evidence for `webview2_hardened_args_seen=true`; confirm app
+  diagnostic evidence for `webview2_app_popup_suppression_arg_present=false`
+  and `webview2_popup_suppression_detected=false`
+- record `webview2_runtime_noerrdialogs_seen` / `webview2_noerrdialogs_seen`
+  separately when process inspection sees runtime-level flags; these fields are
+  risk context, not proof that the app or launcher hid a popup
+- record EBWebView profile stage evidence:
+  `Default`, `Local State`, `Last Version`, `Crashpad`,
+  `Edge-Local-State-Tmp*`, and lock-like entries
+- record fallback evidence that does not depend on `Win32_Process` command-line
+  access:
+  port listening state, pid file, hope-app process state, stdout/stderr tail,
+  profile stage evidence, and Application event-log summary
+- always finish with `StopOnly` and report whether cleanup reached:
+  `hope_app_remaining_pids=[]`, `webview2_remaining_pids=[]`,
+  `port_released=true`, `port_listening=false`, and `exe_unlocked=true`
+
+When this shell gate is blocked, do not start provider runner work, business
+QA, live3, required pool, `full16`, `403-case`, or packaging.
+
+## Release Build Provenance
+
+Do not treat a plain workspace build such as:
+
+```powershell
+cargo build -p hope-app --release
+```
+
+as accepted Hope release-shell provenance.
+
+For this repo, the accepted release-shell binary must come from the Tauri CLI /
+formal release build path that uses `app/tauri.conf.json`, runs
+`beforeBuildCommand`, and packages `frontendDist=../ui/dist` into the desktop
+binary. Inference from local build outputs:
+
+- the currently executed `hope-app.exe` must be shown as fresh enough for the
+  current code / build-input state
+- current-exe provenance may be proved with the rebuilt
+  `target\release\hope-app.exe` hash / mtime / size and the launched process
+  image path / hash / mtime / size matching that executable
+- accepted release-like Tauri build output reports `cargo:dev=false`
+- accepted release-like Tauri build output reports `cargo:rustc-cfg=custom_protocol`
+- `ui/dist/index.html` and built assets must exist
+- runtime CDP target must resolve to `http://tauri.localhost/#/workbench`
+
+If a rebuilt shell opens `http://127.0.0.1:5173/`, treat that as a
+stale/devUrl build blocker, not as validator/provider evidence. The repo-local
+launcher now surfaces this as a release target mismatch blocker.
 
 ## Secret Setup
 
@@ -398,6 +505,8 @@ mismatch before entering the full 403-case matrix.
 
 Do not start packaging until:
 
+- the shell startup gate is green under
+  `docs/desktop-shell-webview2-cdp-startup-contract.md`
 - four-group qwen trace passes
 - 403-case matrix passes or the controller explicitly accepts a reduced gate
 - any reduced gate is explicitly scoped by the controller and is not inferred
