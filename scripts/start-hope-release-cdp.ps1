@@ -31,17 +31,11 @@ $AllowedQwenTextModels = @(
   "qwen-plus-2025-07-28",
   "qwen3.6-plus",
   "qwen3.6-plus-2026-04-02",
-  "qvq-max-2025-03-25",
-  "qwen-plus",
-  "qwen-max",
-  "qwen-math-turbo",
-  "qwen3-max-preview",
-  "qwen3-max-2025-09-23",
-  "qwen3-max",
+  "qwen3.6-max-preview",
   "qwen3-max-2026-01-23",
-  "qwen3-max-thinking",
-  "qwen3.5-plus",
-  "qwen-long"
+  "qwen3.6-flash",
+  "qwen-plus-2025-12-01",
+  "qwen-plus"
 )
 
 function Convert-ResultJson {
@@ -1515,7 +1509,7 @@ $effectiveModelEnabled = if ($LaunchDiagnosticOnly) {
 } else {
   $ModelEnabled -eq "true"
 }
-$effectiveProviderTimeoutSeconds = if ($QaProviderHardFail) { 60 } else { 30 }
+$effectiveProviderTimeoutSeconds = if ($QaProviderHardFail) { 120 } else { 30 }
 $proxyEnvBefore = Get-ProxyEnvPresence
 if ($NoProxy) {
   Clear-QaProxyEnv

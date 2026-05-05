@@ -13,6 +13,17 @@ machine.
 - Clean the shell with `StopOnly` after every group.
 - Do not require the user to take screenshots or click system error dialogs.
 
+## Contract Pack
+
+The following docs are now required companion contracts for environment and QA
+continuation:
+
+- `docs/desktop-shell-webview2-cdp-startup-contract.md`
+- `docs/desktop-validator-source-grounding-contract.md`
+- `docs/desktop-qa-preflight-ownership-contract.md`
+- `docs/desktop-gate-evidence-ladder-contract.md`
+- `docs/hope-story-fact-frame-storyboard-binding-contract.md`
+
 ## Repo-Local Launcher
 
 Use the repo-local launcher from a checkout of `codex/desktop-shell`:
@@ -45,6 +56,49 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File E:\codex\tools\start-hop
 
 For new machines, prefer the repo-local launcher.
 
+## Clean Workspace Shell Gate
+
+Accepted Shell Gate evidence for a clean workspace / worktree must start the
+repo-local launcher with an explicit `-RepoRoot` pointing at the absolute path
+of the workspace under test. The accepted WebView2/CDP fix anchor is:
+
+```text
+fix_commit=9a8f4e0349fa56a7cc57fb2e3817fabaa75afb6e
+accepted_clean_workspace=E:\codex\hope-desktop-shell-clean-9a8f4e0-r2
+accepted_exe_sha256=E3BB9738851AF64FBE642517CA8DE2BEE82B23F67B4B19E9C8C817E8C6AD6D26
+accepted_valid_runs=hope-cdp-20260505-193016-26016, hope-cdp-20260505-193110-27216
+```
+
+Example clean-worktree environment-only command:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-hope-release-cdp.ps1 -RepoRoot E:\codex\hope-desktop-shell-clean-9a8f4e0-r2 -LaunchDiagnosticOnly -WebView2ArgumentMode AppDefault -StopExisting -StopOnCdpFailure -WaitSeconds 20
+```
+
+A run that omits `-RepoRoot` and defaults to `E:\codex\hope-desktop-shell` is
+`boundary-invalid` / `stale-reference` for clean-workspace Shell Gate
+acceptance. It can explain historical behavior only; it cannot satisfy the
+current gate.
+
+Shell Gate acceptance must cite all of these fields together:
+
+- workspace path and workspace `HEAD`
+- launched process path / PID and `hope-app.exe` sha256
+- saved `/json/list` artifact path and target URL/title summary
+- saved post-setup probe artifact path
+- saved launch result artifact path
+- paired `StopOnly` cleanup artifact path and cleanup fields
+
+Popup handling is not a visual-only gate. No visible popup is not enough: the
+accepted run must also prove no `0x80000003`, no `HRESULT(0x8000FFFF)`, correct
+`http://tauri.localhost/#/workbench` target URL/title, and cleanup with no
+Hope-owned process, WebView2 process, CDP port, or exe-lock residue.
+
+Hope-2-v0, `E:\codex\hope-local-stale-archive`, old `%TEMP%` launch artifacts,
+old CDP profiles, and old no-`RepoRoot` launches are reference-only boundaries
+for old Hope. They must not be used as current Shell Gate, provider, live3,
+`full16`, `403-case`, or package evidence.
+
 ## WebView2 Environment-Blocked Evidence
 
 When the release shell starts `hope-app` but no CDP target materializes, collect
@@ -65,6 +119,9 @@ launch-only evidence before retrying provider or validator work:
 - if `target_url` resolves to `http://127.0.0.1:5173/`, treat it as a
   devUrl/stale-build blocker, not shell success
 - use `-LaunchDiagnosticOnly` and do not pass provider / model / runner inputs
+- for clean workspace / worktree Shell Gate runs, pass explicit `-RepoRoot`
+  with the absolute path of the workspace under test; no-`RepoRoot` runs that
+  hit the dirty main repo are `boundary-invalid` / `stale-reference`
 - keep the per-launch diagnostic log under
   `%TEMP%\hope-webview2-cdp\<launch_id>\hope-shell-diagnostic.log`
 - confirm launch anchors for the same launch:
@@ -169,13 +226,21 @@ Never commit:
 Non-secret Qwen model rule:
 
 - Current QA live default model is `qwen-plus-2025-07-28`.
-- Qwen API gate candidate order is `qwen-plus-2025-07-28 -> qwen3.6-plus -> qwen3.6-plus-2026-04-02 -> qvq-max-2025-03-25 -> qwen-plus`.
-- `qwen-plus` is retained only as the last fallback candidate after explicit
-  sanitized probe evidence, not the current default gate.
-- `qwen-max` is a previous gate model and must not be used for current gate
-  evidence while the provider reports entitlement/quota failure for it.
-- `qwen-plus` may still appear in app/UI/script compatibility allowlists. A
-  run that starts or expects `qwen-plus` is non-gate even if the local provider
+- Required text gate pool is exactly: `qwen-plus-2025-07-28`,
+  `qwen3.6-plus`, `qwen3.6-plus-2026-04-02`,
+  `qwen3.6-max-preview`, `qwen3-max-2026-01-23`,
+  `qwen3.6-flash`, and `qwen-plus-2025-12-01`.
+- `qwen-plus` is retained only as an
+  `alias_compatibility_reference` / `not_required_gate` historical alias. It
+  may be used for compatibility diagnostics, but it cannot satisfy live3,
+  full16 restore, or required text gate evidence.
+- Excluded from the text storyboard gate: `qvq-max-2025-03-25`, qwen-vl /
+  qwen2.5-vl / qwen3-vl, HappyHorse and video generation models, qwen-math,
+  and qwen-coder.
+- `qwen-max` and older max aliases are not current gate evidence unless a
+  controller dispatch explicitly adds them to `required_text_gate_models`.
+- `qwen-plus` may still appear in app/UI/script compatibility allowlists. A run
+  that starts or expects `qwen-plus` is non-gate even if the local provider
   status matches it.
 - Every QA run must explicitly confirm the active model in both the release
   shell startup command and the runner `--expected-model` argument.
@@ -198,6 +263,8 @@ Multi-model output contract rule:
 
 - The executable multi-model certification manifest is
   `tests/qa/desktop-model-certification-matrix.json`.
+- Source role grounding must follow
+  `docs/desktop-validator-source-grounding-contract.md`.
 - The contract is a structural safety contract, not a creative style template.
   It verifies provider/model evidence, `script_goal`, `scene_type`, duration,
   accepted snapshot hash, StoryFactFrame hash, source text hash, rows schema,
@@ -226,9 +293,48 @@ Multi-model output contract rule:
   `qa_reference`, `source_sample_id`, sample entity markers, raw KB rows,
   `source_register`, or overlay JSON. These markers are hard prompt-boundary
   failures, not quality warnings.
-- The same contract is used for `qwen-plus-2025-07-28`, `qwen3.6-plus`,
-  `qwen3.6-plus-2026-04-02`, `qvq-max-2025-03-25`, and the final
-  `qwen-plus` alias candidate. Do not add model-specific pass logic.
+- The same contract is used for every callable model in
+  `required_text_gate_models`. Do not add model-specific pass logic. The
+  `qwen-plus` alias is compatibility-only and must not be counted as required
+  gate evidence.
+
+Live3 and full16 restore rule:
+
+- Provider availability probes must be sanitized. Record only model,
+  http_status, error_category, error_code, choices_present, and callable.
+- Store the sanitized seven-model probe as
+  `target/qa-live3-provider-probe/<timestamp>/qwen-text-model-availability.json`
+  and validate it with:
+
+```powershell
+node .\scripts\hope-model-contract-certifier.mjs --matrix .\tests\qa\desktop-model-certification-matrix.json --availability <availability-json>
+```
+
+- Unavailable results such as model_not_found, entitlement, quota, http_403,
+  and invalid_parameter must be recorded as unavailable reasons. Unavailable
+  models are not silently removed.
+- A required text model passes live3 only when `expected=3`, `executed=3`,
+  `passed=3`, `failed=0`, `not_run=0`, `no_http_403=true`,
+  `no_live_fallback=true`, `fallback_used=false`, `local_candidate=false`,
+  `runner_assert_failures=[]`, StoryFactFrame is present, accepted snapshot is
+  present, `prompt_text_boundary_passed=true`, `rows_match=true`, and
+  `row_diffs=[]`.
+- The text pool passes only when all callable required text gate models pass
+  live3 3/3 and at least five callable text models pass.
+- Full16 remains blocked until the text pool rule above is satisfied and Core
+  Challenger plus Audit Specialist accept the evidence. One model passing
+  live3 is not enough.
+- Runner hard-fail stages remain distinct:
+  `provider_retry_exhausted_hard_fail`,
+  `qa_hard_fail_evidence_missing`, model unavailability categories
+  (`model_not_found`, `entitlement`, `quota`, `http_403`,
+  `invalid_parameter`), `validator_hard_gate_fail`, and
+  `prompt_text_boundary`.
+- Older `gate_model_order` fields in four-group, 16-case, cross-drift, and
+  403 matrices are not authoritative for this live3 text-model pool. Until
+  those manifests are separately opened, use
+  `tests/qa/desktop-model-certification-matrix.json` as the only source of
+  truth for required live3 text gate models.
 
 Before running business QA, confirm provider status from the real release shell:
 
@@ -244,6 +350,11 @@ storage=session-only
 ```
 
 If `live_ready` is not true, stop the shell and do not run fallback-only QA.
+
+When later entering `qwen3.6-plus` live3 or the required text model pool live3,
+any shell lifecycle must still pass explicit `-RepoRoot` for the clean
+workspace under test and must end with reported `StopOnly` cleanup. Provider or
+runner evidence from a no-`RepoRoot` shell launch is not current gate evidence.
 
 ## Four-Group Trace Gate
 
@@ -301,11 +412,26 @@ Required trace checks:
 - no `model_config_disabled`
 - no `text_model_live_call_closed`
 - provider is live-ready
-- compact fallback evidence includes `retry_timeline`, `qa_proxy_evidence`, and
-  `runner_env_proxy_evidence`
+- compact fallback evidence includes `retry_timeline`, `retry_exhausted_count`,
+  `retry_recovered_count`, `attempts_observed`, `elapsed_buckets`,
+  explicit missing-reason fields when compact evidence cannot recover
+  attempt/elapsed metadata, `qa_proxy_evidence`, and `runner_env_proxy_evidence`
+- `text_model_qa_no_local_fallback_blocked` proves QA hard-fail / no live
+  fallback; it is not by itself provider transport retry exhaustion. Only
+  runtime warning text containing `retry_exhausted=true` or observed
+  attempts/elapsed metadata may set `provider_retry_exhausted_hard_fail`.
+- When a validator hard gate triggers QA hard-fail without provider transport
+  retry metadata, compact evidence must report provider attempt metadata as
+  `not_applicable_*` and classify the provider retry edge as validator
+  hard-gate QA hard-fail, not as a generic trace-missing provider field.
+- Raw compact `provider_retry_evidence` must be self-contained for current
+  runner artifacts: include `provider_retry_telemetry_format="current"` and
+  `legacy_provider_retry_exhausted_hard_fail_edge=false` alongside
+  `provider_retry_observed`, `provider_retry_classification`, and
+  `provider_attempt_metadata_status`.
 - compact model contract evidence includes `hard_gate_failures`,
-  `quality_warnings`, `normalizer_actions`, `creative_freedom_preserved`,
-  `template_overconstraint_risk`, `sample_leakage_risk`,
+  `provider_retry_evidence`, `quality_warnings`, `normalizer_actions`,
+  `creative_freedom_preserved`, `template_overconstraint_risk`, `sample_leakage_risk`,
   `source_fact_binding_status`, `prompt_boundary_status`, and
   `fallback_status`
 - `retry_recovered=true` is allowed only when `fallback_used=false` and no
@@ -511,6 +637,8 @@ Do not start packaging until:
 - 403-case matrix passes or the controller explicitly accepts a reduced gate
 - any reduced gate is explicitly scoped by the controller and is not inferred
   from a degraded 16-case preparation record
+- the gate layer is explicitly accepted under
+  `docs/desktop-gate-evidence-ladder-contract.md`
 - dirty ownership is resolved
 - non-secret automation and resources are pushed
 - release rebuild is repeatable
@@ -539,3 +667,8 @@ Known ownership buckets:
 
 Keep `app/Cargo.toml` separate unless the controller explicitly opens that
 ownership gate.
+
+Every QA or environment thread that can touch Tauri build paths must also
+follow `docs/desktop-qa-preflight-ownership-contract.md`, including preflight
+and postflight `app/Cargo.toml` diff recording and tracked-file ownership
+reporting.

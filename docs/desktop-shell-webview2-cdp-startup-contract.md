@@ -39,12 +39,25 @@
 Shell gate 绿色必须同时满足：
 <small>The shell gate is green only when all of the following hold:</small>
 
+- clean workspace / worktree 运行必须显式传入 `-RepoRoot`，值为当前被测
+  clean workspace 的绝对路径；当前已验收路径是
+  `E:\codex\hope-desktop-shell-clean-9a8f4e0-r2`。
+<small>Clean-workspace or worktree runs must explicitly pass `-RepoRoot` with the absolute path of the clean workspace under test; the currently accepted path is `E:\codex\hope-desktop-shell-clean-9a8f4e0-r2`.</small>
+- 未传 `-RepoRoot` 且默认命中 `E:\codex\hope-desktop-shell` 的运行，只能标为
+  `boundary-invalid` / `stale-reference`，不得作为当前 Shell Gate evidence。
+<small>A run without `-RepoRoot` that defaults to `E:\codex\hope-desktop-shell` is `boundary-invalid` / `stale-reference` only and cannot be current Shell Gate evidence.</small>
+- evidence 必须记录 workspace path、workspace `HEAD`、当前 `hope-app.exe`
+  sha256、`/json/list` artifact、post-setup probe artifact、launch result
+  artifact 与 paired `StopOnly` cleanup artifact。
+<small>Evidence must record workspace path, workspace `HEAD`, current `hope-app.exe` sha256, `/json/list` artifact, post-setup probe artifact, launch result artifact, and paired `StopOnly` cleanup artifact.</small>
 - fresh release-like binary 已被证明是当前运行源。
 - 启动模式为 `AppDefault + LaunchDiagnosticOnly`。
 - `ok=true`。
 - `cdp_ready=true` 或至少 `/json/list` 可达且 target 已出现。
 - `target_url=http://tauri.localhost/#/workbench`。
 - `target_count>=1`，且 target title / url 与当前 shell 一致。
+- 没有 WebView2 popup `0x80000003`，没有 `HRESULT(0x8000FFFF)`，且 popup 不显示不能单独算 pass。
+<small>There must be no WebView2 popup `0x80000003`, no `HRESULT(0x8000FFFF)`, and merely hiding or not seeing a popup is not a pass.</small>
 - 当前运行不依赖旧 profile、旧端口、旧 pid 或旧日志。
 - 结束后 `StopOnly` cleanup 达到 `hope_app_remaining_pids=[]`、`webview2_remaining_pids=[]`、`port_released=true`、`exe_unlocked=true`。
 
@@ -117,6 +130,9 @@ fresh binary 证明至少要包含：
 - 仅凭 popup 截图或肉眼观察、缺 `/json/list` / PID / cleanup 摘要的报告。
 - `target_url=127.0.0.1:5173` 的 wrong-target artifact。
 - 没有 paired `StopOnly` 结果的 launch artifact。
+- Hope-2-v0、`E:\codex\hope-local-stale-archive`、旧 `%TEMP%` artifact、旧
+  CDP profile、旧 no-`RepoRoot` run，均不得作为旧 Hope current gate evidence。
+<small>Hope-2-v0, `E:\codex\hope-local-stale-archive`, old `%TEMP%` artifacts, old CDP profiles, and old no-`RepoRoot` runs must not be used as current gate evidence for old Hope.</small>
 
 当前 2026-05-04 的 `launch-diagnostic-minimal-noproxy-reproof.json` 与同轮 `stoponly-final.json` 可用于说明第 5 次复发形态，但仍属于 comparison/reference-only，不得直接解锁 provider 或更高 gate。
 <small>The 2026-05-04 `launch-diagnostic-minimal-noproxy-reproof.json` and its paired `stoponly-final.json` may explain the fifth recurrence pattern, but they remain comparison/reference-only and cannot unlock provider or higher gates.</small>
@@ -142,3 +158,8 @@ fresh binary 证明至少要包含：
 - `full16`
 - `403-case`
 - package / release preflight
+
+后续进入 `qwen3.6-plus` live3 或 required text model pool live3 时，只要需要启动
+shell，就必须继续显式传入当前被测 clean workspace 的 `-RepoRoot`，并在每个
+shell 生命周期后执行和回报 `StopOnly` cleanup。
+<small>When later entering `qwen3.6-plus` live3 or required text model pool live3, any shell start must still pass `-RepoRoot` for the clean workspace under test and must execute and report `StopOnly` cleanup after every shell lifecycle.</small>

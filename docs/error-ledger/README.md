@@ -17,6 +17,13 @@
 
 - [Shell / WebView2 / CDP 启动契约](../desktop-shell-webview2-cdp-startup-contract.md)
   <small>Shell / WebView2 / CDP startup hard gate contract</small>
+- [Validator source grounding 契约](../desktop-validator-source-grounding-contract.md)
+  <small>Validator source-grounding contract</small>
+- [QA preflight 与 dirty ownership 契约](../desktop-qa-preflight-ownership-contract.md)
+  <small>QA preflight and dirty-ownership contract</small>
+- [Gate evidence ladder 契约](../desktop-gate-evidence-ladder-contract.md)
+  <small>Gate-evidence ladder contract</small>
+
 ## 更新规则
 <small>Update rules</small>
 
@@ -26,5 +33,7 @@
   <small>Record sanitized evidence only; never include raw env, API keys, raw prompts, raw provider responses, source_register, or overlay JSON.</small>
 - open、closed、reference-only 状态必须按 fresh evidence 更新，不得把 reference-only 当成 gate evidence。
   <small>Open, closed, and reference-only statuses must follow fresh evidence; reference-only material must not be treated as gate evidence.</small>
+- shell、source grounding、Cargo preflight、dirty ownership、gate ladder 这类重复问题，更新错题本时必须同步更新对应契约文档。
+  <small>When repeated issues involve shell, source grounding, Cargo preflight, dirty ownership, or gate ladder rules, update the corresponding contract docs together with the ledger.</small>
 - 主线问题重复出现时，应及时补充错题条目，并写清楚 Problem、Resolution、Prevention、Playbook。
   <small>When a mainline issue repeats, add or update the entry with Problem, Resolution, Prevention, and Playbook.</small>

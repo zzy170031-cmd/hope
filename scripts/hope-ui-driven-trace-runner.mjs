@@ -9,30 +9,29 @@ const args = Object.fromEntries(
   }).filter((item) => item.length === 2),
 );
 
-const allowedQwenTextModels = [
+const requiredTextGateModels = [
   "qwen-plus-2025-07-28",
   "qwen3.6-plus",
   "qwen3.6-plus-2026-04-02",
-  "qvq-max-2025-03-25",
-  "qwen-plus",
-  "qwen-max",
-  "qwen-math-turbo",
-  "qwen3-max-preview",
-  "qwen3-max-2025-09-23",
-  "qwen3-max",
+  "qwen3.6-max-preview",
   "qwen3-max-2026-01-23",
-  "qwen3-max-thinking",
-  "qwen3.5-plus",
-  "qwen-long",
+  "qwen3.6-flash",
+  "qwen-plus-2025-12-01",
 ];
 
-const modelPriority = [
-  "qwen-plus-2025-07-28",
-  "qwen3.6-plus",
-  "qwen3.6-plus-2026-04-02",
-  "qvq-max-2025-03-25",
-  "qwen-plus",
-];
+const aliasCompatibilityModels = ["qwen-plus"];
+const allowedQwenTextModels = [...requiredTextGateModels, ...aliasCompatibilityModels];
+const modelPriority = [...requiredTextGateModels];
+
+function modelGateRole(modelName) {
+  if (requiredTextGateModels.includes(modelName)) {
+    return "required_text_gate_model";
+  }
+  if (aliasCompatibilityModels.includes(modelName)) {
+    return "alias_compatibility_reference";
+  }
+  return "not_allowed";
+}
 
 const allowedScriptGoals = ["rewrite", "expand"];
 const requestedScriptGoal = String(args["script-goal"] || args.script_goal || args.goal || "expand")
@@ -51,6 +50,9 @@ const input = {
   expectedProvider: args["expected-provider"] || "qwen",
   expectedModel: args["expected-model"] || "qwen-plus-2025-07-28",
   allowedModels: allowedQwenTextModels,
+  requiredTextGateModels,
+  aliasCompatibilityModels,
+  expectedModelGateRole: modelGateRole(args["expected-model"] || "qwen-plus-2025-07-28"),
   modelPriority,
   assertBinding: args["assert-binding"] !== "0",
   assertNoProxyEnv: args["assert-no-proxy-env"] === "1" || args["assert-no-proxy-env"] === "true",
@@ -149,7 +151,7 @@ async function connectCdp() {
         if (pending.delete(id)) {
           reject(new Error(`CDP timeout: ${method}`));
         }
-      }, 240000);
+      }, 480000);
       pending.set(id, { resolve, reject, timer });
     });
   };
@@ -162,11 +164,18 @@ function browserWorkflowExpression(payload) {
 (async () => {
   const input = ${JSON.stringify(payload)};
   const allowedModels = Array.isArray(input.allowedModels) ? input.allowedModels.map(String) : [];
+  const requiredTextGateModels = Array.isArray(input.requiredTextGateModels) ? input.requiredTextGateModels.map(String) : [];
+  const aliasCompatibilityModels = Array.isArray(input.aliasCompatibilityModels) ? input.aliasCompatibilityModels.map(String) : [];
   const modelPriority = Array.isArray(input.modelPriority) ? input.modelPriority.map(String) : [];
   const options = {
     expectedProvider: String(input.expectedProvider ?? "qwen"),
     expectedModel: String(input.expectedModel ?? "qwen-plus-2025-07-28"),
   };
+  const expectedModelGateRole = requiredTextGateModels.includes(options.expectedModel)
+    ? "required_text_gate_model"
+    : aliasCompatibilityModels.includes(options.expectedModel)
+      ? "alias_compatibility_reference"
+      : "not_allowed";
   const scriptGoal = input.scriptGoal === "rewrite" ? "rewrite" : "expand";
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const textOf = (element) => (element?.textContent || "").replace(/\\s+/g, " ").trim();
@@ -178,7 +187,7 @@ function browserWorkflowExpression(payload) {
     element.dispatchEvent(new Event("input", { bubbles: true }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
   };
-  const waitFor = async (fn, label, timeout = 180000) => {
+  const waitFor = async (fn, label, timeout = 360000) => {
     const started = Date.now();
     let last;
     while (Date.now() - started < timeout) {
@@ -385,6 +394,9 @@ function browserWorkflowExpression(payload) {
       scriptGoal,
       expectedProvider: options.expectedProvider,
       expectedModel: options.expectedModel,
+      expectedModelGateRole,
+      requiredTextGateModels,
+      aliasCompatibilityModels,
       allowedModels,
       modelPriority,
       layout: layoutEvidence(),
@@ -402,6 +414,9 @@ function browserWorkflowExpression(payload) {
       scriptGoal,
       expectedProvider: options.expectedProvider,
       expectedModel: options.expectedModel,
+      expectedModelGateRole,
+      requiredTextGateModels,
+      aliasCompatibilityModels,
       allowedModels,
       modelPriority,
       layout: layoutEvidence(),
@@ -423,7 +438,7 @@ function browserWorkflowExpression(payload) {
     () => currentTrace()?.command === selectedScriptCommand.trace_command &&
       !buttons().some((button) => ["扩写中", "处理中"].some((item) => textOf(button).includes(item))),
     scriptGoal + " " + selectedScriptCommand.trace_command + " trace",
-    180000,
+    360000,
   );
   const expandTrace = currentTrace();
   const expandTraceAttr = readTraceAttr();
@@ -449,7 +464,7 @@ function browserWorkflowExpression(payload) {
       return false;
     }
     return trace.status === "Blocked" || normalizeRows().length > 0;
-  }, "generate_storyboard trace completion", 180000);
+  }, "generate_storyboard trace completion", 360000);
   const generateTrace = currentTrace();
   const generateTraceAttr = readTraceAttr();
   const tableRows = normalizeRows();
@@ -568,6 +583,145 @@ function compactBindingEvidence(value) {
     missing_source_facts: asArray(value.missing_source_facts),
     forbidden_fact_hits: asArray(value.forbidden_fact_hits),
   };
+}
+
+function parseBlockedRuntimeWarningMessage(message) {
+  const parsed = {};
+  for (const part of String(message ?? "").split(/\s*;\s*/)) {
+    if (!part) {
+      continue;
+    }
+    const separator = part.indexOf("=");
+    if (separator <= 0) {
+      continue;
+    }
+    const key = part.slice(0, separator).trim();
+    const value = part.slice(separator + 1).trim();
+    if (key) {
+      parsed[key] = value;
+    }
+  }
+  return parsed;
+}
+
+function parseBlockedRuntimeBool(value) {
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  return null;
+}
+
+function parseBlockedRuntimeList(value) {
+  return String(value ?? "").trim() && String(value ?? "").trim() !== "none"
+    ? String(value).split("|").map((item) => item.trim()).filter(Boolean)
+    : [];
+}
+
+function compactBlockedRuntimeEvidence(trace) {
+  const warnings = asArray(trace?.warnings);
+  const evidence = {
+    binding_context: null,
+    prompt_pre_block: null,
+    repair_summary: null,
+    person_diagnostics: [],
+    field_diagnostics: [],
+  };
+  for (const warning of warnings) {
+    const parsed = parseBlockedRuntimeWarningMessage(warning?.message);
+    switch (warning?.code) {
+      case "qa_live_blocked_binding_diag":
+        evidence.binding_context = {
+          current_case_id: parsed.current_case_id ?? "",
+          source_text_hash: parsed.source_text_hash ?? "",
+          accepted_rewrite_hash: parsed.accepted_rewrite_hash ?? "",
+          task_script_hash: parsed.task_script_hash ?? "",
+          story_fact_frame_hash: parsed.story_fact_frame_hash ?? "",
+          source_profile: parsed.source_profile ?? "",
+          scene_type: parsed.scene_type ?? "",
+          duration_seconds: Number(parsed.duration_seconds ?? 0),
+          duration_plan_hash: parsed.duration_plan_hash ?? "",
+          storyboard_rows_hash: parsed.storyboard_rows_hash ?? "",
+        };
+        break;
+      case "qa_live_blocked_prompt_diag":
+        evidence.prompt_pre_block = {
+          row_count: Number(parsed.row_count ?? 0),
+          prompt_text_present: parseBlockedRuntimeBool(parsed.prompt_text_present),
+          prompt_text_nonempty_rows: Number(parsed.prompt_text_nonempty_rows ?? 0),
+          prompt_text_hash: parsed.prompt_text_hash ?? "",
+        };
+        break;
+      case "qa_live_blocked_repair_diag":
+        evidence.repair_summary = {
+          stage: parsed.stage ?? "",
+          raw_failed_validator: parseBlockedRuntimeBool(parsed.raw_failed_validator),
+          repair_reasons: parseBlockedRuntimeList(parsed.repair_reasons),
+          pre_codes: parseBlockedRuntimeList(parsed.pre_codes),
+          post_codes: parseBlockedRuntimeList(parsed.post_codes),
+        };
+        break;
+      case "qa_live_blocked_field_diag":
+        evidence.field_diagnostics.push({
+          row: Number(parsed.row ?? 0),
+          field: parsed.field ?? "",
+          baseline_class: parsed.baseline_class ?? "",
+          baseline_label: parsed.baseline_label ?? "",
+          baseline_hash: parsed.baseline_hash ?? "",
+          raw_patch_class: parsed.raw_patch_class ?? "",
+          raw_patch_label: parsed.raw_patch_label ?? "",
+          raw_patch_hash: parsed.raw_patch_hash ?? "",
+          pre_repair_class: parsed.pre_repair_class ?? "",
+          pre_repair_label: parsed.pre_repair_label ?? "",
+          pre_repair_hash: parsed.pre_repair_hash ?? "",
+          post_repair_class: parsed.post_repair_class ?? "",
+          post_repair_label: parsed.post_repair_label ?? "",
+          post_repair_hash: parsed.post_repair_hash ?? "",
+          patch_changed: parseBlockedRuntimeBool(parsed.patch_changed),
+          repair_changed: parseBlockedRuntimeBool(parsed.repair_changed),
+        });
+        break;
+      case "qa_live_blocked_person_diag":
+        evidence.person_diagnostics.push({
+          row: Number(parsed.row ?? 0),
+          baseline_class: parsed.baseline_class ?? "",
+          baseline_label: parsed.baseline_label ?? "",
+          baseline_hash: parsed.baseline_hash ?? "",
+          raw_input_class: parsed.raw_input_class ?? "",
+          raw_input_label: parsed.raw_input_label ?? "",
+          raw_input_hash: parsed.raw_input_hash ?? "",
+          raw_input_normalize_after: parsed.raw_input_normalize_after ?? "",
+          raw_bound_class: parsed.raw_bound_class ?? "",
+          raw_bound_label: parsed.raw_bound_label ?? "",
+          raw_bound_hash: parsed.raw_bound_hash ?? "",
+          pre_repair_class: parsed.pre_repair_class ?? "",
+          pre_repair_label: parsed.pre_repair_label ?? "",
+          pre_repair_hash: parsed.pre_repair_hash ?? "",
+          post_repair_class: parsed.post_repair_class ?? "",
+          post_repair_label: parsed.post_repair_label ?? "",
+          post_repair_hash: parsed.post_repair_hash ?? "",
+          bind_source_role_hit: parseBlockedRuntimeBool(parsed.bind_source_role_hit),
+          bind_normalize_before: parsed.bind_normalize_before ?? "",
+          bind_normalize_after: parsed.bind_normalize_after ?? "",
+          post_grounded: parseBlockedRuntimeBool(parsed.post_grounded),
+          post_grounded_normalized: parsed.post_grounded_normalized ?? "",
+          post_untrusted_field: parsed.post_untrusted_field ?? "",
+          post_untrusted_candidate: parsed.post_untrusted_candidate ?? "",
+          post_untrusted_normalized: parsed.post_untrusted_normalized ?? "",
+          post_untrusted_reason: parsed.post_untrusted_reason ?? "",
+          patch_changed: parseBlockedRuntimeBool(parsed.patch_changed),
+          repair_changed: parseBlockedRuntimeBool(parsed.repair_changed),
+        });
+        break;
+      default:
+        break;
+    }
+  }
+  return evidence.binding_context || evidence.prompt_pre_block || evidence.repair_summary || evidence.person_diagnostics.length || evidence.field_diagnostics.length
+    ? evidence
+    : null;
 }
 
 function compactValidatorGateEvidence(value) {
@@ -845,7 +999,25 @@ function compactFallbackGateFailures(evidence) {
 }
 
 function compactProviderHardFailFailures(evidence) {
-  return evidence.qa_hard_fail ? ["provider_retry_exhausted_hard_fail"] : [];
+  return evidence.provider_retry_exhausted_hard_fail_edge ? ["provider_retry_exhausted_hard_fail"] : [];
+}
+
+function compactProviderAvailabilityFailures(evidence) {
+  const availability = evidence.model_availability;
+  if (!availability?.unavailable) {
+    return [];
+  }
+  const category = String(availability.error_category ?? "").trim();
+  return category ? [category] : ["model_unavailable"];
+}
+
+function compactRuntimeValidatorHardGateFailures(traces) {
+  const records = collectTraceWarningRecords(traces);
+  return records.some((item) =>
+    /text_model_live_storyboard_validator_hard_fail|text_model_validator_failed/i.test(`${item.code} ${item.message}`),
+  )
+    ? ["validator_hard_gate_fail"]
+    : [];
 }
 
 function collectLiveFallbackSignals(traces) {
@@ -912,33 +1084,123 @@ function collectTraceWarningRecords(traces) {
   }).filter((item) => `${item.code} ${item.message}`.trim());
 }
 
+function warningRecordText(item) {
+  return `${item.code} ${item.message}`.trim();
+}
+
+function uniqueNumbers(values) {
+  return Array.from(new Set(values.filter(Number.isFinite)));
+}
+
+function uniqueStrings(values) {
+  return Array.from(new Set(values.map((item) => String(item ?? "").trim()).filter(Boolean)));
+}
+
+function firstNumberMatch(text, pattern) {
+  const match = String(text ?? "").match(pattern);
+  return match ? Number(match[1]) : null;
+}
+
+function firstStringMatch(text, pattern) {
+  return String(text ?? "").match(pattern)?.[1] ?? "";
+}
+
+function retryTelemetryMissingReason(fieldName, values, context) {
+  if (values.length) {
+    return null;
+  }
+  const hasProviderRetryEdge = context.retry_recovered || context.retry_exhausted;
+  if (!hasProviderRetryEdge) {
+    if (context.qa_hard_fail && context.validator_hard_gate_fail_edge) {
+      return `not_applicable_validator_hard_gate_qa_hard_fail_no_provider_transport_retry_${fieldName}_metadata`;
+    }
+    if (context.qa_hard_fail) {
+      return `not_applicable_qa_hard_fail_without_provider_transport_retry_${fieldName}_metadata`;
+    }
+    return `not_applicable_no_retry_or_qa_hard_fail_edge:${fieldName}`;
+  }
+  return `provider_transport_retry_${fieldName}_metadata_not_emitted_or_not_captured`;
+}
+
 function collectRetryTimelineEvidence(traces) {
   const records = collectTraceWarningRecords(traces);
   const retryRecovered = records.filter((item) =>
-    /text_model_network_retry_recovered|retry_recovered=true|retry recovered/i.test(`${item.code} ${item.message}`),
+    /text_model_network_retry_recovered|retry_recovered=true|retry recovered/i.test(warningRecordText(item)),
   );
   const retryExhausted = records.filter((item) =>
-    /retry_exhausted\s*[:=]\s*true|text_model_qa_no_local_fallback_blocked/i.test(`${item.code} ${item.message}`),
+    /retry_exhausted\s*[:=]\s*true/i.test(warningRecordText(item)),
   );
   const qaHardFail = records.filter((item) =>
-    /text_model_qa_no_local_fallback_blocked|qa_no_local_fallback\s*[:=]\s*true/i.test(`${item.code} ${item.message}`),
+    /text_model_qa_no_local_fallback_blocked|qa_no_local_fallback\s*[:=]\s*true/i.test(warningRecordText(item)),
   );
   const fallbackUsedTrue = records.filter((item) =>
-    /fallback[_\s-]?used\s*[:=]\s*true/i.test(`${item.code} ${item.message}`),
+    /fallback[_\s-]?used\s*[:=]\s*true/i.test(warningRecordText(item)),
   );
   const localCandidateTrue = records.filter((item) =>
-    /local[_\s-]?candidate\s*[:=]\s*true/i.test(`${item.code} ${item.message}`),
+    /local[_\s-]?candidate\s*[:=]\s*true/i.test(warningRecordText(item)),
+  );
+  const validatorHardGate = records.filter((item) =>
+    /text_model_live_storyboard_validator_hard_fail|text_model_validator_failed/i.test(warningRecordText(item)),
   );
   const attemptValues = records
-    .map((item) => `${item.code} ${item.message}`.match(/attempts\s*[:=]\s*(\d+)/i)?.[1])
-    .filter(Boolean)
-    .map(Number);
+    .map((item) => firstNumberMatch(warningRecordText(item), /(?:attempts|attempt_count)\s*[:=]\s*(\d+)/i))
+    .filter((item) => item !== null);
+  const maxAttemptValues = records
+    .map((item) => firstNumberMatch(warningRecordText(item), /max_attempts\s*[:=]\s*(\d+)/i))
+    .filter((item) => item !== null);
   const elapsedBuckets = records
-    .map((item) => `${item.code} ${item.message}`.match(/elapsed_bucket\s*[:=]\s*([A-Za-z0-9_]+)/i)?.[1])
-    .filter(Boolean);
+    .map((item) => firstStringMatch(warningRecordText(item), /elapsed_bucket\s*[:=]\s*([A-Za-z0-9_-]+)/i));
   const errorCategories = records
-    .map((item) => `${item.code} ${item.message}`.match(/error_category\s*[:=]\s*([A-Za-z0-9_]+)/i)?.[1])
-    .filter(Boolean);
+    .map((item) => firstStringMatch(warningRecordText(item), /error_category\s*[:=]\s*([A-Za-z0-9_-]+)/i));
+  const evidenceCodes = uniqueStrings(records.map((item) => item.code));
+  const attemptsObserved = uniqueNumbers(attemptValues);
+  const maxAttemptsObserved = uniqueNumbers(maxAttemptValues);
+  const elapsedBucketsObserved = uniqueStrings(elapsedBuckets);
+  const providerRetryObserved = retryRecovered.length > 0 ||
+    retryExhausted.length > 0 ||
+    attemptsObserved.length > 0 ||
+    maxAttemptsObserved.length > 0 ||
+    elapsedBucketsObserved.length > 0;
+  const providerRetryClassification = providerRetryObserved
+    ? retryExhausted.length > 0
+      ? "provider_transport_retry_exhausted"
+      : retryRecovered.length > 0
+        ? "provider_transport_retry_recovered"
+        : "provider_transport_retry_metadata_observed"
+    : qaHardFail.length > 0 && validatorHardGate.length > 0
+      ? "validator_hard_gate_qa_hard_fail_not_provider_transport_retry"
+      : qaHardFail.length > 0
+        ? "qa_hard_fail_without_provider_transport_retry"
+        : "not_applicable_no_provider_retry";
+  const retryContext = {
+    retry_recovered: retryRecovered.length > 0,
+    retry_exhausted: retryExhausted.length > 0,
+    qa_hard_fail: qaHardFail.length > 0,
+    validator_hard_gate_fail_edge: validatorHardGate.length > 0,
+    evidence_codes: evidenceCodes,
+  };
+  const telemetryRecords = records.map((item) => {
+    const text = warningRecordText(item);
+    return {
+      source: item.source,
+      code: item.code,
+      retry_recovered: /text_model_network_retry_recovered|retry_recovered=true|retry recovered/i.test(text),
+      retry_exhausted: /retry_exhausted\s*[:=]\s*true/i.test(text),
+      qa_hard_fail: /text_model_qa_no_local_fallback_blocked|qa_no_local_fallback\s*[:=]\s*true/i.test(text),
+      attempts: firstNumberMatch(text, /(?:attempts|attempt_count)\s*[:=]\s*(\d+)/i),
+      max_attempts: firstNumberMatch(text, /max_attempts\s*[:=]\s*(\d+)/i),
+      elapsed_bucket: firstStringMatch(text, /elapsed_bucket\s*[:=]\s*([A-Za-z0-9_-]+)/i) || null,
+      error_category: firstStringMatch(text, /error_category\s*[:=]\s*([A-Za-z0-9_-]+)/i) || null,
+      raw_values_redacted: true,
+    };
+  }).filter((item) =>
+    item.retry_recovered ||
+    item.retry_exhausted ||
+    item.qa_hard_fail ||
+    item.attempts !== null ||
+    item.elapsed_bucket !== null ||
+    item.error_category !== null,
+  );
   return {
     retry_recovered: retryRecovered.length > 0,
     retry_recovered_count: retryRecovered.length,
@@ -947,11 +1209,128 @@ function collectRetryTimelineEvidence(traces) {
     qa_hard_fail: qaHardFail.length > 0,
     fallback_used: fallbackUsedTrue.length > 0,
     local_candidate: localCandidateTrue.length > 0,
-    attempts_observed: Array.from(new Set(attemptValues)),
-    elapsed_buckets: Array.from(new Set(elapsedBuckets)),
-    error_categories: Array.from(new Set(errorCategories)),
-    evidence_codes: Array.from(new Set(records.map((item) => item.code).filter(Boolean))),
+    attempts_observed: attemptsObserved,
+    max_attempts_observed: maxAttemptsObserved,
+    elapsed_buckets: elapsedBucketsObserved,
+    attempts_observed_missing_reason: retryTelemetryMissingReason("attempts", attemptsObserved, retryContext),
+    elapsed_buckets_missing_reason: retryTelemetryMissingReason("elapsed_bucket", elapsedBucketsObserved, retryContext),
+    error_categories: uniqueStrings(errorCategories),
+    evidence_codes: evidenceCodes,
+    telemetry_records: telemetryRecords,
+    validator_hard_gate_fail_edge: validatorHardGate.length > 0,
+    qa_hard_fail_edge: qaHardFail.length > 0,
+    provider_retry_exhausted_hard_fail_edge: retryExhausted.length > 0,
+    legacy_provider_retry_exhausted_hard_fail_edge: false,
+    provider_retry_observed: providerRetryObserved,
+    provider_retry_classification: providerRetryClassification,
+    provider_retry_telemetry_format: "current",
+    provider_attempt_metadata_status: attemptsObserved.length || elapsedBucketsObserved.length
+      ? "observed"
+      : retryExhausted.length > 0
+        ? "missing_from_provider_retry_warning"
+        : qaHardFail.length > 0 && validatorHardGate.length > 0
+          ? "not_applicable_validator_hard_gate_qa_hard_fail_without_provider_transport_retry"
+          : "not_applicable_no_provider_retry",
+    raw_values_redacted: true,
   };
+}
+
+function classifyProviderAvailability(warningText, retryTimeline) {
+  const text = String(warningText ?? "");
+  const lower = text.toLowerCase();
+  const retryCategories = asArray(retryTimeline?.error_categories);
+  const categoryText = retryCategories.join(" ").toLowerCase();
+  const statusMatch = lower.match(/(?:http\s*status|status|http_status|http)[^\d]{0,16}(\d{3})/) ??
+    lower.match(/\b(4\d\d|5\d\d)\b/);
+  const httpStatus = statusMatch ? Number(statusMatch[1]) : null;
+  const categoryAndCode = (() => {
+    if (/model[_\s-]?not[_\s-]?found|model.*(?:does not exist|not found)|no such model/.test(lower)) {
+      return ["model_not_found", "model_not_found", true];
+    }
+    if (/entitlement|permission denied|access denied|not authorized|unauthorized|no permission/.test(lower)) {
+      return ["entitlement", "permission_or_entitlement", true];
+    }
+    if (/quota|insufficient[_\s-]?quota|billing|balance|rate[_\s-]?limit|too many requests/.test(lower)) {
+      return ["quota", "quota_or_rate_limit", true];
+    }
+    if (httpStatus === 403 || retryCategories.includes("http_403") || /forbidden/.test(lower)) {
+      return ["http_403", "http_403", true];
+    }
+    if (/invalid[_\s-]?(?:parameter|param)|bad request|invalid request|invalid_argument/.test(lower) || retryCategories.includes("http_400")) {
+      return ["invalid_parameter", "invalid_parameter", true];
+    }
+    if (retryCategories.length) {
+      return [retryCategories[0], retryCategories[0], false];
+    }
+    if (retryTimeline?.retry_exhausted) {
+      return ["provider_retry_exhausted", "retry_exhausted", false];
+    }
+    return ["none", "none", false];
+  })();
+  const [errorCategory, errorCode, unavailable] = categoryAndCode;
+  return {
+    unavailable,
+    http_status: httpStatus,
+    error_category: errorCategory,
+    error_code: errorCode,
+    retry_error_categories: retryCategories,
+    raw_values_redacted: true,
+  };
+}
+
+function classifyRunnerFailureStage({
+  value,
+  providerHardFailFailures,
+  fallbackGateFailures,
+  fallbackGateEvidence,
+  scriptGoalFailures,
+  acceptedSnapshotFailures,
+  storyFactFrameFailures,
+  promptTextBoundaryFailures,
+  runtimeValidatorHardGateFailures,
+  validatorGateEvidence,
+  runnerAssertFailures,
+}) {
+  if (fallbackGateFailures.includes("qa_hard_fail_evidence_missing")) {
+    return input.expectedModelGateRole === "alias_compatibility_reference"
+      ? "alias_compatibility_reference_not_required_gate"
+      : "qa_hard_fail_evidence_missing";
+  }
+  const availability = fallbackGateEvidence.model_availability;
+  if (availability?.unavailable) {
+    return availability.error_category;
+  }
+  if (providerHardFailFailures.length) {
+    return "provider_retry_exhausted_hard_fail";
+  }
+  if (scriptGoalFailures.length) {
+    return "script_goal_hard_gate_fail";
+  }
+  if (runtimeValidatorHardGateFailures.length) {
+    return "validator_hard_gate_fail";
+  }
+  if (
+    validatorGateEvidence.validator_gate_present === true &&
+    validatorGateEvidence.validator_gate_passed !== true
+  ) {
+    return "validator_hard_gate_fail";
+  }
+  if (asArray(validatorGateEvidence.validator_gate_failures).length) {
+    return "validator_hard_gate_fail";
+  }
+  if (promptTextBoundaryFailures.length) {
+    return "prompt_text_boundary";
+  }
+  if (acceptedSnapshotFailures.length || storyFactFrameFailures.length) {
+    return "story_fact_frame_or_accepted_snapshot_hard_gate_fail";
+  }
+  if (fallbackGateFailures.some((failure) => /fallback|local_candidate|http_403|validator_pseudo_success/i.test(failure))) {
+    return "fallback_or_provider_hard_gate_fail";
+  }
+  if (runnerAssertFailures.length) {
+    return "contract_hard_gate_fail";
+  }
+  return value?.stage;
 }
 
 function collectQaProxyEvidence(traces) {
@@ -967,10 +1346,6 @@ function collectQaProxyEvidence(traces) {
     app_process_env_proxy_cleared: records.length > 0 && !processEnvProxyPresent,
     raw_values_redacted: true,
   };
-}
-
-function uniqueStrings(values) {
-  return Array.from(new Set(values.map((value) => String(value ?? "")).filter((value) => value.trim())));
 }
 
 function collectNormalizerActions(traces) {
@@ -1080,6 +1455,9 @@ function compactModelOutputContractEvidence({
     contract_kind: "structural_safety_contract_not_creative_style_template",
     provider: value?.expectedProvider ?? input.expectedProvider,
     model: value?.expectedModel ?? input.expectedModel,
+    model_gate_role: input.expectedModelGateRole,
+    required_gate_model: input.expectedModelGateRole === "required_text_gate_model",
+    alias_compatibility_reference: input.expectedModelGateRole === "alias_compatibility_reference",
     script_goal: value?.scriptGoal ?? input.scriptGoal,
     scene_type: storyFactFrameEvidence?.scene_type ?? "",
     duration: storyFactFrameEvidence?.duration_seconds ?? null,
@@ -1109,6 +1487,31 @@ function compactModelOutputContractEvidence({
       local_candidate: fallbackGateEvidence.local_candidate,
       no_http_403: fallbackGateEvidence.no_http_403,
     },
+    provider_retry_evidence: {
+      retry_recovered: fallbackGateEvidence.retry_recovered,
+      retry_recovered_count: fallbackGateEvidence.retry_recovered_count,
+      retry_exhausted: fallbackGateEvidence.retry_exhausted,
+      retry_exhausted_count: fallbackGateEvidence.retry_exhausted_count,
+      qa_hard_fail: fallbackGateEvidence.qa_hard_fail,
+      attempts_observed: fallbackGateEvidence.attempts_observed,
+      max_attempts_observed: fallbackGateEvidence.max_attempts_observed,
+      elapsed_buckets: fallbackGateEvidence.elapsed_buckets,
+      attempts_observed_missing_reason: fallbackGateEvidence.attempts_observed_missing_reason,
+      elapsed_buckets_missing_reason: fallbackGateEvidence.elapsed_buckets_missing_reason,
+      validator_hard_gate_fail_edge: fallbackGateEvidence.validator_hard_gate_fail_edge,
+      qa_hard_fail_edge: fallbackGateEvidence.qa_hard_fail_edge,
+      provider_retry_exhausted_hard_fail_edge: fallbackGateEvidence.provider_retry_exhausted_hard_fail_edge,
+      legacy_provider_retry_exhausted_hard_fail_edge: fallbackGateEvidence.legacy_provider_retry_exhausted_hard_fail_edge,
+      provider_retry_observed: fallbackGateEvidence.provider_retry_observed,
+      provider_retry_classification: fallbackGateEvidence.provider_retry_classification,
+      provider_retry_telemetry_format: fallbackGateEvidence.provider_retry_telemetry_format,
+      provider_attempt_metadata_status: fallbackGateEvidence.provider_attempt_metadata_status,
+      provider_error_category: fallbackGateEvidence.provider_error_category,
+      provider_http_status: fallbackGateEvidence.provider_http_status,
+      fallback_used: fallbackGateEvidence.fallback_used,
+      local_candidate: fallbackGateEvidence.local_candidate,
+      raw_values_redacted: true,
+    },
     validator_status: hardGateFailureList.length === 0 ? "passed" : "hard_fail",
     validator_gate_status: validatorGateEvidence.validator_gate_passed === true ? "passed" : "hard_fail",
     hard_gate_failures: hardGateFailureList,
@@ -1128,20 +1531,37 @@ function compactModelOutputContractEvidence({
 function compactModelCertificationSummary(contractEvidence) {
   const failures = asArray(contractEvidence.hard_gate_failures);
   const hasFailure = (pattern) => failures.some((failure) => pattern.test(String(failure)));
+  const sourceFactBindingBlocked = contractEvidence.source_fact_binding_status === "hard_fail" ||
+    hasFailure(/story_fact_frame|missing_source_facts|forbidden_fact_hits|stale_binding/i);
+  const promptBoundaryBlocked = contractEvidence.prompt_boundary_status === "hard_fail" ||
+    hasFailure(/prompt_text/i);
+  const fallbackBlocked = contractEvidence.fallback_status === "hard_fail" ||
+    hasFailure(/fallback|local_candidate/i);
+  const outputContractBlocked = contractEvidence.validator_status === "hard_fail" ||
+    contractEvidence.validator_gate_status === "hard_fail" ||
+    hasFailure(/rows_mismatch|accepted_snapshot|duration|scene_type|validator_hard_gate_fail/i);
+  const outputContractReady = failures.length === 0 &&
+    !sourceFactBindingBlocked &&
+    !promptBoundaryBlocked &&
+    !fallbackBlocked &&
+    !outputContractBlocked;
   const qualityWarningOnly = failures.length === 0 && asArray(contractEvidence.quality_warnings).length > 0;
   return {
     provider: contractEvidence.provider,
     model: contractEvidence.model,
-    output_contract_ready: failures.length === 0,
-    storyboard_gate_ready: failures.length === 0,
+    model_gate_role: contractEvidence.model_gate_role,
+    required_gate_model: contractEvidence.required_gate_model,
+    alias_compatibility_reference: contractEvidence.alias_compatibility_reference,
+    output_contract_ready: outputContractReady,
+    storyboard_gate_ready: outputContractReady,
     prompt_text_gate_ready: contractEvidence.prompt_boundary_status === "passed",
-    current_gate_candidate: failures.length === 0 && contractEvidence.fallback_status === "passed",
-    blocked_by_provider: hasFailure(/provider|http_403|qa_hard_fail/i),
+    current_gate_candidate: contractEvidence.required_gate_model === true && outputContractReady,
+    blocked_by_provider: hasFailure(/provider|http_403|qa_hard_fail|model_not_found|entitlement|quota|invalid_parameter/i),
     blocked_by_format: hasFailure(/response_invalid|schema|validator_gate_missing/i),
-    blocked_by_fact_binding: hasFailure(/story_fact_frame|missing_source_facts|forbidden_fact_hits|stale_binding/i),
-    blocked_by_prompt_boundary: hasFailure(/prompt_text/i),
-    blocked_by_output_contract: hasFailure(/rows_mismatch|accepted_snapshot|duration|scene_type/i),
-    blocked_by_fallback: hasFailure(/fallback|local_candidate/i),
+    blocked_by_fact_binding: sourceFactBindingBlocked,
+    blocked_by_prompt_boundary: promptBoundaryBlocked,
+    blocked_by_output_contract: outputContractBlocked,
+    blocked_by_fallback: fallbackBlocked,
     blocked_by_quality_warning_only: qualityWarningOnly,
   };
 }
@@ -1159,11 +1579,32 @@ function compactFallbackGateEvidence(value, validatorGateEvidence, promptTextBou
   const rowDiffs = asArray(validatorGateEvidence.row_diffs);
   const liveFallbackSignals = collectLiveFallbackSignals(traces);
   const retryTimeline = collectRetryTimelineEvidence(traces);
+  const modelAvailability = classifyProviderAvailability(warningText, retryTimeline);
   return {
     no_http_403: !/(^|\D)403(\D|$)|http_403|forbidden/i.test(warningText),
     no_live_fallback: liveFallbackSignals.length === 0,
     live_fallback_signals: liveFallbackSignals,
     retry_timeline: retryTimeline,
+    retry_recovered_count: retryTimeline.retry_recovered_count,
+    retry_exhausted_count: retryTimeline.retry_exhausted_count,
+    attempts_observed: retryTimeline.attempts_observed,
+    max_attempts_observed: retryTimeline.max_attempts_observed,
+    elapsed_buckets: retryTimeline.elapsed_buckets,
+    attempts_observed_missing_reason: retryTimeline.attempts_observed_missing_reason,
+    elapsed_buckets_missing_reason: retryTimeline.elapsed_buckets_missing_reason,
+    validator_hard_gate_fail_edge: retryTimeline.validator_hard_gate_fail_edge,
+    qa_hard_fail_edge: retryTimeline.qa_hard_fail_edge,
+    provider_retry_exhausted_hard_fail_edge: retryTimeline.provider_retry_exhausted_hard_fail_edge,
+    legacy_provider_retry_exhausted_hard_fail_edge: retryTimeline.legacy_provider_retry_exhausted_hard_fail_edge,
+    provider_retry_observed: retryTimeline.provider_retry_observed,
+    provider_retry_classification: retryTimeline.provider_retry_classification,
+    provider_retry_telemetry_format: retryTimeline.provider_retry_telemetry_format,
+    provider_attempt_metadata_status: retryTimeline.provider_attempt_metadata_status,
+    model_availability: modelAvailability,
+    model_unavailable: modelAvailability.unavailable,
+    provider_error_category: modelAvailability.error_category,
+    provider_error_code: modelAvailability.error_code,
+    provider_http_status: modelAvailability.http_status,
     qa_proxy_evidence: collectQaProxyEvidence(traces),
     qa_hard_fail: retryTimeline.qa_hard_fail,
     retry_recovered: retryTimeline.retry_recovered,
@@ -1192,7 +1633,7 @@ try {
     expression: browserWorkflowExpression(input),
     awaitPromise: true,
     returnByValue: true,
-    timeout: 240000,
+    timeout: 480000,
   });
   if (evaluation.exceptionDetails) {
     throw new Error(JSON.stringify(evaluation.exceptionDetails));
@@ -1204,20 +1645,30 @@ try {
   const storyFactFrameEvidence = compactStoryFactFrameEvidence(value);
   const promptTextBoundaryEvidence = compactPromptTextBoundaryEvidence(value);
   const promptTextBoundaryFailures = compactPromptTextBoundaryFailures(promptTextBoundaryEvidence);
+  const blockedRuntimeEvidence = compactBlockedRuntimeEvidence(value?.generateTrace);
   const fallbackGateEvidence = compactFallbackGateEvidence(value, validatorGateEvidence, promptTextBoundaryEvidence);
   const creativeFreedomEvidence = compactCreativeFreedomEvidence(value, promptTextBoundaryEvidence);
+  const traces = [value?.expandTrace, value?.generateTrace].filter(Boolean);
   const providerHardFailFailures = compactProviderHardFailFailures(fallbackGateEvidence);
+  const providerAvailabilityFailures = compactProviderAvailabilityFailures(fallbackGateEvidence);
+  const runtimeValidatorHardGateFailures = compactRuntimeValidatorHardGateFailures(traces);
+  const scriptGoalFailures = compactScriptGoalFailures(scriptGoalEvidence);
+  const acceptedSnapshotFailures = compactAcceptedSnapshotFailures(acceptedSnapshotEvidence);
+  const storyFactFrameFailures = compactStoryFactFrameFailures(storyFactFrameEvidence);
+  const fallbackGateFailures = compactFallbackGateFailures(fallbackGateEvidence);
   const downstreamGateFailures = fallbackGateEvidence.qa_hard_fail
     ? []
     : [
-        ...compactAcceptedSnapshotFailures(acceptedSnapshotEvidence),
-        ...compactStoryFactFrameFailures(storyFactFrameEvidence),
+        ...acceptedSnapshotFailures,
+        ...storyFactFrameFailures,
         ...promptTextBoundaryFailures,
       ];
   const assertGateFailures = [
-    ...compactScriptGoalFailures(scriptGoalEvidence),
+    ...scriptGoalFailures,
+    ...runtimeValidatorHardGateFailures,
     ...downstreamGateFailures,
-    ...compactFallbackGateFailures(fallbackGateEvidence),
+    ...fallbackGateFailures,
+    ...providerAvailabilityFailures,
     ...providerHardFailFailures,
   ];
   const runnerAssertFailures = input.assertBinding ? Array.from(new Set(assertGateFailures)) : [];
@@ -1235,11 +1686,21 @@ try {
   });
   const modelCertificationSummary = compactModelCertificationSummary(modelOutputContractEvidence);
   const resultOk = runnerAssertFailures.length ? false : value?.ok;
-  const resultStage = providerHardFailFailures.length
-    ? "provider_hard_fail"
-    : runnerAssertFailures.length
-      ? "prompt_text_boundary"
-      : value?.stage;
+  const resultStage = runnerAssertFailures.length
+    ? classifyRunnerFailureStage({
+        value,
+        providerHardFailFailures,
+        fallbackGateFailures,
+        fallbackGateEvidence,
+        scriptGoalFailures,
+        acceptedSnapshotFailures,
+        storyFactFrameFailures,
+        promptTextBoundaryFailures,
+        runtimeValidatorHardGateFailures,
+        validatorGateEvidence,
+        runnerAssertFailures,
+      })
+    : value?.stage;
   const payload = args.compact
     ? {
         cdp_target: { id: cdp.target.id, url: cdp.target.url, title: cdp.target.title },
@@ -1259,6 +1720,9 @@ try {
           script_goal_evidence: scriptGoalEvidence,
           expectedProvider: value?.expectedProvider,
           expectedModel: value?.expectedModel,
+          expectedModelGateRole: input.expectedModelGateRole,
+          requiredTextGateModels: input.requiredTextGateModels,
+          aliasCompatibilityModels: input.aliasCompatibilityModels,
           allowedModels: value?.allowedModels,
           modelPriority: value?.modelPriority,
           validator_gate_evidence: validatorGateEvidence,
@@ -1266,6 +1730,7 @@ try {
           story_fact_frame_binding_evidence: storyFactFrameEvidence,
           prompt_text_boundary_evidence: promptTextBoundaryEvidence,
           prompt_text_boundary_failures: promptTextBoundaryFailures,
+          blocked_runtime_evidence: blockedRuntimeEvidence,
           fallback_gate_evidence: fallbackGateEvidence,
           model_output_contract_evidence: modelOutputContractEvidence,
           model_certification_summary: modelCertificationSummary,
@@ -1278,6 +1743,26 @@ try {
           prompt_boundary_status: modelOutputContractEvidence.prompt_boundary_status,
           fallback_status: modelOutputContractEvidence.fallback_status,
           retry_timeline_artifact: fallbackGateEvidence.retry_timeline,
+          retry_recovered_count: fallbackGateEvidence.retry_recovered_count,
+          retry_exhausted: fallbackGateEvidence.retry_exhausted,
+          retry_exhausted_count: fallbackGateEvidence.retry_exhausted_count,
+          attempts_observed: fallbackGateEvidence.attempts_observed,
+          max_attempts_observed: fallbackGateEvidence.max_attempts_observed,
+          elapsed_buckets: fallbackGateEvidence.elapsed_buckets,
+          attempts_observed_missing_reason: fallbackGateEvidence.attempts_observed_missing_reason,
+          elapsed_buckets_missing_reason: fallbackGateEvidence.elapsed_buckets_missing_reason,
+          validator_hard_gate_fail_edge: fallbackGateEvidence.validator_hard_gate_fail_edge,
+          qa_hard_fail_edge: fallbackGateEvidence.qa_hard_fail_edge,
+          provider_retry_exhausted_hard_fail_edge: fallbackGateEvidence.provider_retry_exhausted_hard_fail_edge,
+          legacy_provider_retry_exhausted_hard_fail_edge: fallbackGateEvidence.legacy_provider_retry_exhausted_hard_fail_edge,
+          provider_retry_observed: fallbackGateEvidence.provider_retry_observed,
+          provider_retry_classification: fallbackGateEvidence.provider_retry_classification,
+          provider_retry_telemetry_format: fallbackGateEvidence.provider_retry_telemetry_format,
+          provider_attempt_metadata_status: fallbackGateEvidence.provider_attempt_metadata_status,
+          model_availability: fallbackGateEvidence.model_availability,
+          provider_error_category: fallbackGateEvidence.provider_error_category,
+          provider_error_code: fallbackGateEvidence.provider_error_code,
+          provider_http_status: fallbackGateEvidence.provider_http_status,
           qa_proxy_evidence: fallbackGateEvidence.qa_proxy_evidence,
           no_http_403: fallbackGateEvidence.no_http_403,
           no_live_fallback: fallbackGateEvidence.no_live_fallback,
@@ -1311,6 +1796,7 @@ try {
                 validator_gate_failures: validatorGateEvidence.validator_gate_failures,
                 row_diffs: validatorGateEvidence.row_diffs,
                 binding_evidence: compactBindingEvidence(value.generateTrace.binding_evidence),
+                blocked_runtime_evidence: blockedRuntimeEvidence,
                 ui_rows: (value.generateTrace.ui_rows ?? []).map((row) => ({
                   order: row.order,
                   person: row.person,

@@ -387,6 +387,8 @@ const LIVE_PERSON_SOURCE_FRAGMENT_TERMS: &[&str] = &[
     "忽然",
     "终于",
     "初立",
+    "初峙",
+    "初现",
     "后迅速",
     "那里有",
     "那里",
@@ -435,8 +437,17 @@ const LIVE_PERSON_SOURCE_FRAGMENT_TERMS: &[&str] = &[
     "指节",
     "膝盖",
 ];
-const LIVE_PERSON_ACTION_STATE_FRAGMENT_TERMS: &[&str] =
-    &["准备反击", "反击准备", "准备反", "坚持", "坚定"];
+const LIVE_PERSON_ACTION_STATE_FRAGMENT_TERMS: &[&str] = &[
+    "准备反击",
+    "反击准备",
+    "准备反",
+    "坚持",
+    "坚定",
+    "喘息",
+    "喘息声",
+    "急喘",
+    "低喘",
+];
 const LIVE_PERSON_SOURCE_BOUND_STATE_SUBJECT_TERMS: &[&str] = &["紧张", "坚毅"];
 const PRODUCT_OUTPUT_FORBIDDEN_FRAGMENT_TERMS: &[&str] = &["关系保"];
 const EXPAND_SCRIPT_FORBIDDEN_ADDED_IDENTITY_TERMS: &[&str] = &[
@@ -1168,6 +1179,8 @@ pub fn generate_storyboard(
     let mut rows = Vec::new();
     let mut deterministic_rows = Vec::new();
     let mut warnings = Vec::new();
+    let mut raw_patch_rows = Vec::new();
+    let mut patch_repaired_rows = Vec::new();
     let (provider, session_api_key) = current_text_model_provider(state);
     let generation_request = build_text_generation_request(
         TextGenerationTask::GenerateStoryboard,
@@ -1300,26 +1313,34 @@ pub fn generate_storyboard(
             apply_live_storyboard_patch(&mut row, patch, &deterministic_row);
         }
         normalize_storyboard_row_subject_quality(&mut row);
+        raw_patch_rows.push(row.clone());
         repair_live_storyboard_patch_from_baseline(&mut row, &deterministic_row);
         normalize_storyboard_row_subject_quality(&mut row);
         repair_b_sandbox_strategy_storyboard_row_if_needed(&mut row);
+        patch_repaired_rows.push(row.clone());
         rows.push(row);
     }
 
     diversify_repeated_storyboard_subjects(&mut deterministic_rows);
     diversify_repeated_storyboard_subjects(&mut rows);
+    let mut validator_deterministic_rows = deterministic_rows.clone();
+    repair_storyboard_rows_from_binding_context(
+        &mut validator_deterministic_rows,
+        &request,
+        &grounding,
+    );
 
     if !live_row_patches.is_empty() {
         let mut live_repair_summary = LiveRepairSummary::default();
         let pre_repair_findings = validate_live_storyboard_rows(
             &rows,
             request.selected_total_duration_seconds,
-            &deterministic_rows,
+            &validator_deterministic_rows,
         );
         live_repair_summary.raw_failed_validator = !pre_repair_findings.is_empty();
         live_repair_summary.extend(repair_live_storyboard_rows_from_source(
             &mut rows,
-            &deterministic_rows,
+            &validator_deterministic_rows,
         ));
         live_repair_summary.extend(repair_storyboard_rows_from_binding_context(
             &mut rows, &request, &grounding,
@@ -1328,11 +1349,25 @@ pub fn generate_storyboard(
         let live_validator_findings = validate_live_storyboard_rows(
             &rows,
             request.selected_total_duration_seconds,
-            &deterministic_rows,
+            &validator_deterministic_rows,
         );
         if !live_validator_findings.is_empty() {
             if qa_no_local_fallback_enabled() {
+                let live_blocked_diag_warnings = blocked_runtime_diagnostic_warnings(
+                    &request,
+                    &grounding,
+                    &row_durations,
+                    &live_row_patches,
+                    &validator_deterministic_rows,
+                    &raw_patch_rows,
+                    &patch_repaired_rows,
+                    &rows,
+                    &live_repair_summary,
+                    &pre_repair_findings,
+                    &live_validator_findings,
+                );
                 let mut blockers = live_validator_findings;
+                blockers.extend(live_blocked_diag_warnings);
                 blockers.push(ProductWarning {
                     code: "text_model_live_storyboard_validator_hard_fail".to_string(),
                     message: "qa_no_local_fallback=true; live storyboard failed validator; fallback_used=false; local_candidate=false; raw_values_redacted=true".to_string(),
@@ -2846,6 +2881,440 @@ fn live_repair_warning(code: &str, summary: &LiveRepairSummary) -> ProductWarnin
         ),
         related_sample_id: None,
     }
+}
+
+fn sanitize_blocked_runtime_diag_value(value: &str) -> String {
+    sanitize_product_body_text(value)
+        .replace(';', "_")
+        .replace('=', "_")
+        .chars()
+        .take(48)
+        .collect()
+}
+
+fn storyboard_row_field_value<'a>(row: &'a GeneratedStoryboardRow, field_name: &str) -> &'a str {
+    match field_name {
+        "person" => row.person.as_str(),
+        "shot_title" => row.shot_title.as_str(),
+        "visual_description" => row.visual_description.as_str(),
+        "character_action" => row.character_action.as_str(),
+        "camera_movement" => row.camera_movement.as_str(),
+        _ => "",
+    }
+}
+
+fn blocked_runtime_field_classification(
+    row: &GeneratedStoryboardRow,
+    field_name: &str,
+    source_text: &str,
+) -> (String, String) {
+    let field_value = storyboard_row_field_value(row, field_name);
+    let trimmed = field_value.trim();
+    if trimmed.is_empty() {
+        return ("empty".to_string(), String::new());
+    }
+    if let Some(label) = live_field_visual_or_abstract_subject_term(field_name, field_value) {
+        return (
+            "visual_or_abstract_subject".to_string(),
+            sanitize_blocked_runtime_diag_value(label),
+        );
+    }
+    if let Some(label) = live_field_source_fragment_subject_term(field_name, field_value) {
+        return (
+            "source_fragment_subject".to_string(),
+            sanitize_blocked_runtime_diag_value(label),
+        );
+    }
+    if storyboard_field_has_source_external_drift(field_value, source_text) {
+        return ("source_external_drift".to_string(), String::new());
+    }
+    if field_name == "character_action" && is_role_action_grounding_incomplete(field_value) {
+        return ("role_action_incomplete".to_string(), String::new());
+    }
+    if field_name == "visual_description"
+        && is_visual_description_grounding_incomplete(
+            field_value,
+            &row.person,
+            &row.scene_scale,
+            &row.character_action,
+            &row.camera_movement,
+            &row.shot_script,
+        )
+    {
+        return ("visual_description_incomplete".to_string(), String::new());
+    }
+    if field_name == "camera_movement"
+        && is_camera_movement_grounding_incomplete(
+            field_value,
+            &row.shot_title,
+            &row.scene_scale,
+            &row.visual_description,
+            &row.shot_script,
+        )
+    {
+        return ("camera_movement_incomplete".to_string(), String::new());
+    }
+    ("grounded".to_string(), String::new())
+}
+
+fn blocked_runtime_person_classification(
+    candidate: &str,
+    evidence: &str,
+    baseline_person: &str,
+) -> (String, String, bool, String) {
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() {
+        return ("empty".to_string(), String::new(), true, String::new());
+    }
+    if let Some(label) = live_person_visual_or_abstract_term(trimmed) {
+        return (
+            "visual_or_abstract_subject".to_string(),
+            sanitize_blocked_runtime_diag_value(label),
+            true,
+            String::new(),
+        );
+    }
+    if let Some(normalized) =
+        normalize_live_character_label_to_source_subject(trimmed, evidence, baseline_person)
+    {
+        let grounded = live_source_subject_label_is_grounded(&normalized, evidence, baseline_person);
+        return (
+            if grounded {
+                "normalized_to_source_subject".to_string()
+            } else {
+                "normalized_but_ungrounded".to_string()
+            },
+            sanitize_blocked_runtime_diag_value(&normalized),
+            grounded,
+            sanitize_blocked_runtime_diag_value(&normalized),
+        );
+    }
+    if live_person_label_should_use_source_bound_repair(trimmed, evidence) {
+        return (
+            "source_bound_repair_needed".to_string(),
+            String::new(),
+            false,
+            String::new(),
+        );
+    }
+    if source_external_generic_role_subject(trimmed, evidence) {
+        return (
+            "source_external_generic_role".to_string(),
+            sanitize_blocked_runtime_diag_value(trimmed),
+            false,
+            String::new(),
+        );
+    }
+    let grounded = live_character_label_is_grounded(trimmed, evidence, baseline_person);
+    (
+        if grounded {
+            "grounded".to_string()
+        } else {
+            "ungrounded_character_candidate".to_string()
+        },
+        if grounded {
+            String::new()
+        } else {
+            sanitize_blocked_runtime_diag_value(trimmed)
+        },
+        grounded,
+        String::new(),
+    )
+}
+
+fn blocked_runtime_source_role_hit(candidate: &str, source_text: &str) -> bool {
+    let parts = split_live_subject_parts(candidate);
+    if parts.is_empty() {
+        return false;
+    }
+    let candidates = source_person_role_candidates(source_text);
+    parts
+        .into_iter()
+        .all(|part| candidates.iter().any(|candidate| candidate == part.trim()))
+}
+
+fn blocked_runtime_diagnostic_warnings(
+    request: &GenerateStoryboardRequest,
+    grounding: &StoryboardGroundingContext,
+    row_durations: &[u16],
+    live_row_patches: &[LiveStoryboardRowPatch],
+    baseline_rows: &[GeneratedStoryboardRow],
+    raw_patch_rows: &[GeneratedStoryboardRow],
+    patch_repaired_rows: &[GeneratedStoryboardRow],
+    repaired_rows: &[GeneratedStoryboardRow],
+    live_repair_summary: &LiveRepairSummary,
+    pre_repair_findings: &[ProductWarning],
+    post_repair_findings: &[ProductWarning],
+) -> Vec<ProductWarning> {
+    let mut warnings = Vec::new();
+    let duration_plan =
+        build_storyboard_duration_plan(request.selected_total_duration_seconds, row_durations);
+    let rows_hash = stable_hash_hex(&serialize_storyboard_rows(repaired_rows));
+    warnings.push(ProductWarning {
+        code: "qa_live_blocked_binding_diag".to_string(),
+        message: format!(
+            "current_case_id={};source_text_hash={};accepted_rewrite_hash={};task_script_hash={};story_fact_frame_hash={};source_profile={};scene_type={};duration_seconds={};duration_plan_hash={};storyboard_rows_hash={}",
+            sanitize_blocked_runtime_diag_value(&request.current_case_id),
+            sanitize_blocked_runtime_diag_value(&request.source_text_hash),
+            sanitize_blocked_runtime_diag_value(&request.accepted_rewrite_hash),
+            sanitize_blocked_runtime_diag_value(&request.task_script_hash),
+            sanitize_blocked_runtime_diag_value(&request.story_fact_frame_hash),
+            sanitize_blocked_runtime_diag_value(&infer_storyboard_source_profile(
+                &grounding.grounding_text,
+                &request.source_profile,
+            )),
+            sanitize_blocked_runtime_diag_value(&grounding.shot_scene_type),
+            request.selected_total_duration_seconds,
+            stable_binding_hash_value(&duration_plan),
+            sanitize_blocked_runtime_diag_value(&rows_hash),
+        ),
+        related_sample_id: None,
+    });
+
+    let prompt_text_rows = repaired_rows
+        .iter()
+        .filter(|row| !row.prompt_text.trim().is_empty())
+        .count();
+    let prompt_text_blob = repaired_rows
+        .iter()
+        .map(|row| row.prompt_text.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    warnings.push(ProductWarning {
+        code: "qa_live_blocked_prompt_diag".to_string(),
+        message: format!(
+            "row_count={};prompt_text_present={};prompt_text_nonempty_rows={};prompt_text_hash={}",
+            repaired_rows.len(),
+            (!prompt_text_blob.is_empty()),
+            prompt_text_rows,
+            if prompt_text_blob.is_empty() {
+                String::new()
+            } else {
+                stable_binding_hash_json(&prompt_text_blob)
+            },
+        ),
+        related_sample_id: None,
+    });
+
+    let mut pre_codes = pre_repair_findings
+        .iter()
+        .map(|warning| sanitize_repair_reason_code(&warning.code))
+        .filter(|code| !code.is_empty())
+        .collect::<Vec<_>>();
+    pre_codes.sort();
+    pre_codes.dedup();
+    let mut post_codes = post_repair_findings
+        .iter()
+        .map(|warning| sanitize_repair_reason_code(&warning.code))
+        .filter(|code| !code.is_empty())
+        .collect::<Vec<_>>();
+    post_codes.sort();
+    post_codes.dedup();
+    let repair_reasons = if live_repair_summary.reasons.is_empty() {
+        "none".to_string()
+    } else {
+        live_repair_summary
+            .reasons
+            .iter()
+            .map(|reason| sanitize_repair_reason_code(reason))
+            .filter(|reason| !reason.is_empty())
+            .collect::<Vec<_>>()
+            .join("|")
+    };
+    warnings.push(ProductWarning {
+        code: "qa_live_blocked_repair_diag".to_string(),
+        message: format!(
+            "stage=repair_live_storyboard_patch_from_baseline_then_repair_storyboard_external_drift_fields_then_validate_live_storyboard_rows;raw_failed_validator={};repair_reasons={};pre_codes={};post_codes={}",
+            live_repair_summary.raw_failed_validator,
+            repair_reasons,
+            if pre_codes.is_empty() {
+                "none".to_string()
+            } else {
+                pre_codes.join("|")
+            },
+            if post_codes.is_empty() {
+                "none".to_string()
+            } else {
+                post_codes.join("|")
+            },
+        ),
+        related_sample_id: None,
+    });
+
+    for (index, post_row) in repaired_rows.iter().enumerate() {
+        let Some(baseline_row) = baseline_rows.get(index) else {
+            continue;
+        };
+        let Some(raw_patch_row) = raw_patch_rows.get(index) else {
+            continue;
+        };
+        let Some(pre_repair_row) = patch_repaired_rows.get(index) else {
+            continue;
+        };
+        let source_text = format!(
+            "{}\n{}",
+            baseline_row.shot_script, baseline_row.scene_performance_projection.fused_source_text
+        );
+        if let Some(live_patch) = live_row_patches.get(index) {
+            let raw_input_person = live_patch.person.trim();
+            let raw_bound_person = raw_patch_row.person.trim();
+            let pre_repair_person = pre_repair_row.person.trim();
+            let post_repair_person = post_row.person.trim();
+            let (baseline_class, baseline_label, _, _) = blocked_runtime_person_classification(
+                baseline_row.person.as_str(),
+                &source_text,
+                &baseline_row.person,
+            );
+            let (raw_input_class, raw_input_label, _, raw_input_normalized) =
+                blocked_runtime_person_classification(
+                    raw_input_person,
+                    &source_text,
+                    &baseline_row.person,
+                );
+            let (raw_bound_class, raw_bound_label, _, _) = blocked_runtime_person_classification(
+                raw_bound_person,
+                &source_text,
+                &baseline_row.person,
+            );
+            let (pre_repair_class, pre_repair_label, _, _) =
+                blocked_runtime_person_classification(
+                    pre_repair_person,
+                    &source_text,
+                    &baseline_row.person,
+                );
+            let (post_repair_class, post_repair_label, post_grounded, post_grounded_normalized) =
+                blocked_runtime_person_classification(
+                    post_repair_person,
+                    &source_text,
+                    &baseline_row.person,
+                );
+            let bound_person = bind_live_storyboard_person_to_source(raw_input_person, baseline_row);
+            let bind_source_role_hit =
+                blocked_runtime_source_role_hit(&bound_person, &source_text);
+            let post_untrusted = live_storyboard_row_untrusted_character_detail(post_row, baseline_row)
+                .map(
+                    |detail| {
+                        (
+                            detail.field.to_string(),
+                            sanitize_blocked_runtime_diag_value(&detail.candidate),
+                            sanitize_blocked_runtime_diag_value(&detail.normalized_candidate),
+                            detail.reason.to_string(),
+                        )
+                    },
+                )
+                .unwrap_or_else(|| {
+                    (
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                    )
+                });
+            let raw_input_hash = stable_binding_hash_json(raw_input_person);
+            let baseline_hash = stable_binding_hash_json(&baseline_row.person);
+            let raw_bound_hash = stable_binding_hash_json(raw_bound_person);
+            let pre_repair_hash = stable_binding_hash_json(pre_repair_person);
+            let post_repair_hash = stable_binding_hash_json(post_repair_person);
+            let patch_changed = raw_input_hash != raw_bound_hash;
+            let repair_changed = pre_repair_hash != post_repair_hash;
+            warnings.push(ProductWarning {
+                code: "qa_live_blocked_person_diag".to_string(),
+                message: format!(
+                    "row={};baseline_class={};baseline_label={};baseline_hash={};raw_input_class={};raw_input_label={};raw_input_hash={};raw_input_normalize_after={};raw_bound_class={};raw_bound_label={};raw_bound_hash={};pre_repair_class={};pre_repair_label={};pre_repair_hash={};post_repair_class={};post_repair_label={};post_repair_hash={};bind_source_role_hit={};bind_normalize_before={};bind_normalize_after={};post_grounded={};post_grounded_normalized={};post_untrusted_field={};post_untrusted_candidate={};post_untrusted_normalized={};post_untrusted_reason={};patch_changed={};repair_changed={}",
+                    post_row.order,
+                    baseline_class,
+                    baseline_label,
+                    baseline_hash,
+                    raw_input_class,
+                    raw_input_label,
+                    raw_input_hash,
+                    raw_input_normalized,
+                    raw_bound_class,
+                    raw_bound_label,
+                    raw_bound_hash,
+                    pre_repair_class,
+                    pre_repair_label,
+                    pre_repair_hash,
+                    post_repair_class,
+                    post_repair_label,
+                    post_repair_hash,
+                    bind_source_role_hit,
+                    sanitize_blocked_runtime_diag_value(raw_input_person),
+                    sanitize_blocked_runtime_diag_value(&bound_person),
+                    post_grounded,
+                    post_grounded_normalized,
+                    post_untrusted.0,
+                    post_untrusted.1,
+                    post_untrusted.2,
+                    post_untrusted.3,
+                    patch_changed,
+                    repair_changed,
+                ),
+                related_sample_id: Some(post_row.prompt_text_source_row_id.clone()),
+            });
+        }
+        for field_name in [
+            "shot_title",
+            "visual_description",
+            "character_action",
+            "camera_movement",
+        ] {
+            let (baseline_class, baseline_label) =
+                blocked_runtime_field_classification(baseline_row, field_name, &source_text);
+            let (raw_patch_class, raw_patch_label) =
+                blocked_runtime_field_classification(raw_patch_row, field_name, &source_text);
+            let (pre_repair_class, pre_repair_label) =
+                blocked_runtime_field_classification(pre_repair_row, field_name, &source_text);
+            let (post_repair_class, post_repair_label) =
+                blocked_runtime_field_classification(post_row, field_name, &source_text);
+
+            let baseline_hash = stable_binding_hash_json(storyboard_row_field_value(
+                baseline_row,
+                field_name,
+            ));
+            let raw_patch_hash =
+                stable_binding_hash_json(storyboard_row_field_value(raw_patch_row, field_name));
+            let pre_repair_hash =
+                stable_binding_hash_json(storyboard_row_field_value(pre_repair_row, field_name));
+            let post_repair_hash =
+                stable_binding_hash_json(storyboard_row_field_value(post_row, field_name));
+            let patch_changed = raw_patch_hash != pre_repair_hash;
+            let repair_changed = pre_repair_hash != post_repair_hash;
+
+            if patch_changed
+                || repair_changed
+                || post_repair_class != "grounded"
+                || raw_patch_class != "grounded"
+            {
+                warnings.push(ProductWarning {
+                    code: "qa_live_blocked_field_diag".to_string(),
+                    message: format!(
+                        "row={};field={};baseline_class={};baseline_label={};baseline_hash={};raw_patch_class={};raw_patch_label={};raw_patch_hash={};pre_repair_class={};pre_repair_label={};pre_repair_hash={};post_repair_class={};post_repair_label={};post_repair_hash={};patch_changed={};repair_changed={}",
+                        post_row.order,
+                        field_name,
+                        baseline_class,
+                        baseline_label,
+                        baseline_hash,
+                        raw_patch_class,
+                        raw_patch_label,
+                        raw_patch_hash,
+                        pre_repair_class,
+                        pre_repair_label,
+                        pre_repair_hash,
+                        post_repair_class,
+                        post_repair_label,
+                        post_repair_hash,
+                        patch_changed,
+                        repair_changed,
+                    ),
+                    related_sample_id: Some(post_row.prompt_text_source_row_id.clone()),
+                });
+            }
+        }
+    }
+
+    warnings
 }
 
 fn sanitize_repair_reason_code(reason: &str) -> String {
@@ -5045,6 +5514,10 @@ fn repair_live_storyboard_patch_from_baseline(
     row: &mut GeneratedStoryboardRow,
     baseline_row: &GeneratedStoryboardRow,
 ) {
+    let source_text = format!(
+        "{}\n{}",
+        baseline_row.shot_script, baseline_row.scene_performance_projection.fused_source_text
+    );
     if row.person.trim().is_empty() || storyboard_person_is_empty_shot_marker(&row.person) {
         row.person = baseline_row.person.clone();
     }
@@ -5056,10 +5529,22 @@ fn repair_live_storyboard_patch_from_baseline(
     if row.scene_scale.trim().is_empty() {
         row.scene_scale = baseline_row.scene_scale.clone();
     }
-    if row.shot_title.trim().is_empty() {
+    if row.shot_title.trim().is_empty()
+        || storyboard_field_needs_source_grounded_restore(
+            "shot_title",
+            &row.shot_title,
+            &source_text,
+        )
+    {
         row.shot_title = baseline_row.shot_title.clone();
     }
-    if is_role_action_grounding_incomplete(&row.character_action) {
+    if is_role_action_grounding_incomplete(&row.character_action)
+        || storyboard_field_needs_source_grounded_restore(
+            "character_action",
+            &row.character_action,
+            &source_text,
+        )
+    {
         row.character_action = baseline_row.character_action.clone();
         row.scene_performance_projection.character_action = baseline_row
             .scene_performance_projection
@@ -5083,6 +5568,10 @@ fn repair_live_storyboard_patch_from_baseline(
         &row.character_action,
         &row.camera_movement,
         &row.shot_script,
+    ) || storyboard_field_needs_source_grounded_restore(
+        "visual_description",
+        &row.visual_description,
+        &source_text,
     ) || (live_visual_was_normalized_to_a_ruin_repair && baseline_visual_keeps_a_ruin_facts)
     {
         row.visual_description = baseline_row.visual_description.clone();
@@ -5097,6 +5586,10 @@ fn repair_live_storyboard_patch_from_baseline(
         &row.scene_scale,
         &row.visual_description,
         &row.shot_script,
+    ) || storyboard_field_needs_source_grounded_restore(
+        "camera_movement",
+        &row.camera_movement,
+        &source_text,
     ) {
         row.camera_movement = baseline_row.camera_movement.clone();
     }
@@ -5188,6 +5681,12 @@ fn repair_storyboard_rows_from_binding_context(
         apply_storyboard_binding_source_fields_to_row(row, &anchors);
         apply_storyboard_binding_prompt_packaging(row, &anchors);
         scrub_storyboard_row_binding_forbidden_facts(row, &anchors);
+        if source_has_a_ruin_enemy_facts(&anchors.source_text)
+            && storyboard_row_needs_a_source_grounding_repair(row)
+        {
+            repair_a_ruin_enemy_storyboard_row(row);
+            summary.push_reason("visual_grounding_restored");
+        }
         if before != storyboard_row_repair_signature(row) {
             summary.push_reason("binding_story_fact_frame_restored");
         }
@@ -5580,13 +6079,13 @@ fn apply_storyboard_binding_source_fields_to_row(
         return;
     }
     rebind_storyboard_person_from_binding(row, anchors);
-    append_storyboard_binding_field_clause(
+    append_storyboard_binding_field_clause_safe(
         &mut row.visual_description,
         "场景锚点",
         &anchors.visual_description,
         5,
     );
-    append_storyboard_binding_field_clause(
+    append_storyboard_binding_field_clause_safe(
         &mut row.character_action,
         "表演锚点",
         &anchors.character_action,
@@ -5610,7 +6109,7 @@ fn apply_storyboard_binding_source_fields_to_row(
                 .join(" / ")
         );
     } else {
-        append_storyboard_binding_field_clause(
+        append_storyboard_binding_field_clause_safe(
             &mut row.camera_movement,
             "运动锚点",
             &anchors.camera_movement,
@@ -5668,6 +6167,7 @@ fn binding_person_anchor_for_row(
         .or_else(|| anchors.person.first().cloned())
 }
 
+#[allow(dead_code)]
 fn append_storyboard_binding_field_clause(
     field: &mut String,
     label: &str,
@@ -5684,6 +6184,29 @@ fn append_storyboard_binding_field_clause(
         return;
     }
     let clause = format!("{label}：{}", missing.join(" / "));
+    if field.trim().is_empty() {
+        *field = clause;
+    } else {
+        *field = format!("{}；{}", field.trim(), clause);
+    }
+}
+
+fn append_storyboard_binding_field_clause_safe(
+    field: &mut String,
+    label: &str,
+    facts: &[String],
+    limit: usize,
+) {
+    let missing = facts
+        .iter()
+        .filter(|fact| !binding_text_contains(field, fact))
+        .take(limit)
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return;
+    }
+    let clause = format!("{label}({})", missing.join(" / "));
     if field.trim().is_empty() {
         *field = clause;
     } else {
@@ -5910,11 +6433,15 @@ fn repair_storyboard_external_drift_fields(
     source_text: &str,
     summary: &mut LiveRepairSummary,
 ) {
-    if storyboard_field_has_source_external_drift(&row.shot_title, source_text) {
+    if storyboard_field_needs_source_grounded_restore("shot_title", &row.shot_title, source_text) {
         row.shot_title = baseline_row.shot_title.clone();
         summary.push_reason("source_external_field_rebound");
     }
-    if storyboard_field_has_source_external_drift(&row.visual_description, source_text) {
+    if storyboard_field_needs_source_grounded_restore(
+        "visual_description",
+        &row.visual_description,
+        source_text,
+    ) {
         row.visual_description = baseline_row.visual_description.clone();
         row.scene_performance_projection.visual_description = baseline_row
             .scene_performance_projection
@@ -5922,7 +6449,11 @@ fn repair_storyboard_external_drift_fields(
             .clone();
         summary.push_reason("source_external_field_rebound");
     }
-    if storyboard_field_has_source_external_drift(&row.character_action, source_text) {
+    if storyboard_field_needs_source_grounded_restore(
+        "character_action",
+        &row.character_action,
+        source_text,
+    ) {
         row.character_action = baseline_row.character_action.clone();
         row.scene_performance_projection.character_action = baseline_row
             .scene_performance_projection
@@ -5930,7 +6461,11 @@ fn repair_storyboard_external_drift_fields(
             .clone();
         summary.push_reason("source_external_field_rebound");
     }
-    if storyboard_field_has_source_external_drift(&row.camera_movement, source_text) {
+    if storyboard_field_needs_source_grounded_restore(
+        "camera_movement",
+        &row.camera_movement,
+        source_text,
+    ) {
         row.camera_movement = baseline_row.camera_movement.clone();
         summary.push_reason("source_external_field_rebound");
     }
@@ -5944,6 +6479,19 @@ fn storyboard_field_has_source_external_drift(value: &str, source_text: &str) ->
     generated_script_forbidden_external_setting_term(value, source_text).is_some()
         || generated_script_forbidden_military_scale_expansion_term(value, source_text).is_some()
         || generated_script_forbidden_external_action_term(value, source_text).is_some()
+}
+
+fn storyboard_field_needs_source_grounded_restore(
+    field_name: &str,
+    value: &str,
+    source_text: &str,
+) -> bool {
+    storyboard_field_has_source_external_drift(value, source_text)
+        || matches!(
+            field_name,
+            "shot_title" | "visual_description" | "character_action" | "camera_movement"
+        ) && (live_field_visual_or_abstract_subject_term(field_name, value).is_some()
+            || live_field_source_fragment_subject_term(field_name, value).is_some())
 }
 
 fn repair_storyboard_source_fragment_action_fields(
@@ -6060,6 +6608,13 @@ fn storyboard_row_needs_a_source_grounding_repair(row: &GeneratedStoryboardRow) 
             &row.scene_scale,
             &row.character_action,
             &row.camera_movement,
+            &row.shot_script,
+        )
+        || is_camera_movement_grounding_incomplete(
+            &row.camera_movement,
+            &row.shot_title,
+            &row.scene_scale,
+            &row.visual_description,
             &row.shot_script,
         )
 }
@@ -7335,6 +7890,11 @@ fn bind_live_storyboard_person_to_source(
         ),
     };
     let trimmed = candidate.trim();
+    if storyboard_person_is_empty_shot_marker(trimmed)
+        && !source_person_role_candidates(&source_text).is_empty()
+    {
+        return preferred_source_bound_subject_for_live_repair(baseline_row, &source_text);
+    }
     if let Some(bound_role) =
         canonicalize_environment_mixed_storyboard_person(trimmed, &source_text)
     {
@@ -7930,6 +8490,58 @@ fn live_storyboard_row_untrusted_character(
     row: &GeneratedStoryboardRow,
     baseline_row: &GeneratedStoryboardRow,
 ) -> Option<String> {
+    live_storyboard_row_untrusted_character_detail(row, baseline_row)
+        .map(|detail| detail.candidate)
+}
+
+struct LiveStoryboardUntrustedCharacterDetail {
+    field: &'static str,
+    candidate: String,
+    normalized_candidate: String,
+    reason: &'static str,
+}
+
+fn live_storyboard_field_character_candidate_is_noise(
+    field_name: &str,
+    candidate: &str,
+) -> bool {
+    let trimmed = candidate.trim();
+    trimmed.is_empty()
+        || (field_name == "shot_title"
+            && matches!(
+                trimmed,
+                "\u{5B9A}\u{57FA}" | "\u{5B9A}\u{52BF}"
+            ))
+}
+
+fn live_storyboard_field_character_candidates(field_name: &str, value: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if field_name == "person" {
+        for part in split_live_subject_parts(value) {
+            let name = trim_detected_character_name(&part);
+            if !live_storyboard_field_character_candidate_is_noise(field_name, &name)
+                && looks_like_potential_live_character_label(&name)
+            {
+                push_unique_fact(&mut candidates, name);
+            }
+        }
+    }
+    for character in CharacterRegistry::from_story_text(value, value).characters {
+        let name = trim_detected_character_name(&character.name);
+        if live_storyboard_field_character_candidate_is_noise(field_name, &name)
+            || !looks_like_potential_live_character_label(&name)
+        {
+            continue;
+        }
+        push_unique_fact(&mut candidates, name);
+    }
+    candidates
+}
+
+fn live_storyboard_row_untrusted_character_detail(
+    row: &GeneratedStoryboardRow,
+    baseline_row: &GeneratedStoryboardRow,
+) -> Option<LiveStoryboardUntrustedCharacterDetail> {
     let evidence = format!(
         "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         baseline_row.shot_script,
@@ -7942,31 +8554,38 @@ fn live_storyboard_row_untrusted_character(
         row.shot_script,
         row.scene_performance_projection.fused_source_text
     );
-    let live_text = format!(
-        "{}\n{}\n{}\n{}\n{}",
-        row.person,
-        row.shot_title,
-        row.visual_description,
-        row.character_action,
-        row.camera_movement
-    );
-    let mut candidates = Vec::new();
-    for character in CharacterRegistry::from_story_text(&live_text, &live_text).characters {
-        push_unique_fact(
-            &mut candidates,
-            trim_detected_character_name(&character.name),
-        );
-    }
-    for part in split_live_subject_parts(&row.person) {
-        let name = trim_detected_character_name(&part);
-        if looks_like_potential_live_character_label(&name) {
-            push_unique_fact(&mut candidates, name);
+    let source_bound_baseline_person =
+        preferred_source_bound_subject_for_live_repair(baseline_row, &evidence);
+    for (field_name, field_value) in [
+        ("person", row.person.as_str()),
+        ("shot_title", row.shot_title.as_str()),
+        ("visual_description", row.visual_description.as_str()),
+        ("character_action", row.character_action.as_str()),
+        ("camera_movement", row.camera_movement.as_str()),
+    ] {
+        for candidate in live_storyboard_field_character_candidates(field_name, field_value) {
+            if !live_character_label_is_grounded(
+                &candidate,
+                &evidence,
+                &source_bound_baseline_person,
+            ) {
+                let normalized_candidate =
+                    normalize_live_character_label_to_source_subject(
+                        &candidate,
+                        &evidence,
+                        &source_bound_baseline_person,
+                    )
+                    .unwrap_or_default();
+                return Some(LiveStoryboardUntrustedCharacterDetail {
+                    field: field_name,
+                    candidate,
+                    normalized_candidate,
+                    reason: "live_character_label_not_grounded",
+                });
+            }
         }
     }
-
-    candidates.into_iter().find(|candidate| {
-        !live_character_label_is_grounded(candidate, &evidence, &baseline_row.person)
-    })
+    None
 }
 
 fn split_live_subject_parts(value: &str) -> Vec<String> {
@@ -9945,6 +10564,8 @@ fn looks_like_name_noise_candidate(candidate: &str) -> bool {
             "那人",
             "终于",
             "初立",
+            "初峙",
+            "初现",
             "左边岔",
             "后迅速",
             "后提醒",
@@ -12106,6 +12727,15 @@ fn binding_source_fact_covered_by_rows(rows_text: &str, fact: &str) -> bool {
             && clean_rows.contains("敌人")
             && contains_any_story_term(&clean_rows, &["对峙", "对峙压力", "逼近", "缓步逼近"]);
     }
+    if binding_a_ruin_enemy_approach_fact(&clean_fact) {
+        return clean_rows.contains("敌人")
+            && contains_any_story_term(&clean_rows, &["敌人逼近", "缓步逼近", "逼近", "压近"]);
+    }
+    if binding_a_ruin_duel_pressure_fact(&clean_fact) {
+        return clean_rows.contains("主角")
+            && clean_rows.contains("敌人")
+            && contains_any_story_term(&clean_rows, &["对峙", "对峙压力", "逼近", "缓步逼近", "压近"]);
+    }
     false
 }
 
@@ -12149,6 +12779,14 @@ fn binding_b_alley_pursuit_sentence_atoms_covered(rows_text: &str) -> bool {
 
 fn binding_a_ruin_duel_relation_fact(fact: &str) -> bool {
     fact.contains("主角") && fact.contains("敌人") && fact.contains("对峙")
+}
+
+fn binding_a_ruin_enemy_approach_fact(fact: &str) -> bool {
+    fact.contains("敌人") && contains_any_story_term(fact, &["逼近", "缓步逼近", "压近"])
+}
+
+fn binding_a_ruin_duel_pressure_fact(fact: &str) -> bool {
+    contains_any_story_term(fact, &["对峙", "对峙压力"])
 }
 
 fn storyboard_rows_binding_text(rows: &[GeneratedStoryboardRow]) -> String {
@@ -13089,6 +13727,7 @@ mod tests {
         StoryboardGroundingContext, StoryboardPreviewPlanRequest,
         TEXT_MODEL_NETWORK_RETRY_RECOVERED_CODE, TEXT_MODEL_OUTPUT_CONTRACT_NORMALIZED_CODE,
         TEXT_MODEL_QA_NO_LOCAL_FALLBACK_CODE, ValidationExportPanelState,
+        append_storyboard_binding_field_clause_safe, binding_source_fact_covered_by_rows,
         allocate_storyboard_row_durations, apply_live_storyboard_patch,
         build_deterministic_expanded_story_material, build_deterministic_expanded_story_script,
         build_project_create_or_switch_snapshot_from_fixture, build_qwen_request_payload,
@@ -14948,6 +15587,30 @@ mod tests {
             !combined.contains("空镜"),
             "person-bound row fields should not keep 空镜 text: {combined}"
         );
+    }
+
+    #[test]
+    fn empty_shot_patch_rebinds_to_source_role_in_a_source_rows() {
+        let mut baseline = test_live_validation_row("\u{4E3B}\u{89D2}");
+        baseline.shot_script = "\u{5E9F}\u{589F}\u{4E4B}\u{4E0A}\u{FF0C}\u{4E3B}\u{89D2}\u{5355}\u{819D}\u{8DEA}\u{5730}\u{FF0C}\u{654C}\u{4EBA}\u{7F13}\u{6B65}\u{903C}\u{8FD1}\u{3002}".to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+        baseline.person = "\u{4E3B}\u{89D2}".to_string();
+        baseline.scene_performance_projection.person = "\u{4E3B}\u{89D2}".to_string();
+
+        let mut live_row = baseline.clone();
+        let patch = LiveStoryboardRowPatch {
+            shot_title: "\u{955C}\u{5934}1\u{FF1A}\u{5E9F}\u{589F}\u{524D}\u{4FA7}\u{505C}\u{987F}".to_string(),
+            person: "\u{7A7A}\u{955C}".to_string(),
+            scene_scale: "\u{4E2D}\u{8FD1}\u{666F}".to_string(),
+            visual_description: "\u{4E3B}\u{4F53}\u{4E3A}\u{7A7A}\u{955C}\u{FF0C}\u{4E2D}\u{8FD1}\u{666F}\u{628A}\u{5E9F}\u{589F}\u{538B}\u{5728}\u{524D}\u{4FA7}\u{FF1B}\u{5F53}\u{524D}\u{89C6}\u{89C9}\u{4E8B}\u{4EF6}\u{662F}\u{4E3B}\u{89D2}\u{5355}\u{819D}\u{8DEA}\u{5730}\u{627F}\u{538B}\u{3002}".to_string(),
+            character_action: "\u{7A7A}\u{955C}\u{4ECE}\u{5E9F}\u{589F}\u{524D}\u{4FA7}\u{505C}\u{4F4F}\u{FF0C}\u{5230}\u{654C}\u{4EBA}\u{903C}\u{8FD1}\u{65F6}\u{7ED3}\u{675F}\u{3002}".to_string(),
+            camera_movement: "\u{4E2D}\u{8FD1}\u{666F}\u{5B9A}\u{673A}\u{4F4D}\u{89C2}\u{5BDF}\u{7A7A}\u{955C}\u{4E0E}\u{654C}\u{4EBA}\u{903C}\u{8FD1}\u{3002}".to_string(),
+            dialogue: String::new(),
+        };
+
+        apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
+
+        assert_eq!(live_row.person, "\u{4E3B}\u{89D2}");
     }
 
     #[test]
@@ -16995,6 +17658,666 @@ No more content."#;
                 == "visual_description_grounding_incomplete"
                 || warning.code == "camera_movement_grounding_incomplete"
                 || warning.code == "role_action_grounding_incomplete"),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn binding_field_clause_safe_avoids_colon_subject_false_positive() {
+        let mut field =
+            "主体为主角，中景把主角与废墟放在前后层次里；当前视觉事件是主角顶住来袭。"
+                .to_string();
+        append_storyboard_binding_field_clause_safe(
+            &mut field,
+            "场景锚点",
+            &["废墟之上".to_string(), "敌人缓步逼近".to_string()],
+            2,
+        );
+
+        assert!(!field.contains("场景锚点："), "{field}");
+        assert!(
+            live_field_visual_or_abstract_subject_term("visual_description", &field).is_none(),
+            "{field}"
+        );
+    }
+
+    #[test]
+    fn binding_gate_maps_a_ruin_enemy_approach_and_pressure_equivalence() {
+        let rows_text = "主体为敌人，中近景把敌人压在废墟前侧；主角仍单膝跪地；当前视觉事件是敌人缓步逼近；画面突出对峙压力。";
+        assert!(binding_source_fact_covered_by_rows(rows_text, "敌人逼近"));
+        assert!(binding_source_fact_covered_by_rows(rows_text, "对峙压力"));
+        assert!(binding_source_fact_covered_by_rows(
+            rows_text,
+            "废墟之上，主角单膝跪地，敌人缓步逼近。"
+        ));
+    }
+
+    #[test]
+    fn live_storyboard_patch_repairs_environment_visual_description_from_baseline() {
+        let mut baseline = test_live_validation_row("主角");
+        baseline.shot_title = "镜头1：主角顶住来袭".to_string();
+        baseline.visual_description = "主体为主角，中近景把主角与敌人压在废墟前侧；冷光压住碎石与混凝土；当前视觉事件是主角顶住敌人逼近；画面突出对峙压力。".to_string();
+        baseline.character_action =
+            "主角从废墟之上单膝跪地开始，到敌人逼近身前时仍顶住来袭结束。".to_string();
+        baseline.camera_movement =
+            "中近景定机位观察主角顶住来袭，镜头捕捉废墟前侧的对峙压力。".to_string();
+        baseline.scene_performance_projection.visual_description =
+            baseline.visual_description.clone();
+        baseline.scene_performance_projection.character_action = baseline.character_action.clone();
+        let mut live_row = baseline.clone();
+        let patch = LiveStoryboardRowPatch {
+            shot_title: "废墟压近".to_string(),
+            person: "主角".to_string(),
+            scene_scale: "中近景".to_string(),
+            visual_description:
+                "主体为废墟，中近景把废墟压在主角前侧；当前视觉事件是废墟压近。"
+                    .to_string(),
+            character_action: "废墟从前景压近主角。".to_string(),
+            camera_movement: "废墟定机位观察主角。".to_string(),
+            dialogue: String::new(),
+        };
+
+        apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
+        normalize_storyboard_row_subject_quality(&mut live_row);
+        repair_live_storyboard_patch_from_baseline(&mut live_row, &baseline);
+
+        assert!(
+            live_field_visual_or_abstract_subject_term("shot_title", &live_row.shot_title)
+                .is_none(),
+            "{}",
+            live_row.shot_title
+        );
+        assert!(live_row.shot_title.contains("主角"), "{}", live_row.shot_title);
+        assert!(!live_row.shot_title.contains("废墟"), "{}", live_row.shot_title);
+        assert_eq!(live_row.visual_description, baseline.visual_description);
+        assert!(!live_row.character_action.contains("废墟从前景"), "{}", live_row.character_action);
+        assert!(
+            contains_any_story_term(&live_row.character_action, &["主角", "敌人", "逼近"]),
+            "{}",
+            live_row.character_action
+        );
+        assert!(!live_row.camera_movement.contains("废墟定机位"), "{}", live_row.camera_movement);
+        assert!(
+            contains_any_story_term(&live_row.camera_movement, &["主角", "敌人", "对峙压力"]),
+            "{}",
+            live_row.camera_movement
+        );
+    }
+
+    #[test]
+    fn live_storyboard_repair_restores_a_war_visual_subject_pollution() {
+        let mut baseline = test_live_validation_row("敌人");
+        baseline.order = 2;
+        baseline.primary_scene_label = "国战军阵建立".to_string();
+        baseline.shot_scene_label = "国战军阵建立".to_string();
+        baseline.scene_scale = "全景".to_string();
+        baseline.scene_performance_projection.scene_scale = "全景".to_string();
+        baseline.shot_script =
+            "废墟之上，主角单膝跪地，敌人缓步逼近。国战军阵建立只压紧阵位与战场调度。"
+                .to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+        repair_a_ruin_enemy_storyboard_row(&mut baseline);
+        normalize_storyboard_row_subject_quality(&mut baseline);
+
+        let mut live_row = baseline.clone();
+        live_row.shot_title = "废墟压近".to_string();
+        live_row.visual_description = "主体为废墟，全景把废墟压在阵位前侧；当前视觉事件是废墟压近。".to_string();
+        live_row.character_action = "废墟从前景压近主角。".to_string();
+        live_row.camera_movement = "废墟定机位观察主角。".to_string();
+        live_row.scene_performance_projection.visual_description =
+            live_row.visual_description.clone();
+        live_row.scene_performance_projection.character_action = live_row.character_action.clone();
+
+        let mut rows = vec![live_row];
+        let baselines = vec![baseline.clone()];
+        let mut summary = LiveRepairSummary::default();
+        summary.raw_failed_validator = true;
+        summary.extend(repair_live_storyboard_rows_from_source(
+            &mut rows, &baselines,
+        ));
+        let post_repair = validate_live_storyboard_rows(&rows, 10, &baselines);
+
+        assert!(summary.repaired(), "{summary:?}");
+        assert!(post_repair.is_empty(), "{post_repair:?}");
+        assert_eq!(rows[0].shot_title, baseline.shot_title);
+        assert_eq!(rows[0].visual_description, baseline.visual_description);
+        assert_eq!(rows[0].character_action, baseline.character_action);
+        assert_eq!(rows[0].camera_movement, baseline.camera_movement);
+    }
+
+    #[test]
+    fn live_storyboard_repair_restores_a_source_camera_movement_after_visual_repair() {
+        let source =
+            "\u{5E9F}\u{589F}\u{4E4B}\u{4E0A}\u{FF0C}\u{4E3B}\u{89D2}\u{5355}\u{819D}\u{8DEA}\u{5730}\u{FF0C}\u{654C}\u{4EBA}\u{7F13}\u{6B65}\u{903C}\u{8FD1}\u{3002}";
+        let mut baseline = test_live_validation_row("\u{4E3B}\u{89D2}");
+        baseline.shot_script = source.to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+        repair_a_ruin_enemy_storyboard_row(&mut baseline);
+        normalize_storyboard_row_subject_quality(&mut baseline);
+
+        let mut live_row = baseline.clone();
+        live_row.visual_description = baseline.visual_description.clone();
+        live_row.scene_performance_projection.visual_description =
+            live_row.visual_description.clone();
+        live_row.camera_movement = "\u{89C2}\u{5BDF}\u{3002}".to_string();
+
+        let mut rows = vec![live_row];
+        let baselines = vec![baseline.clone()];
+        let mut summary = LiveRepairSummary::default();
+        summary.raw_failed_validator = true;
+        summary.extend(repair_live_storyboard_rows_from_source(
+            &mut rows, &baselines,
+        ));
+        let post_repair = validate_live_storyboard_rows(&rows, 10, &baselines);
+
+        assert!(summary.repaired(), "{summary:?}");
+        assert!(post_repair.is_empty(), "{post_repair:?}");
+        assert_eq!(rows[0].camera_movement, baseline.camera_movement);
+    }
+
+    #[test]
+    fn live_storyboard_validator_ignores_ruin_environment_fragments_as_character_candidates() {
+        let mut baseline = test_live_validation_row("主角");
+        baseline.shot_script = "断楼残墙之间，裸露钢筋斜刺进灰云，风卷着锈屑掠过破碎混凝土。主角被逼到退路尽头，只能顶住来袭。".to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+        baseline.person = "主角".to_string();
+        baseline.scene_performance_projection.person = "主角".to_string();
+
+        for phrase in ["风卷残墙", "残墙", "残垣", "断楼残墙"] {
+            let mut live_row = baseline.clone();
+            live_row.visual_description = format!(
+                "主体为主角，中近景把{phrase}与主角所处退路压在同层；冷光压住碎石与混凝土；当前视觉事件是主角顶住来袭；画面突出危险逼近。"
+            );
+            live_row.character_action =
+                "主角从断楼残墙前侧开始，到顶住来袭时结束，镜头捕捉主角动作。"
+                    .to_string();
+            live_row.camera_movement =
+                "中近景定机位观察主角顶住来袭，镜头捕捉断楼残墙间的逼近压力。"
+                    .to_string();
+
+            let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline.clone()]);
+            assert!(
+                !warnings.iter().any(|warning| {
+                    warning.message.contains("ungrounded character name")
+                        && warning.message.contains(phrase)
+                }),
+                "{phrase}: {warnings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn live_storyboard_validator_keeps_bare_source_role_grounded() {
+        let baseline = test_live_validation_row("主角");
+        let warnings = validate_live_storyboard_rows(&[baseline.clone()], 10, &[baseline]);
+        assert!(
+            !warnings
+                .iter()
+                .any(|warning| warning.message.contains("ungrounded character name: 主角")),
+            "{warnings:?}"
+        );
+    }
+
+    /*
+    #[test]
+    fn binding_context_repaired_baseline_keeps_bare_source_role_grounded_for_rewrite() {
+        let source =
+            "\u{5E9F}\u{589F}\u{4E4B}\u{4E0A}\u{FF0C}\u{4E3B}\u{89D2}\u{5355}\u{819D}\u{8DEA}\u{5730}\u{FF0C}\u{654C}\u{4EBA}\u{7F13}\u{6B65}\u{903C}\u{8FD1}\u{3002}";
+        let rewrite_body =
+            "\u{5E9F}\u{589F}\u{524D}\u{4FA7}\u{7684}\u{5BF9}\u{5CD9}\u{538B}\u{529B}\u{4E0D}\u{65AD}\u{62AC}\u{9AD8}\u{3002}";
+        let mut baseline = test_live_validation_row("");
+        baseline.shot_script = rewrite_body.to_string();
+        baseline.scene_performance_projection.fused_source_text = rewrite_body.to_string();
+        baseline.person.clear();
+        baseline.scene_performance_projection.person.clear();
+
+        let request = GenerateStoryboardRequest {
+            task_name: "rewrite-binding-baseline".to_string(),
+            shot_script: Some(source.to_string()),
+            expanded_script_text: Some(source.to_string()),
+            source_profile: "A_ruin_duel".to_string(),
+            current_case_id: "accepted-f98f1a02-33c6e849-721f45d9".to_string(),
+            selected_total_duration_seconds: 10,
+            must_keep_facts: vec![
+                "\u{4E3B}\u{89D2}".to_string(),
+                "\u{654C}\u{4EBA}".to_string(),
+                "\u{5E9F}\u{589F}".to_string(),
+                "\u{5355}\u{819D}\u{8DEA}\u{5730}".to_string(),
+                "\u{903C}\u{8FD1}".to_string(),
+            ],
+            ..GenerateStoryboardRequest::default()
+        };
+        let grounding = StoryboardGroundingContext {
+            shot_script: rewrite_body.to_string(),
+            expanded_script_text: rewrite_body.to_string(),
+            grounding_text: source.to_string(),
+            grounding_source: ShotGroundingSource::ShotScript,
+            primary_scene_type: "hot_blood_battle".to_string(),
+            primary_scene_label: "\u{70ED}\u{8840}\u{6218}\u{6597}".to_string(),
+            primary_scene_category: "combat".to_string(),
+            shot_scene_type: "hot_blood_battle".to_string(),
+            shot_scene_label: "\u{70ED}\u{8840}\u{6218}\u{6597}".to_string(),
+            shot_intent: "action_beat".to_string(),
+            adaptation_reason: "rewrite baseline binding test".to_string(),
+        };
+        let mut baselines = vec![baseline];
+        repair_storyboard_rows_from_binding_context(&mut baselines, &request, &grounding);
+
+        assert_eq!(baselines[0].person, "\u{4E3B}\u{89D2}");
+
+        let mut live_row = baselines[0].clone();
+        live_row.person = "\u{4E3B}\u{89D2}".to_string();
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &baselines);
+        assert!(
+            !warnings.iter().any(|warning| {
+                warning
+                    .message
+                    .contains("ungrounded character name: 涓昏")
+            }),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn live_storyboard_validator_ignores_war_setup_shot_title_fragment_candidate() {
+        let mut baseline = test_live_validation_row("涓昏");
+        baseline.primary_scene_label = "鍥芥垬鍐涢樀寤虹珛".to_string();
+        baseline.shot_scene_label = "鍥芥垬鍐涢樀寤虹珛".to_string();
+        baseline.shot_script =
+            "搴熷涔嬩笂锛屼富瑙掑崟鑶濊藩鍦帮紝鏁屼汉缂撴閫艰繎銆傚浗鎴樺啗闃靛缓绔嬪彧鍘嬬揣闃典綅涓庢垬鍦鸿皟搴︺€?"
+                .to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+
+        let mut live_row = baseline.clone();
+        live_row.shot_title = "闀滃ご1锛氬畾鍩哄簾澧熷帇杩?.to_string();
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+        assert!(
+            !warnings
+                .iter()
+                .any(|warning| warning.message.contains("ungrounded character name: 瀹氬熀")),
+            "{warnings:?}"
+        );
+    }
+
+    */
+
+    #[test]
+    fn binding_context_repaired_baseline_keeps_bare_source_role_grounded_for_rewrite() {
+        let source =
+            "\u{5E9F}\u{589F}\u{4E4B}\u{4E0A}\u{FF0C}\u{4E3B}\u{89D2}\u{5355}\u{819D}\u{8DEA}\u{5730}\u{FF0C}\u{654C}\u{4EBA}\u{7F13}\u{6B65}\u{903C}\u{8FD1}\u{3002}";
+        let rewrite_body =
+            "\u{5E9F}\u{589F}\u{524D}\u{4FA7}\u{7684}\u{5BF9}\u{5CD9}\u{538B}\u{529B}\u{4E0D}\u{65AD}\u{62AC}\u{9AD8}\u{3002}";
+        let mut baseline = test_live_validation_row("");
+        baseline.shot_script = rewrite_body.to_string();
+        baseline.scene_performance_projection.fused_source_text = rewrite_body.to_string();
+        baseline.person.clear();
+        baseline.scene_performance_projection.person.clear();
+
+        let request = GenerateStoryboardRequest {
+            task_name: "rewrite-binding-baseline".to_string(),
+            shot_script: Some(source.to_string()),
+            expanded_script_text: Some(source.to_string()),
+            source_profile: "A_ruin_duel".to_string(),
+            current_case_id: "accepted-f98f1a02-33c6e849-721f45d9".to_string(),
+            selected_total_duration_seconds: 10,
+            must_keep_facts: vec![
+                "\u{4E3B}\u{89D2}".to_string(),
+                "\u{654C}\u{4EBA}".to_string(),
+                "\u{5E9F}\u{589F}".to_string(),
+                "\u{5355}\u{819D}\u{8DEA}\u{5730}".to_string(),
+                "\u{903C}\u{8FD1}".to_string(),
+            ],
+            ..GenerateStoryboardRequest::default()
+        };
+        let grounding = StoryboardGroundingContext {
+            shot_script: rewrite_body.to_string(),
+            expanded_script_text: rewrite_body.to_string(),
+            grounding_text: source.to_string(),
+            grounding_source: ShotGroundingSource::ShotScript,
+            primary_scene_type: "hot_blood_battle".to_string(),
+            primary_scene_label: "\u{70ED}\u{8840}\u{6218}\u{6597}".to_string(),
+            primary_scene_category: "combat".to_string(),
+            shot_scene_type: "hot_blood_battle".to_string(),
+            shot_scene_label: "\u{70ED}\u{8840}\u{6218}\u{6597}".to_string(),
+            shot_intent: "action_beat".to_string(),
+            adaptation_reason: "rewrite baseline binding test".to_string(),
+        };
+        let mut baselines = vec![baseline];
+        repair_storyboard_rows_from_binding_context(&mut baselines, &request, &grounding);
+
+        assert_eq!(baselines[0].person, "\u{4E3B}\u{89D2}");
+
+        let mut live_row = baselines[0].clone();
+        live_row.person = "\u{4E3B}\u{89D2}".to_string();
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &baselines);
+        assert!(
+            !warnings
+                .iter()
+                .any(|warning| warning.message.contains("ungrounded character name: \u{4E3B}\u{89D2}")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn live_storyboard_validator_ignores_war_setup_shot_title_fragment_candidate() {
+        let mut baseline = test_live_validation_row("\u{4E3B}\u{89D2}");
+        baseline.primary_scene_label = "\u{56FD}\u{6218}\u{519B}\u{9635}\u{5EFA}\u{7ACB}".to_string();
+        baseline.shot_scene_label = "\u{56FD}\u{6218}\u{519B}\u{9635}\u{5EFA}\u{7ACB}".to_string();
+        baseline.shot_script =
+            "\u{5E9F}\u{589F}\u{4E4B}\u{4E0A}\u{FF0C}\u{4E3B}\u{89D2}\u{5355}\u{819D}\u{8DEA}\u{5730}\u{FF0C}\u{654C}\u{4EBA}\u{7F13}\u{6B65}\u{903C}\u{8FD1}\u{3002}\u{56FD}\u{6218}\u{519B}\u{9635}\u{5EFA}\u{7ACB}\u{53EA}\u{538B}\u{7D27}\u{9635}\u{4F4D}\u{4E0E}\u{6218}\u{573A}\u{8C03}\u{5EA6}\u{3002}"
+                .to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+
+        let mut live_row = baseline.clone();
+        live_row.shot_title =
+            "\u{955C}\u{5934}1\u{FF1A}\u{5B9A}\u{57FA}\u{5E9F}\u{589F}\u{538B}\u{8FEB}".to_string();
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+        assert!(
+            !warnings
+                .iter()
+                .any(|warning| warning.message.contains("ungrounded character name: \u{5B9A}\u{57FA}")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn live_storyboard_validator_ignores_war_setup_shot_title_stance_candidate() {
+        let mut baseline = test_live_validation_row("\u{4E3B}\u{89D2}");
+        baseline.primary_scene_label = "\u{56FD}\u{6218}\u{519B}\u{9635}\u{5EFA}\u{7ACB}".to_string();
+        baseline.shot_scene_label = "\u{56FD}\u{6218}\u{519B}\u{9635}\u{5EFA}\u{7ACB}".to_string();
+        baseline.shot_script =
+            "\u{5E9F}\u{589F}\u{4E4B}\u{4E0A}\u{FF0C}\u{4E3B}\u{89D2}\u{5355}\u{819D}\u{8DEA}\u{5730}\u{FF0C}\u{654C}\u{4EBA}\u{7F13}\u{6B65}\u{903C}\u{8FD1}\u{3002}\u{56FD}\u{6218}\u{519B}\u{9635}\u{5EFA}\u{7ACB}\u{53EA}\u{538B}\u{7D27}\u{9635}\u{4F4D}\u{4E0E}\u{6218}\u{573A}\u{8C03}\u{5EA6}\u{3002}"
+                .to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+
+        let mut live_row = baseline.clone();
+        live_row.shot_title =
+            "\u{955C}\u{5934}1\u{FF1A}\u{5B9A}\u{52BF}\u{5E9F}\u{589F}\u{538B}\u{8FEB}".to_string();
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+        assert!(
+            !warnings
+                .iter()
+                .any(|warning| warning.message.contains("ungrounded character name: \u{5B9A}\u{52BF}")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn live_storyboard_validator_does_not_treat_source_bound_initial_appearance_as_new_name() {
+        let mut baseline = test_live_validation_row("主角");
+        baseline.shot_script = "主角初现于断墙前，敌人逼近。".to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+        let mut live_row = baseline.clone();
+        let patch = LiveStoryboardRowPatch {
+            shot_title: "镜头1：主角初现于断墙前".to_string(),
+            person: "主角初".to_string(),
+            scene_scale: "中近景".to_string(),
+            visual_description: "主体为主角初，中近景把主角与断墙放在前侧；当前视觉事件是主角初现于断墙前。".to_string(),
+            character_action: "主角初从断墙前停住，到敌人逼近时结束。".to_string(),
+            camera_movement: "中近景定机位观察主角初现。".to_string(),
+            dialogue: String::new(),
+        };
+
+        apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
+        normalize_storyboard_row_subject_quality(&mut live_row);
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+        assert!(
+            !warnings.iter().any(|warning| warning
+                .message
+                .contains("ungrounded character name: 主角初")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn live_storyboard_validator_does_not_treat_initial_standoff_shot_title_fragment_as_new_name() {
+        let mut baseline = test_live_validation_row("主角");
+        baseline.shot_script = "废墟之上，主角单膝跪地，敌人缓步逼近。".to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+        let mut live_row = baseline.clone();
+        let patch = LiveStoryboardRowPatch {
+            shot_title: "镜头1：初峙废墟压迫".to_string(),
+            person: "主角".to_string(),
+            scene_scale: "中近景".to_string(),
+            visual_description: "主体为主角，中近景把主角与废墟放在前侧；当前视觉事件是主角承受敌人逼近压力。".to_string(),
+            character_action:
+                "主角从废墟边缘开始，到敌人继续逼近时结束，镜头捕捉当前对峙压力。"
+                    .to_string(),
+            camera_movement: "中近景定机位观察主角与敌人对峙。".to_string(),
+            dialogue: String::new(),
+        };
+
+        apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
+        normalize_storyboard_row_subject_quality(&mut live_row);
+
+        assert!(live_row.shot_title.contains("主角"), "{}", live_row.shot_title);
+        assert!(
+            !live_row.shot_title.contains("：初峙"),
+            "{}",
+            live_row.shot_title
+        );
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+        assert!(
+            !warnings.iter().any(|warning| warning
+                .message
+                .contains("ungrounded character name: 初峙")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn live_storyboard_validator_does_not_treat_initial_appearance_shot_title_fragment_as_new_name()
+    {
+        let mut baseline = test_live_validation_row("主角");
+        baseline.shot_script = "主角初现于断墙前，敌人逼近。".to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+        let mut live_row = baseline.clone();
+        let patch = LiveStoryboardRowPatch {
+            shot_title: "镜头1：初现于断墙前".to_string(),
+            person: "主角".to_string(),
+            scene_scale: "中近景".to_string(),
+            visual_description:
+                "主体为主角，中近景把主角与断墙放在前侧；当前视觉事件是主角初现于断墙前。"
+                    .to_string(),
+            character_action: "主角从断墙前停住开始，到敌人逼近时结束。".to_string(),
+            camera_movement: "中近景定机位观察主角初现。".to_string(),
+            dialogue: String::new(),
+        };
+
+        apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
+        normalize_storyboard_row_subject_quality(&mut live_row);
+
+        assert!(live_row.shot_title.contains("主角"), "{}", live_row.shot_title);
+        assert!(
+            !live_row.shot_title.contains("：初现"),
+            "{}",
+            live_row.shot_title
+        );
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+        assert!(
+            !warnings.iter().any(|warning| warning
+                .message
+                .contains("ungrounded character name: 初现")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn live_storyboard_validator_ignores_breath_action_fragment_candidate() {
+        let mut baseline = test_live_validation_row("主角");
+        baseline.shot_script = "废墟之上，主角单膝跪地，敌人缓步逼近。".to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+        let mut live_row = baseline.clone();
+        live_row.shot_title = "镜头1：喘息压迫".to_string();
+        live_row.visual_description =
+            "主体为主角，中近景把主角放在废墟前侧；当前视觉事件是主角撑住喘息。"
+                .to_string();
+        live_row.character_action =
+            "主角从废墟前侧单膝跪地开始，到敌人逼近时仍撑住喘息结束。".to_string();
+        live_row.camera_movement = "中近景定机位观察主角在废墟前侧喘息。".to_string();
+
+        assert!(
+            !super::live_storyboard_field_character_candidates("shot_title", &live_row.shot_title)
+                .iter()
+                .any(|candidate| candidate == "喘息"),
+            "{:?}",
+            super::live_storyboard_field_character_candidates("shot_title", &live_row.shot_title)
+        );
+        assert_eq!(
+            super::normalize_live_character_label_to_source_subject(
+                "主角喘息",
+                &baseline.shot_script,
+                &baseline.person,
+            )
+            .as_deref(),
+            Some("主角")
+        );
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+        assert!(
+            !warnings.iter().any(|warning| warning
+                .message
+                .contains("ungrounded character name: 喘息")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn blocked_person_diagnostic_clears_initial_appearance_shot_title_candidate_after_repair() {
+        let mut baseline = test_live_validation_row("主角");
+        baseline.order = 1;
+        baseline.prompt_text_source_row_id = "shot-1".to_string();
+        baseline.shot_script = "主角初现于断墙前，敌人逼近。".to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+        let raw_patch = LiveStoryboardRowPatch {
+            shot_title: "镜头1：初现于断墙前".to_string(),
+            person: "主角".to_string(),
+            scene_scale: "中近景".to_string(),
+            visual_description: baseline.visual_description.clone(),
+            character_action: baseline.character_action.clone(),
+            camera_movement: baseline.camera_movement.clone(),
+            dialogue: baseline.dialogue.clone(),
+        };
+        let mut raw_patch_row = baseline.clone();
+        raw_patch_row.shot_title = raw_patch.shot_title.clone();
+        let patch_repaired_row = raw_patch_row.clone();
+        let repaired_row = raw_patch_row.clone();
+        let request = GenerateStoryboardRequest {
+            task_name: "qwen3.6-plus-blocked-person-diagnostic".to_string(),
+            shot_script: Some(baseline.shot_script.clone()),
+            expanded_script_text: Some(baseline.shot_script.clone()),
+            selected_total_duration_seconds: 15,
+            current_case_id: "cert_expand_baseline".to_string(),
+            source_text_hash: "f98f1a02".to_string(),
+            accepted_rewrite_hash: "33c6e849".to_string(),
+            task_script_hash: "0319980d".to_string(),
+            story_fact_frame_hash: "e2b60f15".to_string(),
+            source_profile: "A_initial_appearance".to_string(),
+            must_keep_facts: vec![
+                "主角".to_string(),
+                "敌人".to_string(),
+                "断墙前".to_string(),
+                "初现".to_string(),
+                "逼近".to_string(),
+            ],
+            ..GenerateStoryboardRequest::default()
+        };
+        let grounding = StoryboardGroundingContext {
+            shot_script: baseline.shot_script.clone(),
+            expanded_script_text: baseline.shot_script.clone(),
+            grounding_text: baseline.shot_script.clone(),
+            grounding_source: ShotGroundingSource::ShotScript,
+            primary_scene_type: "hot_blood_battle".to_string(),
+            primary_scene_label: "热血战斗".to_string(),
+            primary_scene_category: "action".to_string(),
+            shot_scene_type: "hot_blood_battle".to_string(),
+            shot_scene_label: "热血战斗".to_string(),
+            shot_intent: "action_beat".to_string(),
+            adaptation_reason: "blocked person diagnostic coverage".to_string(),
+        };
+        let live_repair_summary = LiveRepairSummary {
+            raw_failed_validator: true,
+            reasons: vec!["binding_story_fact_frame_restored".to_string()],
+        };
+        let findings = vec![ProductWarning {
+            code: "text_model_validator_failed".to_string(),
+            message: "Live storyboard row 1 introduced an ungrounded character name: 初现."
+                .to_string(),
+            related_sample_id: None,
+        }];
+
+        let warnings = super::blocked_runtime_diagnostic_warnings(
+            &request,
+            &grounding,
+            &[15],
+            &[raw_patch],
+            &[baseline],
+            &[raw_patch_row],
+            &[patch_repaired_row],
+            &[repaired_row],
+            &live_repair_summary,
+            &findings,
+            &findings,
+        );
+        let warning = warnings
+            .iter()
+            .find(|warning| warning.code == "qa_live_blocked_person_diag")
+            .expect("person diagnostic warning");
+
+        assert!(warning.message.contains("row=1"), "{}", warning.message);
+        assert!(
+            warning.message.contains("bind_source_role_hit=true"),
+            "{}",
+            warning.message
+        );
+        assert!(
+            warning.message.contains("post_grounded=true"),
+            "{}",
+            warning.message
+        );
+        assert!(
+            warning.message.contains("post_untrusted_field="),
+            "{}",
+            warning.message
+        );
+        assert!(
+            warning.message.contains("post_untrusted_candidate="),
+            "{}",
+            warning.message
+        );
+        assert!(!warning.message.contains("post_untrusted_field=shot_title"), "{}", warning.message);
+        assert!(
+            !warning.message.contains("post_untrusted_candidate=初现"),
+            "{}",
+            warning.message
+        );
+    }
+
+    #[test]
+    fn live_storyboard_validator_still_rejects_unbound_external_name_in_ruin_context() {
+        let mut baseline = test_live_validation_row("主角");
+        baseline.shot_script = "废墟之上，主角单膝跪地，敌人缓步逼近。".to_string();
+        baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
+        let mut live_row = baseline.clone();
+        live_row.person = "李明".to_string();
+        live_row.visual_description =
+            "主体为李明，中近景把李明放在废墟前侧；当前视觉事件是李明挡住退路。"
+                .to_string();
+        live_row.character_action = "李明从废墟前侧开始，到挡住退路时结束。".to_string();
+
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.message.contains("ungrounded character name")),
             "{warnings:?}"
         );
     }

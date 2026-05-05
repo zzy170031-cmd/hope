@@ -1,14 +1,58 @@
 {
-  "name": "Hope desktop multi-model output contract certification matrix",
+  "name": "Hope desktop text-model live3 output contract certification matrix",
   "contract_version": "desktop_model_output_contract_v1",
-  "status": "contract_ready_live_certification_pending",
+  "status": "contract_ready_live3_text_pool_certification_pending",
   "provider": "qwen",
+  "required_text_gate_models": [
+    "qwen-plus-2025-07-28",
+    "qwen3.6-plus",
+    "qwen3.6-plus-2026-04-02",
+    "qwen3.6-max-preview",
+    "qwen3-max-2026-01-23",
+    "qwen3.6-flash",
+    "qwen-plus-2025-12-01"
+  ],
   "model_strategy": [
     "qwen-plus-2025-07-28",
     "qwen3.6-plus",
     "qwen3.6-plus-2026-04-02",
-    "qvq-max-2025-03-25",
-    "qwen-plus"
+    "qwen3.6-max-preview",
+    "qwen3-max-2026-01-23",
+    "qwen3.6-flash",
+    "qwen-plus-2025-12-01"
+  ],
+  "alias_compatibility_references": [
+    {
+      "model": "qwen-plus",
+      "gate_role": "alias_compatibility_reference",
+      "alias_compatibility_reference": true,
+      "required_gate_model": false,
+      "not_required_gate": true,
+      "current_gate_candidate": false,
+      "notes": "Historical qwen-plus alias retained only for compatibility checks and last-fallback diagnostics. It is not a required text gate model and cannot satisfy live3 or full16 restore prerequisites."
+    }
+  ],
+  "excluded_models": [
+    {
+      "model": "qvq-max-2025-03-25",
+      "reason": "qvq reasoning/vision-adjacent model is excluded from the text storyboard gate"
+    },
+    {
+      "model_family": "qwen-vl / qwen2.5-vl / qwen3-vl",
+      "reason": "vision or multimodal models are excluded"
+    },
+    {
+      "model_family": "HappyHorse / video generation models",
+      "reason": "video generation models are excluded"
+    },
+    {
+      "model_family": "qwen-math",
+      "reason": "math-specialized models are excluded"
+    },
+    {
+      "model_family": "qwen-coder",
+      "reason": "coder-specialized models are excluded"
+    }
   ],
   "output_contract": {
     "contract_kind": "structural_safety_contract_not_creative_style_template",
@@ -58,6 +102,66 @@
     "natural_expression_variance_allowed": true,
     "quality_review_is_not_hard_gate": true
   },
+  "failure_classification_policy": {
+    "runner_stage_order": [
+      "provider_retry_exhausted_hard_fail",
+      "qa_hard_fail_evidence_missing",
+      "model_not_found",
+      "entitlement",
+      "quota",
+      "http_403",
+      "invalid_parameter",
+      "script_goal_hard_gate_fail",
+      "validator_hard_gate_fail",
+      "prompt_text_boundary",
+      "story_fact_frame_or_accepted_snapshot_hard_gate_fail",
+      "fallback_or_provider_hard_gate_fail",
+      "contract_hard_gate_fail"
+    ],
+    "alias_compatibility_missing_hard_fail_evidence_stage": "alias_compatibility_reference_not_required_gate",
+    "provider_unavailable_categories": [
+      "model_unavailable",
+      "model_not_found",
+      "entitlement",
+      "quota",
+      "http_403",
+      "invalid_parameter"
+    ],
+    "qa_hard_fail_evidence_missing_is_not_prompt_text_boundary": true,
+    "validator_hard_gate_fail_is_not_prompt_text_boundary": true,
+    "quality_warning_only_blocks_gate": false,
+    "hard_gate_failure_can_be_downgraded": false
+  },
+  "provider_availability_probe_contract": {
+    "artifact_path_pattern": "target/qa-live3-provider-probe/<timestamp>/qwen-text-model-availability.json",
+    "probe_scope": "required_text_gate_models_only",
+    "minimum_probe_per_model": 1,
+    "raw_values_redacted": true,
+    "raw_env_redacted": true,
+    "raw_prompt_redacted": true,
+    "raw_provider_response_redacted": true,
+    "required_result_fields": [
+      "model",
+      "http_status",
+      "error_category",
+      "error_code",
+      "choices_present",
+      "callable"
+    ],
+    "unavailable_error_categories": [
+      "model_not_found",
+      "entitlement",
+      "quota",
+      "http_403",
+      "invalid_parameter",
+      "provider_retry_exhausted",
+      "network_or_transport",
+      "unknown"
+    ],
+    "callable_models_enter_live3": true,
+    "unavailable_models_do_not_count_as_live3_required_pass": true,
+    "callable_required_models_below_five_is_blocker": true
+  },
   "hard_gate_vs_quality_warning_policy": {
     "hard_gate_failures": [
       "source_fact_binding_fail",
@@ -65,6 +169,15 @@
       "prompt_text_pollution",
       "fallback_or_local_candidate",
       "provider_model_mismatch",
+      "provider_retry_exhausted_hard_fail",
+      "qa_hard_fail_evidence_missing",
+      "model_unavailable",
+      "model_not_found",
+      "entitlement",
+      "quota",
+      "http_403",
+      "invalid_parameter",
+      "validator_hard_gate_fail",
       "scene_type_or_duration_override",
       "rows_schema_not_executable",
       "rows_match_false",
@@ -148,25 +261,55 @@
     {
       "provider": "qwen",
       "model": "qwen-plus-2025-07-28",
-      "provider_probe": "previous_probe_passed_contract_certification_required",
+      "gate_role": "required_text_gate_model",
+      "required_gate_model": true,
+      "not_required_gate": false,
+      "callable_status": "pending_probe",
+      "provider_probe": "pending_sanitized_availability_probe",
       "output_contract_ready": true,
       "storyboard_gate_ready": false,
       "prompt_text_gate_ready": false,
       "rewrite_ready": false,
       "expand_ready": false,
       "blocked_by_format": false,
-      "blocked_by_fact_binding": true,
-      "blocked_by_prompt_boundary": true,
+      "blocked_by_fact_binding": false,
+      "blocked_by_prompt_boundary": false,
       "blocked_by_provider": false,
-      "blocked_by_output_contract": true,
+      "blocked_by_output_contract": false,
       "blocked_by_fallback": false,
       "blocked_by_quality_warning_only": false,
-      "current_gate_candidate": false
+      "current_gate_candidate": false,
+      "provider_availability": {
+        "probe_status": "pending",
+        "callable": null,
+        "http_status": null,
+        "error_category": null,
+        "error_code": null,
+        "choices_present": null,
+        "raw_values_redacted": true
+      },
+      "live3_certification": {
+        "status": "pending",
+        "expected": 3,
+        "executed": 0,
+        "passed": 0,
+        "failed": 0,
+        "not_run": 3,
+        "no_http_403": null,
+        "no_live_fallback": null,
+        "fallback_used": null,
+        "local_candidate": null,
+        "runner_assert_failures": []
+      }
     },
     {
       "provider": "qwen",
       "model": "qwen3.6-plus",
-      "provider_probe": "pending",
+      "gate_role": "required_text_gate_model",
+      "required_gate_model": true,
+      "not_required_gate": false,
+      "callable_status": "pending_probe",
+      "provider_probe": "pending_sanitized_availability_probe",
       "output_contract_ready": true,
       "storyboard_gate_ready": false,
       "prompt_text_gate_ready": false,
@@ -179,12 +322,38 @@
       "blocked_by_output_contract": false,
       "blocked_by_fallback": false,
       "blocked_by_quality_warning_only": false,
-      "current_gate_candidate": false
+      "current_gate_candidate": false,
+      "provider_availability": {
+        "probe_status": "pending",
+        "callable": null,
+        "http_status": null,
+        "error_category": null,
+        "error_code": null,
+        "choices_present": null,
+        "raw_values_redacted": true
+      },
+      "live3_certification": {
+        "status": "pending",
+        "expected": 3,
+        "executed": 0,
+        "passed": 0,
+        "failed": 0,
+        "not_run": 3,
+        "no_http_403": null,
+        "no_live_fallback": null,
+        "fallback_used": null,
+        "local_candidate": null,
+        "runner_assert_failures": []
+      }
     },
     {
       "provider": "qwen",
       "model": "qwen3.6-plus-2026-04-02",
-      "provider_probe": "pending",
+      "gate_role": "required_text_gate_model",
+      "required_gate_model": true,
+      "not_required_gate": false,
+      "callable_status": "pending_probe",
+      "provider_probe": "pending_sanitized_availability_probe",
       "output_contract_ready": true,
       "storyboard_gate_ready": false,
       "prompt_text_gate_ready": false,
@@ -197,12 +366,38 @@
       "blocked_by_output_contract": false,
       "blocked_by_fallback": false,
       "blocked_by_quality_warning_only": false,
-      "current_gate_candidate": false
+      "current_gate_candidate": false,
+      "provider_availability": {
+        "probe_status": "pending",
+        "callable": null,
+        "http_status": null,
+        "error_category": null,
+        "error_code": null,
+        "choices_present": null,
+        "raw_values_redacted": true
+      },
+      "live3_certification": {
+        "status": "pending",
+        "expected": 3,
+        "executed": 0,
+        "passed": 0,
+        "failed": 0,
+        "not_run": 3,
+        "no_http_403": null,
+        "no_live_fallback": null,
+        "fallback_used": null,
+        "local_candidate": null,
+        "runner_assert_failures": []
+      }
     },
     {
       "provider": "qwen",
-      "model": "qvq-max-2025-03-25",
-      "provider_probe": "pending",
+      "model": "qwen3.6-max-preview",
+      "gate_role": "required_text_gate_model",
+      "required_gate_model": true,
+      "not_required_gate": false,
+      "callable_status": "pending_probe",
+      "provider_probe": "pending_sanitized_availability_probe",
       "output_contract_ready": true,
       "storyboard_gate_ready": false,
       "prompt_text_gate_ready": false,
@@ -215,12 +410,171 @@
       "blocked_by_output_contract": false,
       "blocked_by_fallback": false,
       "blocked_by_quality_warning_only": false,
-      "current_gate_candidate": false
+      "current_gate_candidate": false,
+      "provider_availability": {
+        "probe_status": "pending",
+        "callable": null,
+        "http_status": null,
+        "error_category": null,
+        "error_code": null,
+        "choices_present": null,
+        "raw_values_redacted": true
+      },
+      "live3_certification": {
+        "status": "pending",
+        "expected": 3,
+        "executed": 0,
+        "passed": 0,
+        "failed": 0,
+        "not_run": 3,
+        "no_http_403": null,
+        "no_live_fallback": null,
+        "fallback_used": null,
+        "local_candidate": null,
+        "runner_assert_failures": []
+      }
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-max-2026-01-23",
+      "gate_role": "required_text_gate_model",
+      "required_gate_model": true,
+      "not_required_gate": false,
+      "callable_status": "pending_probe",
+      "provider_probe": "pending_sanitized_availability_probe",
+      "output_contract_ready": true,
+      "storyboard_gate_ready": false,
+      "prompt_text_gate_ready": false,
+      "rewrite_ready": false,
+      "expand_ready": false,
+      "blocked_by_format": false,
+      "blocked_by_fact_binding": false,
+      "blocked_by_prompt_boundary": false,
+      "blocked_by_provider": false,
+      "blocked_by_output_contract": false,
+      "blocked_by_fallback": false,
+      "blocked_by_quality_warning_only": false,
+      "current_gate_candidate": false,
+      "provider_availability": {
+        "probe_status": "pending",
+        "callable": null,
+        "http_status": null,
+        "error_category": null,
+        "error_code": null,
+        "choices_present": null,
+        "raw_values_redacted": true
+      },
+      "live3_certification": {
+        "status": "pending",
+        "expected": 3,
+        "executed": 0,
+        "passed": 0,
+        "failed": 0,
+        "not_run": 3,
+        "no_http_403": null,
+        "no_live_fallback": null,
+        "fallback_used": null,
+        "local_candidate": null,
+        "runner_assert_failures": []
+      }
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3.6-flash",
+      "gate_role": "required_text_gate_model",
+      "required_gate_model": true,
+      "not_required_gate": false,
+      "callable_status": "pending_probe",
+      "provider_probe": "pending_sanitized_availability_probe",
+      "output_contract_ready": true,
+      "storyboard_gate_ready": false,
+      "prompt_text_gate_ready": false,
+      "rewrite_ready": false,
+      "expand_ready": false,
+      "blocked_by_format": false,
+      "blocked_by_fact_binding": false,
+      "blocked_by_prompt_boundary": false,
+      "blocked_by_provider": false,
+      "blocked_by_output_contract": false,
+      "blocked_by_fallback": false,
+      "blocked_by_quality_warning_only": false,
+      "current_gate_candidate": false,
+      "provider_availability": {
+        "probe_status": "pending",
+        "callable": null,
+        "http_status": null,
+        "error_category": null,
+        "error_code": null,
+        "choices_present": null,
+        "raw_values_redacted": true
+      },
+      "live3_certification": {
+        "status": "pending",
+        "expected": 3,
+        "executed": 0,
+        "passed": 0,
+        "failed": 0,
+        "not_run": 3,
+        "no_http_403": null,
+        "no_live_fallback": null,
+        "fallback_used": null,
+        "local_candidate": null,
+        "runner_assert_failures": []
+      }
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen-plus-2025-12-01",
+      "gate_role": "required_text_gate_model",
+      "required_gate_model": true,
+      "not_required_gate": false,
+      "callable_status": "pending_probe",
+      "provider_probe": "pending_sanitized_availability_probe",
+      "output_contract_ready": true,
+      "storyboard_gate_ready": false,
+      "prompt_text_gate_ready": false,
+      "rewrite_ready": false,
+      "expand_ready": false,
+      "blocked_by_format": false,
+      "blocked_by_fact_binding": false,
+      "blocked_by_prompt_boundary": false,
+      "blocked_by_provider": false,
+      "blocked_by_output_contract": false,
+      "blocked_by_fallback": false,
+      "blocked_by_quality_warning_only": false,
+      "current_gate_candidate": false,
+      "provider_availability": {
+        "probe_status": "pending",
+        "callable": null,
+        "http_status": null,
+        "error_category": null,
+        "error_code": null,
+        "choices_present": null,
+        "raw_values_redacted": true
+      },
+      "live3_certification": {
+        "status": "pending",
+        "expected": 3,
+        "executed": 0,
+        "passed": 0,
+        "failed": 0,
+        "not_run": 3,
+        "no_http_403": null,
+        "no_live_fallback": null,
+        "fallback_used": null,
+        "local_candidate": null,
+        "runner_assert_failures": []
+      }
     },
     {
       "provider": "qwen",
       "model": "qwen-plus",
-      "provider_probe": "last_fallback_candidate_probe_required",
+      "gate_role": "alias_compatibility_reference",
+      "alias_compatibility_reference": true,
+      "required_gate_model": false,
+      "not_required_gate": true,
+      "callable_status": "not_required_alias_compatibility_reference",
+      "provider_probe": "alias_compatibility_reference_only",
       "output_contract_ready": true,
       "storyboard_gate_ready": false,
       "prompt_text_gate_ready": false,
@@ -233,25 +587,59 @@
       "blocked_by_output_contract": false,
       "blocked_by_fallback": false,
       "blocked_by_quality_warning_only": false,
-      "current_gate_candidate": false
+      "current_gate_candidate": false,
+      "provider_availability": {
+        "probe_status": "not_required_gate",
+        "callable": null,
+        "http_status": null,
+        "error_category": null,
+        "error_code": null,
+        "choices_present": null,
+        "raw_values_redacted": true
+      },
+      "live3_certification": {
+        "status": "not_required_gate",
+        "expected": 0,
+        "executed": 0,
+        "passed": 0,
+        "failed": 0,
+        "not_run": 0,
+        "no_http_403": null,
+        "no_live_fallback": null,
+        "fallback_used": null,
+        "local_candidate": null,
+        "runner_assert_failures": []
+      }
     }
   ],
-  "full16_restore_condition": {
-    "condition_kind": "future_full16_restore_prerequisites",
+  "full16_restore_prerequisite": {
+    "condition_kind": "future_full16_restore_prerequisite",
+    "expected": 16,
     "not_executed_in_this_node": true,
-    "no_live_3_case_certified_model_yet": true,
     "this_is_not_full16_pass_evidence": true,
     "full16_remains_blocked_until_live_3_case_acceptance": true,
-    "requires_one_model_passing_3_case_certification": true,
-    "requires_core_challenger_acceptance": true,
-    "requires_audit_acceptance": true,
-    "expected": 16,
-    "executed": 16,
-    "passed": 16,
-    "failed": 0,
-    "not_run": 0,
+    "requires_all_callable_required_text_gate_models_live3_3of3": true,
+    "min_passing_text_models": 5,
+    "requires_one_model_passing_3_case_certification": false,
+    "qwen_plus_alias_counts_for_required_gate": false,
+    "excluded_models_count_for_required_gate": false,
+    "per_model_live3_requirement": {
+      "expected": 3,
+      "executed": 3,
+      "passed": 3,
+      "failed": 0,
+      "not_run": 0
+    },
+    "pool_requirement": {
+      "all_callable_required_text_gate_models_passed": true,
+      "minimum_passing_callable_text_models": 5
+    },
     "no_http_403": true,
     "no_live_fallback": true,
-    "runner_assert_failures": []
+    "fallback_used": false,
+    "local_candidate": false,
+    "runner_assert_failures": [],
+    "requires_core_challenger_acceptance": true,
+    "requires_audit_acceptance": true
   }
 }

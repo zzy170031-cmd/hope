@@ -119,8 +119,8 @@
 <small>`HOPE-PROV-002`: provider retry telemetry vs validator hard-fail confusion; closed because matrix stage naming and hard-fail taxonomy are now fixed.</small>
 - `HOPE-EVID-003`：raw compact evidence 字段不自含；关闭依据是 raw `provider_retry_evidence` 回填与 fresh raw telemetry 复证。
 <small>`HOPE-EVID-003`: raw compact evidence was not self-contained; closed by raw `provider_retry_evidence` backfill and fresh raw telemetry re-verification.</small>
-- `HOPE-SHELL-004`：WebView2 弹窗、child 未生成、zero target、devUrl target mismatch；Shell Gate 已在 anchor `1728d50d883d1d064d953cf3dfadb5ec3661ee62` 与 release exe hash `93EE526330896A0588027BFFCC4AE04F44DC4EF47748DC27B0324B814B990366` 上窄口径 stabilized；provider/live3/full16/403-case/package 仍未解锁。
-<small>`HOPE-SHELL-004`: WebView2 popup, missing child, zero target, and devUrl target mismatch; the Shell Gate is narrowly stabilized at anchor `1728d50d883d1d064d953cf3dfadb5ec3661ee62` with release exe hash `93EE526330896A0588027BFFCC4AE04F44DC4EF47748DC27B0324B814B990366`; provider/live3/full16/403-case/package remain locked.</small>
+- `HOPE-SHELL-004`：WebView2 弹窗、child 未生成、zero target、devUrl target mismatch；Shell Gate 已在 clean workspace `E:\codex\hope-desktop-shell-clean-9a8f4e0-r2`、anchor `9a8f4e0349fa56a7cc57fb2e3817fabaa75afb6e`、release exe hash `E3BB9738851AF64FBE642517CA8DE2BEE82B23F67B4B19E9C8C817E8C6AD6D26`、valid runs `hope-cdp-20260505-193016-26016` 与 `hope-cdp-20260505-193110-27216` 上窄口径 stabilized；provider/live3/full16/403-case/package 仍未解锁。
+<small>`HOPE-SHELL-004`: WebView2 popup, missing child, zero target, and devUrl target mismatch; the Shell Gate is narrowly stabilized in clean workspace `E:\codex\hope-desktop-shell-clean-9a8f4e0-r2` at anchor `9a8f4e0349fa56a7cc57fb2e3817fabaa75afb6e`, release exe hash `E3BB9738851AF64FBE642517CA8DE2BEE82B23F67B4B19E9C8C817E8C6AD6D26`, and valid runs `hope-cdp-20260505-193016-26016` plus `hope-cdp-20260505-193110-27216`; provider/live3/full16/403-case/package remain locked.</small>
 - `HOPE-EVID-005`：stale artifact / stale binary / stale profile / stale env 污染 gate；关闭依据是 stale evidence 规则已经写入全局与项目规则。
 <small>`HOPE-EVID-005`: stale artifact, stale binary, stale profile, and stale env gate pollution; closed by global and project stale-evidence rules.</small>
 - `HOPE-BUILD-006`：direct cargo build 与 Tauri release-like provenance 混淆；关闭依据是 plain Cargo output 已被明确排除出 accepted release provenance。
@@ -140,25 +140,25 @@
 <small>5. Open Issue Index</small>
 
 - `HOPE-CONTRACT-007`：`主角初 -> 初现 -> 主角` 暴露出的 token/entity classification 与 source role grounding 问题；缺 post-fix fresh provider artifact；下一步是 release-like rebuild 后 fresh QA rerun。
-<small>`HOPE-CONTRACT-007`: token/entity classification and source-role grounding issue exposed by `主角初 -> 初现 -> 主角`; missing post-fix fresh provider artifact; next step is fresh QA rerun after release-like rebuild.</small>
-- `HOPE-BUILD-010`：`app/Cargo.toml` 被 Tauri CLI 自动改写 `features=[]` 的 preflight 风险；缺自动或文档化 preflight guard；下一步是把 guard 写成 pre-QA 强制检查。
-<small>`HOPE-BUILD-010`: preflight risk that Tauri CLI may rewrite `app/Cargo.toml` to `features=[]`; missing a documented or automated preflight guard; next step is to codify that guard before QA.</small>
-- `HOPE-OWN-011`：QA 线程越界修改 source/tracked 文件的 dirty ownership 风险；缺按线程授权收口的 fresh ownership evidence；下一步是每次 QA 前后固定记录 tracked-file diff 与授权边界。
-<small>`HOPE-OWN-011`: dirty-ownership risk when QA threads cross into source/tracked files; missing fresh ownership closure evidence; next step is mandatory tracked-file diff plus authorization boundaries before and after QA.</small>
-- `HOPE-GATE-016`：当前 gate 层级容易被单案结果过读；缺 fresh `qwen3.6-plus` live3 3-case 与 required text model pool live3 通过回报；下一步是按层级继续取 fresh evidence。
-<small>`HOPE-GATE-016`: current gate ladder is still vulnerable to over-reading from a single case; fresh `qwen3.6-plus` live3 3-case and required-pool live3 evidence are missing; next step is to collect fresh evidence layer by layer.</small>
+<small>`HOPE-CONTRACT-007`: token/entity classification and source-role grounding issue exposed by `主角初 -> 初现 -> 主角`; a source-grounding contract now exists, but the post-fix fresh provider artifact is still missing; next step is fresh QA rerun after a release-like rebuild.</small>
+- `HOPE-BUILD-010`：`app/Cargo.toml` 被 Tauri CLI 自动改写 `features=[]` 的 preflight 风险；已新增 QA preflight / ownership contract，但缺 fresh preflight guard 执行证据，因此状态维持 `contract-pending`。
+<small>`HOPE-BUILD-010`: preflight risk that Tauri CLI may rewrite `app/Cargo.toml` to `features=[]`; a QA preflight/ownership contract now exists, but fresh guard-execution evidence is still missing, so the status remains `contract-pending`.</small>
+- `HOPE-OWN-011`：QA 线程越界修改 source/tracked 文件的 dirty ownership 风险；已新增 QA ownership contract，但缺 fresh “从启动到回报都守边界”的闭环样例，因此状态维持 `contract-pending`。
+<small>`HOPE-OWN-011`: dirty-ownership risk when QA threads cross into source/tracked files; a QA ownership contract now exists, but a fresh end-to-end bounded example is still missing, so the status remains `contract-pending`.</small>
+- `HOPE-GATE-016`：当前 gate 层级容易被单案结果过读；已新增 gate evidence ladder contract，但缺 fresh `qwen3.6-plus` live3 3-case 与 required text model pool live3 通过回报；下一步仍是按层级继续取 fresh evidence。
+<small>`HOPE-GATE-016`: the current gate ladder is still vulnerable to over-reading from a single case; a gate-evidence ladder contract now exists, but fresh `qwen3.6-plus` live3 3-case and required-pool live3 evidence are still missing, so the next step remains collecting fresh evidence layer by layer.</small>
 
 ## 6. reference-only 资料索引
 <small>6. Reference-only Evidence Index</small>
 
 - `HOPE-SAMPLE-014`：21/27 样本集当前只能作为 QA/reference 材料，不能作为 runtime truth 或 formal import gate evidence。
 <small>`HOPE-SAMPLE-014`: the 21/27 sample sets can currently serve only as QA/reference material, not runtime truth or formal-import gate evidence.</small>
-- `HOPE-SHELL-004` 的 2026-05-04 `launch-diagnostic-minimal-noproxy-reproof.json` 与配套 `stoponly-final.json` 只可作为第 5 次复发的 comparison/reference-only；Shell Gate 当前依据是 anchor `1728d50d883d1d064d953cf3dfadb5ec3661ee62` 与 release exe hash `93EE526330896A0588027BFFCC4AE04F44DC4EF47748DC27B0324B814B990366`，不是旧 artifact。
-<small>The 2026-05-04 `launch-diagnostic-minimal-noproxy-reproof.json` and paired `stoponly-final.json` for `HOPE-SHELL-004` are comparison/reference-only for the fifth recurrence; the current Shell Gate basis is anchor `1728d50d883d1d064d953cf3dfadb5ec3661ee62` and release exe hash `93EE526330896A0588027BFFCC4AE04F44DC4EF47748DC27B0324B814B990366`, not the old artifact.</small>
+- `HOPE-SHELL-004` 的 2026-05-04 `launch-diagnostic-minimal-noproxy-reproof.json` 与配套 `stoponly-final.json` 只可作为第 5 次复发的 comparison/reference-only；Shell Gate 当前依据是 clean workspace `E:\codex\hope-desktop-shell-clean-9a8f4e0-r2`、anchor `9a8f4e0349fa56a7cc57fb2e3817fabaa75afb6e`、release exe hash `E3BB9738851AF64FBE642517CA8DE2BEE82B23F67B4B19E9C8C817E8C6AD6D26` 与 valid runs `hope-cdp-20260505-193016-26016` / `hope-cdp-20260505-193110-27216`，不是旧 artifact。
+<small>The 2026-05-04 `launch-diagnostic-minimal-noproxy-reproof.json` and paired `stoponly-final.json` for `HOPE-SHELL-004` are comparison/reference-only for the fifth recurrence; the current Shell Gate basis is clean workspace `E:\codex\hope-desktop-shell-clean-9a8f4e0-r2`, anchor `9a8f4e0349fa56a7cc57fb2e3817fabaa75afb6e`, release exe hash `E3BB9738851AF64FBE642517CA8DE2BEE82B23F67B4B19E9C8C817E8C6AD6D26`, and valid runs `hope-cdp-20260505-193016-26016` / `hope-cdp-20260505-193110-27216`, not the old artifact.</small>
 - `HOPE-CONTRACT-007` 的 pre-fix validator review 与 pre-fix provider artifact 只能作为参考背景，不能关闭当前 token/source grounding 项。
 <small>The pre-fix validator review and pre-fix provider artifacts for `HOPE-CONTRACT-007` are background only and cannot close the current token/source-grounding issue.</small>
-- proxy-blocked artifact、wrong-target shell artifact、plain Cargo build artifact 与旧 binary artifact 都只能作为 `reference-only` 或 `stale` 提醒。
-<small>Proxy-blocked artifacts, wrong-target shell artifacts, plain-Cargo build artifacts, and old binary artifacts are reference-only or stale reminders only.</small>
+- proxy-blocked artifact、wrong-target shell artifact、plain Cargo build artifact、旧 binary artifact、Hope-2-v0、`E:\codex\hope-local-stale-archive`、旧 `%TEMP%` artifact、旧 CDP profile 与旧 no-`RepoRoot` run 都只能作为 `reference-only` 或 `stale` 提醒。
+<small>Proxy-blocked artifacts, wrong-target shell artifacts, plain-Cargo build artifacts, old binary artifacts, Hope-2-v0, `E:\codex\hope-local-stale-archive`, old `%TEMP%` artifacts, old CDP profiles, and old no-`RepoRoot` runs are reference-only or stale reminders only.</small>
 
 ## 7. 项目进度错题详表
 <small>7. Detailed Project Progress Error Entries</small>
@@ -288,20 +288,20 @@
 <small>Why it escaped: Shell diagnostics, provider runs, and release provenance were not separated into independent checkpoints.</small>
 - 解决过程：先试图把 zero-target 与 wrong-target 一起归类成“壳层不稳定”，这条路无法指导下一步；随后把 zero-target 转到 `LaunchDiagnosticOnly`，把 wrong-target 归入 release provenance blocker，并要求每个 shell 生命周期以 `StopOnly` 结束。第 5 次复发证明“仅有规则文字”不足以关单，因此本次新增 shell startup hard gate contract，把 `AppDefault + LaunchDiagnosticOnly`、`before_main_window_build`、`0x80000003` popup、`tauri.localhost` target 与 cleanup 全部升级成强制 gate。
 <small>Resolution: The first attempt grouped zero-target and wrong-target into a vague shell-instability bucket and did not guide the next action; the later step routed zero-target to `LaunchDiagnosticOnly`, wrong-target to release-provenance blocking, and enforced `StopOnly` at the end of each shell lifecycle. The fifth recurrence proved that text-only rules were insufficient for closure, so this cycle adds a shell-startup hard-gate contract covering `AppDefault + LaunchDiagnosticOnly`, `before_main_window_build`, `0x80000003` popup handling, the `tauri.localhost` target, and cleanup.</small>
-- 修复验证证据：`E:\codex\hope-desktop-shell\docs\desktop-release-qa-handoff.md` 与新增 `E:\codex\hope-desktop-shell\docs\desktop-shell-webview2-cdp-startup-contract.md` 已写明正式 shell gate、wrong-target blocker、host-window blocker 与 `StopOnly` cleanup；Shell Gate 已在 anchor `1728d50d883d1d064d953cf3dfadb5ec3661ee62`、release exe hash `93EE526330896A0588027BFFCC4AE04F44DC4EF47748DC27B0324B814B990366` 上窄口径 stabilized。该证据只关闭 shell startup / CDP target 启动层，不解锁 provider/live3/full16/403-case/package。
-<small>Verification evidence: `E:\codex\hope-desktop-shell\docs\desktop-release-qa-handoff.md` and the new `E:\codex\hope-desktop-shell\docs\desktop-shell-webview2-cdp-startup-contract.md` now define the formal shell gate, wrong-target blocker, host-window blocker, and `StopOnly` cleanup; the Shell Gate is narrowly stabilized at anchor `1728d50d883d1d064d953cf3dfadb5ec3661ee62` with release exe hash `93EE526330896A0588027BFFCC4AE04F44DC4EF47748DC27B0324B814B990366`. This evidence closes only the shell startup / CDP target startup layer and does not unlock provider/live3/full16/403-case/package.</small>
-- 如何防范：以后每次 CDP 汇报都必须同时带 target count、target URL/title、PID、trace 状态与 cleanup 结果；shell gate 不绿时一律禁止 provider / runner / live3 / pool / `full16` / `403-case` / package。
-<small>Prevention: Every future CDP report must include target count, target URL/title, PID, trace status, and cleanup result together; when the shell gate is not green, provider, runner, live3, pool, `full16`, `403-case`, and package work are all forbidden.</small>
+- 修复验证证据：`E:\codex\hope-desktop-shell\docs\desktop-release-qa-handoff.md` 与新增 `E:\codex\hope-desktop-shell\docs\desktop-shell-webview2-cdp-startup-contract.md` 已写明正式 shell gate、wrong-target blocker、host-window blocker、explicit `-RepoRoot` clean workspace 边界与 `StopOnly` cleanup；Shell Gate 已在 clean workspace `E:\codex\hope-desktop-shell-clean-9a8f4e0-r2`、anchor `9a8f4e0349fa56a7cc57fb2e3817fabaa75afb6e`、release exe hash `E3BB9738851AF64FBE642517CA8DE2BEE82B23F67B4B19E9C8C817E8C6AD6D26`、valid runs `hope-cdp-20260505-193016-26016` 与 `hope-cdp-20260505-193110-27216` 上窄口径 stabilized。该证据只关闭 shell startup / CDP target 启动层，不解锁 provider/live3/full16/403-case/package。
+<small>Verification evidence: `E:\codex\hope-desktop-shell\docs\desktop-release-qa-handoff.md` and the new `E:\codex\hope-desktop-shell\docs\desktop-shell-webview2-cdp-startup-contract.md` now define the formal shell gate, wrong-target blocker, host-window blocker, explicit `-RepoRoot` clean-workspace boundary, and `StopOnly` cleanup; the Shell Gate is narrowly stabilized in clean workspace `E:\codex\hope-desktop-shell-clean-9a8f4e0-r2` at anchor `9a8f4e0349fa56a7cc57fb2e3817fabaa75afb6e`, release exe hash `E3BB9738851AF64FBE642517CA8DE2BEE82B23F67B4B19E9C8C817E8C6AD6D26`, and valid runs `hope-cdp-20260505-193016-26016` plus `hope-cdp-20260505-193110-27216`. This evidence closes only the shell startup / CDP target startup layer and does not unlock provider/live3/full16/403-case/package.</small>
+- 如何防范：以后每次 CDP 汇报都必须同时带 workspace path、HEAD、exe hash、`/json/list` artifact、post-setup probe、target URL/title、PID 与 cleanup 结果；shell gate 不绿时一律禁止 provider / runner / live3 / pool / `full16` / `403-case` / package。
+<small>Prevention: Every future CDP report must include workspace path, HEAD, exe hash, `/json/list` artifact, post-setup probe, target URL/title, PID, and cleanup result together; when the shell gate is not green, provider, runner, live3, pool, `full16`, `403-case`, and package work are all forbidden.</small>
 - Playbook · 第一检查项：先判断是 zero-target、wrong-target，还是 child-process absence，再决定是否进入 provider 讨论。
 <small>Playbook · First Check: Decide whether the issue is zero-target, wrong-target, or missing child process before touching provider discussion.</small>
-- Playbook · 必要证据：`/json/list` 摘要、PID、diagnostic log 摘要、StopOnly 结果。
-<small>Playbook · Evidence Required: `/json/list` summary, PID, diagnostic log summary, and StopOnly result.</small>
+- Playbook · 必要证据：explicit `-RepoRoot`、workspace path、HEAD、exe hash、`/json/list` artifact、post-setup probe、PID、diagnostic log 摘要、StopOnly 结果。
+<small>Playbook · Evidence Required: explicit `-RepoRoot`, workspace path, HEAD, exe hash, `/json/list` artifact, post-setup probe, PID, diagnostic log summary, and StopOnly result.</small>
 - Playbook · 停止条件：一旦确认问题只在 shell/runtime 层出现，就停止往业务 QA 扩散。
 <small>Playbook · Stop Condition: Stop expanding into business QA as soon as the issue is shown to be shell/runtime-only.</small>
 - Playbook · 升级条件：fresh release-like build 仍无法落到 `http://tauri.localhost/#/workbench`。
 <small>Playbook · Escalation: Escalate if a fresh release-like build still fails to resolve to `http://tauri.localhost/#/workbench`.</small>
-- Playbook · 禁止捷径：不要把 `127.0.0.1:5173` 或弹窗观察当成 release-shell evidence。
-<small>Playbook · Forbidden Shortcut: Do not treat `127.0.0.1:5173` or popup-only observation as release-shell evidence.</small>
+- Playbook · 禁止捷径：不要把 `127.0.0.1:5173`、no-`RepoRoot` run、Hope-2-v0 artifact、旧 CDP profile、旧 `%TEMP%` artifact 或弹窗观察当成 release-shell evidence。
+<small>Playbook · Forbidden Shortcut: Do not treat `127.0.0.1:5173`, a no-`RepoRoot` run, a Hope-2-v0 artifact, an old CDP profile, an old `%TEMP%` artifact, or popup-only observation as release-shell evidence.</small>
 - 禁止重复排查：在没有先分清 zero-target 与 wrong-target 前，不要重开 provider 根因。
 <small>Do not reopen: Do not reopen provider root-cause discussion before separating zero-target from wrong-target.</small>
 - 当前状态：shell-gate-stabilized
@@ -396,10 +396,10 @@
 <small>Why it escaped: Structural field contracts were stronger than token/entity and source-role grounding contracts, so front-layer semantic gaps were temporarily masked by downstream structure.</small>
 - 解决过程：第一步曾把问题收缩成纯 token classification，这只能解释 `主角初 -> 初现` 的局部名称问题，不能关闭 source role grounding；第二步在 `app/src/runtime.rs` 对 `初现 / 初现于` 做了本地实现修复，并通过 targeted tests；第三步需要 release-like rebuild 与 post-fix fresh provider artifact，当前这一步仍未完成。
 <small>Resolution: The first attempt reduced the issue to pure token classification, which could explain the `主角初 -> 初现` substring case but not close source-role grounding; the second step added a local implementation fix for `初现 / 初现于` in `app/src/runtime.rs` and passed targeted tests; the third required step is a release-like rebuild plus post-fix fresh provider artifact, and that step is still pending.</small>
-- 修复验证证据：当前只有本地实现修复与 targeted tests 通过；缺少 post-fix fresh provider artifact，因此不能写成已修复。
-<small>Verification evidence: Only the local implementation fix and targeted tests are currently available; the post-fix fresh provider artifact is missing, so the item cannot be described as fixed.</small>
-- 如何防范：凡是修改 `app/src/runtime.rs` 中的抽取、分类或 source role grounding 逻辑，fresh QA 前都必须先重建 release-like shell，并以 fresh provider artifact 复证。
-<small>Prevention: Any change to extraction, classification, or source-role grounding logic in `app/src/runtime.rs` must force a release-like rebuild before fresh QA and must be re-verified by a fresh provider artifact.</small>
+- 修复验证证据：当前只有本地实现修复与 targeted tests 通过；新增 `E:\codex\hope-desktop-shell\docs\desktop-validator-source-grounding-contract.md` 已把 token/entity classification、source-bound fragment、bare source role `主角`、invented-name hard-fail 与必要 sanitized evidence 固定下来；但缺少 post-fix fresh provider artifact，因此不能写成已修复。
+<small>Verification evidence: Only the local implementation fix and targeted tests are currently available; the new `E:\codex\hope-desktop-shell\docs\desktop-validator-source-grounding-contract.md` now fixes token/entity classification, source-bound fragments, the bare source role `主角`, invented-name hard fail, and required sanitized evidence; but the post-fix fresh provider artifact is still missing, so the item cannot be described as fixed.</small>
+- 如何防范：凡是修改 `app/src/runtime.rs` 中的抽取、分类或 source role grounding 逻辑，fresh QA 前都必须先重建 release-like shell，并以 fresh provider artifact 复证；不得再用“模型风格解释”替代 source grounding 契约判断。
+<small>Prevention: Any change to extraction, classification, or source-role grounding logic in `app/src/runtime.rs` must force a release-like rebuild before fresh QA and must be re-verified by a fresh provider artifact; a “model style” explanation may no longer replace the source-grounding contract judgment.</small>
 - Playbook · 第一检查项：先判断分歧起点是在 extraction、StoryFactFrame binding、source role grounding 还是 row validation，再确认手里的 artifact 是否早于本地修复。
 <small>Playbook · First Check: Identify whether the disagreement starts in extraction, StoryFactFrame binding, source-role grounding, or row validation, then confirm whether the available artifact predates the local fix.</small>
 - Playbook · 必要证据：targeted test 结果、snapshot hash、StoryFactFrame hash、validator stage、post-fix fresh provider artifact。
@@ -504,10 +504,10 @@
 <small>Why it escaped: The available rules and docs can describe the risk, but they have not yet codified an `app/Cargo.toml` preflight guard as a mandatory checkpoint before each QA or build step.</small>
 - 解决过程：先默认依赖事后 `git diff` 发现异常，这种做法只能在变更发生后补救，不能阻止 preflight 污染；当前更稳的做法是把该风险单列为 open blocker，等待明确的 preflight guard 与 fresh ownership evidence。
 <small>Resolution: The first approach relied on after-the-fact `git diff`, which can only detect pollution after it occurs and cannot prevent it; the safer current stance is to keep the issue open until an explicit preflight guard and fresh ownership evidence exist.</small>
-- 修复验证证据：当前 live `git status` 没有把 `app/Cargo.toml` 列为脏文件，但允许读取的 source-of-truth 规则里仍缺专门的 preflight guard，因此本项不能关闭。
-<small>Verification evidence: Current live `git status` does not show `app/Cargo.toml` dirty, but the allowed source-of-truth rules still lack a dedicated preflight guard, so this item cannot be closed.</small>
-- 如何防范：任何会触发 Tauri CLI 的 QA/build 线程，在执行前后都必须固定记录 `app/Cargo.toml` tracked state，并把异常视为 boundary blocker。
-<small>Prevention: Any QA or build thread that can invoke Tauri CLI must record `app/Cargo.toml` tracked state before and after execution and treat any unexpected change as a boundary blocker.</small>
+- 修复验证证据：当前 live `git status` 已显示 `app/Cargo.toml` 处于 dirty state；新增 `E:\codex\hope-desktop-shell\docs\desktop-qa-preflight-ownership-contract.md` 已把 preflight/postflight diff、`features=[]` whitelist handling 与超白名单 blocker 固定下来；但本契约尚缺一次 fresh 执行闭环，因此本项不能关闭。
+<small>Verification evidence: Current live `git status` already shows `app/Cargo.toml` as dirty; the new `E:\codex\hope-desktop-shell\docs\desktop-qa-preflight-ownership-contract.md` now codifies preflight/postflight diff recording, `features=[]` whitelist handling, and over-whitelist blocking; but one fresh execution loop is still missing, so this item cannot close.</small>
+- 如何防范：任何会触发 Tauri CLI 的 QA/build 线程，在执行前后都必须固定记录 `app/Cargo.toml` tracked state，并把异常视为 boundary blocker；即使是 `features=[]` 白名单 rewrite，也只能记录为 `whitelist-observed`，不能自动当成已关闭。
+<small>Prevention: Any QA or build thread that can invoke Tauri CLI must record `app/Cargo.toml` tracked state before and after execution and treat anomalies as boundary blockers; even the `features=[]` whitelist rewrite may only be recorded as `whitelist-observed`, never automatically as closure.</small>
 - Playbook · 第一检查项：在准备进入 build 或 release-QA 前，先检查 `app/Cargo.toml` 是否已经处于可解释状态。
 <small>Playbook · First Check: Before entering build or release QA, check whether `app/Cargo.toml` is already in an explainable tracked state.</small>
 - Playbook · 必要证据：启动前 tracked-file 状态、结束后 tracked-file 状态、授权边界说明。
@@ -520,8 +520,8 @@
 <small>Playbook · Forbidden Shortcut: Do not rewrite “not dirty this time” as “the risk is closed.”</small>
 - 禁止重复排查：在 preflight guard 没落地前，不要把本项当作已解决。
 <small>Do not reopen: Do not treat this item as solved before the preflight guard is codified.</small>
-- 当前状态：open
-<small>Status: open</small>
+- 当前状态：contract-pending
+<small>Status: contract-pending</small>
 
 ### `HOPE-OWN-011`：QA 线程越界修改 source/tracked 文件的 dirty ownership 风险
 <small>`HOPE-OWN-011`: Dirty-ownership risk when QA threads cross into source/tracked files</small>
@@ -540,10 +540,10 @@
 <small>Why it escaped: Dispatches often named the task target but did not always codify source/tracked-file boundaries and dirty ownership as equal-priority constraints.</small>
 - 解决过程：先尝试只靠结果汇报解释 dirty state，这条路无法把 QA 与实现边界分开；当前收敛做法是每次 QA 前后都先记录 tracked-file diff 与授权边界，但这套纪律还没有形成一次 fresh 全量闭环，所以仍保持 open。
 <small>Resolution: The first attempt tried to explain dirty state only in the final report, which could not separate QA from implementation boundaries; the current safer practice is to record tracked-file diff and authorization boundaries before and after each QA step, but that discipline has not yet closed with one fresh end-to-end proof, so the issue remains open.</small>
-- 修复验证证据：当前 live `git status` 仍显示 tracked dirty files；`E:\codex\AGENTS.md` 与 `E:\codex\hope-desktop-shell\docs\codex-usage-core-rules.md` 已要求线程固定记录 dirty ownership，但尚缺 fresh “从启动到回报均守边界”的闭环样例。
-<small>Verification evidence: Current live `git status` still shows tracked dirty files; `E:\codex\AGENTS.md` and `E:\codex\hope-desktop-shell\docs\codex-usage-core-rules.md` already require dirty-ownership recording, but a fresh end-to-end “bounded from start to report” example is still missing.</small>
-- 如何防范：所有 QA 线程都必须把“允许修改哪些 tracked files”写进 dispatch；如果没有这行，就默认 source/tracked file 全禁。
-<small>Prevention: Every QA thread must state which tracked files may be modified in the dispatch; if that line is missing, source/tracked files are forbidden by default.</small>
+- 修复验证证据：当前 live `git status` 仍显示 tracked dirty files；`E:\codex\AGENTS.md` 与 `E:\codex\hope-desktop-shell\docs\codex-usage-core-rules.md` 已要求线程固定记录 dirty ownership，本次新增 `E:\codex\hope-desktop-shell\docs\desktop-qa-preflight-ownership-contract.md` 又把 preflight/postflight 记录、dispatch 文件边界与 ownership blocker 固定下来；但尚缺 fresh “从启动到回报均守边界”的闭环样例。
+<small>Verification evidence: Current live `git status` still shows tracked dirty files; `E:\codex\AGENTS.md` and `E:\codex\hope-desktop-shell\docs\codex-usage-core-rules.md` already require dirty-ownership recording, and this cycle adds `E:\codex\hope-desktop-shell\docs\desktop-qa-preflight-ownership-contract.md` to codify preflight/postflight recording, dispatch file boundaries, and ownership blockers; however, a fresh end-to-end bounded example is still missing.</small>
+- 如何防范：所有 QA 线程都必须把“允许修改哪些 tracked files”写进 dispatch；如果没有这行，就默认 source/tracked file 全禁；`app/Cargo.toml` 需要单列 ownership gate。
+<small>Prevention: Every QA thread must state which tracked files may be modified in the dispatch; if that line is missing, source/tracked files are forbidden by default; `app/Cargo.toml` needs its own ownership gate.</small>
 - Playbook · 第一检查项：QA 前先记录 tracked-file status，并核对 dispatch 是否授权 touching source/tracked files。
 <small>Playbook · First Check: Record tracked-file status before QA and confirm whether the dispatch authorizes touching source/tracked files.</small>
 - Playbook · 必要证据：启动前 status、结束后 status、diff 摘要、dispatch 授权边界。
@@ -556,8 +556,8 @@
 <small>Playbook · Forbidden Shortcut: Do not treat “just a quick fix” as a legitimate QA action.</small>
 - 禁止重复排查：在 tracked-file ownership 未解释清楚前，不要重开业务结论争论。
 <small>Do not reopen: Do not reopen business-level conclusion debates before tracked-file ownership is explained.</small>
-- 当前状态：open
-<small>Status: open</small>
+- 当前状态：contract-pending
+<small>Status: contract-pending</small>
 
 ### `HOPE-GOV-012`：bounded `/goal` 未及时使用导致反复沟通
 <small>`HOPE-GOV-012`: Delayed bounded `/goal` use caused repeated communication loops</small>
@@ -720,10 +720,10 @@
 <small>Why it escaped: The gate ladder is documented, but the rule for what may not be over-read is not repeated prominently enough in each report.</small>
 - 解决过程：先用局部通过信号推动整体乐观判断，这种做法没有对应 fresh gate evidence；随后把 gate ladder 明确写成“单案 -> `qwen3.6-plus` live3 3-case -> required pool live3 -> `full16` -> `403-case` -> `package`”，并明确写出当前没有 fresh 三案通过回报，因此只能保持 pending。
 <small>Resolution: The first approach let local success signals fuel broad optimism without matching fresh gate evidence; the later approach rewrote the ladder explicitly as “single case -> `qwen3.6-plus` live3 3-case -> required pool live3 -> `full16` -> `403-case` -> `package`” and stated clearly that without a fresh three-case report the status remains pending.</small>
-- 修复验证证据：`E:\codex\hope-desktop-shell\docs\desktop-release-qa-handoff.md` 已明确 required text gate pool、live3、`full16` 与 higher gates 的层级；当前线程也没有收到 fresh live3 三案通过回报。
-<small>Verification evidence: `E:\codex\hope-desktop-shell\docs\desktop-release-qa-handoff.md` explicitly defines the hierarchy among required text gate pool, live3, `full16`, and higher gates; the current thread has not received any fresh live3 three-case pass report.</small>
-- 如何防范：以后所有 gate 汇报都必须同时写“当前层级”和“尚未解锁的上一层与下一层”。
-<small>Prevention: Every future gate report must name both the current layer and the still-locked lower and higher adjacent layers.</small>
+- 修复验证证据：`E:\codex\hope-desktop-shell\docs\desktop-release-qa-handoff.md` 已明确 required text gate pool、live3、`full16` 与 higher gates 的层级；本次新增 `E:\codex\hope-desktop-shell\docs\desktop-gate-evidence-ladder-contract.md` 进一步把 single case、`qwen3.6-plus` live3、required pool、`full16`、`403-case` 与 package 的 acceptance evidence 固定下来；当前线程仍没有收到 fresh live3 三案通过回报。
+<small>Verification evidence: `E:\codex\hope-desktop-shell\docs\desktop-release-qa-handoff.md` already defines the hierarchy among the required text gate pool, live3, `full16`, and higher gates; this cycle adds `E:\codex\hope-desktop-shell\docs\desktop-gate-evidence-ladder-contract.md` to formalize acceptance evidence for single case, `qwen3.6-plus` live3, required pool, `full16`, `403-case`, and package; the current thread still has no fresh live3 three-case pass report.</small>
+- 如何防范：以后所有 gate 汇报都必须同时写“当前层级”和“尚未解锁的上一层与下一层”；不得再把 `certifier_ok=true`、targeted tests passed、单案结果或旧 artifact 上读成更高 gate。
+<small>Prevention: Every future gate report must name both the current layer and the still-locked lower and higher adjacent layers; `certifier_ok=true`, targeted tests passed, single-case results, and old artifacts must never be read upward into a higher gate.</small>
 - Playbook · 第一检查项：先问手里的证据究竟对应哪一层 gate，而不是“感觉像快好了”。
 <small>Playbook · First Check: Ask which exact gate layer the current evidence belongs to, not whether it “feels close to done.”</small>
 - Playbook · 必要证据：fresh 回报时间、对应 gate 名称、expected/executed/passed/failed 计数或等价状态字段。
