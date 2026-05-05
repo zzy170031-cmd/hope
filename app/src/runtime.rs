@@ -443,6 +443,7 @@ const LIVE_PERSON_ACTION_STATE_FRAGMENT_TERMS: &[&str] = &[
     "准备反",
     "坚持",
     "坚定",
+    "撑持",
     "喘息",
     "喘息声",
     "急喘",
@@ -2977,7 +2978,8 @@ fn blocked_runtime_person_classification(
     if let Some(normalized) =
         normalize_live_character_label_to_source_subject(trimmed, evidence, baseline_person)
     {
-        let grounded = live_source_subject_label_is_grounded(&normalized, evidence, baseline_person);
+        let grounded =
+            live_source_subject_label_is_grounded(&normalized, evidence, baseline_person);
         return (
             if grounded {
                 "normalized_to_source_subject".to_string()
@@ -3177,40 +3179,33 @@ fn blocked_runtime_diagnostic_warnings(
                 &source_text,
                 &baseline_row.person,
             );
-            let (pre_repair_class, pre_repair_label, _, _) =
-                blocked_runtime_person_classification(
-                    pre_repair_person,
-                    &source_text,
-                    &baseline_row.person,
-                );
+            let (pre_repair_class, pre_repair_label, _, _) = blocked_runtime_person_classification(
+                pre_repair_person,
+                &source_text,
+                &baseline_row.person,
+            );
             let (post_repair_class, post_repair_label, post_grounded, post_grounded_normalized) =
                 blocked_runtime_person_classification(
                     post_repair_person,
                     &source_text,
                     &baseline_row.person,
                 );
-            let bound_person = bind_live_storyboard_person_to_source(raw_input_person, baseline_row);
-            let bind_source_role_hit =
-                blocked_runtime_source_role_hit(&bound_person, &source_text);
-            let post_untrusted = live_storyboard_row_untrusted_character_detail(post_row, baseline_row)
-                .map(
-                    |detail| {
+            let bound_person =
+                bind_live_storyboard_person_to_source(raw_input_person, baseline_row);
+            let bind_source_role_hit = blocked_runtime_source_role_hit(&bound_person, &source_text);
+            let post_untrusted =
+                live_storyboard_row_untrusted_character_detail(post_row, baseline_row)
+                    .map(|detail| {
                         (
                             detail.field.to_string(),
                             sanitize_blocked_runtime_diag_value(&detail.candidate),
                             sanitize_blocked_runtime_diag_value(&detail.normalized_candidate),
                             detail.reason.to_string(),
                         )
-                    },
-                )
-                .unwrap_or_else(|| {
-                    (
-                        String::new(),
-                        String::new(),
-                        String::new(),
-                        String::new(),
-                    )
-                });
+                    })
+                    .unwrap_or_else(|| {
+                        (String::new(), String::new(), String::new(), String::new())
+                    });
             let raw_input_hash = stable_binding_hash_json(raw_input_person);
             let baseline_hash = stable_binding_hash_json(&baseline_row.person);
             let raw_bound_hash = stable_binding_hash_json(raw_bound_person);
@@ -3269,10 +3264,8 @@ fn blocked_runtime_diagnostic_warnings(
             let (post_repair_class, post_repair_label) =
                 blocked_runtime_field_classification(post_row, field_name, &source_text);
 
-            let baseline_hash = stable_binding_hash_json(storyboard_row_field_value(
-                baseline_row,
-                field_name,
-            ));
+            let baseline_hash =
+                stable_binding_hash_json(storyboard_row_field_value(baseline_row, field_name));
             let raw_patch_hash =
                 stable_binding_hash_json(storyboard_row_field_value(raw_patch_row, field_name));
             let pre_repair_hash =
@@ -8490,8 +8483,7 @@ fn live_storyboard_row_untrusted_character(
     row: &GeneratedStoryboardRow,
     baseline_row: &GeneratedStoryboardRow,
 ) -> Option<String> {
-    live_storyboard_row_untrusted_character_detail(row, baseline_row)
-        .map(|detail| detail.candidate)
+    live_storyboard_row_untrusted_character_detail(row, baseline_row).map(|detail| detail.candidate)
 }
 
 struct LiveStoryboardUntrustedCharacterDetail {
@@ -8501,17 +8493,24 @@ struct LiveStoryboardUntrustedCharacterDetail {
     reason: &'static str,
 }
 
-fn live_storyboard_field_character_candidate_is_noise(
-    field_name: &str,
-    candidate: &str,
-) -> bool {
+fn live_storyboard_field_character_candidate_is_noise(field_name: &str, candidate: &str) -> bool {
     let trimmed = candidate.trim();
     trimmed.is_empty()
         || (field_name == "shot_title"
             && matches!(
                 trimmed,
-                "\u{5B9A}\u{57FA}" | "\u{5B9A}\u{52BF}"
+                "\u{5B9A}\u{57FA}"
+                    | "\u{5B9A}\u{52BF}"
+                    | "\u{521D}\u{9635}"
+                    | "\u{5B9A}\u{6869}"
             ))
+        || (field_name == "shot_title" && contains_private_use_or_replacement_char(trimmed))
+}
+
+fn contains_private_use_or_replacement_char(value: &str) -> bool {
+    value
+        .chars()
+        .any(|character| character == '\u{FFFD}' || matches!(character as u32, 0xE000..=0xF8FF))
 }
 
 fn live_storyboard_field_character_candidates(field_name: &str, value: &str) -> Vec<String> {
@@ -8569,13 +8568,12 @@ fn live_storyboard_row_untrusted_character_detail(
                 &evidence,
                 &source_bound_baseline_person,
             ) {
-                let normalized_candidate =
-                    normalize_live_character_label_to_source_subject(
-                        &candidate,
-                        &evidence,
-                        &source_bound_baseline_person,
-                    )
-                    .unwrap_or_default();
+                let normalized_candidate = normalize_live_character_label_to_source_subject(
+                    &candidate,
+                    &evidence,
+                    &source_bound_baseline_person,
+                )
+                .unwrap_or_default();
                 return Some(LiveStoryboardUntrustedCharacterDetail {
                     field: field_name,
                     candidate,
@@ -10051,7 +10049,7 @@ fn looks_like_possessive_abstract_phrase(candidate: &str) -> bool {
     let trimmed = candidate.trim();
     let abstract_terms = [
         "决心", "意志", "信念", "勇气", "恐惧", "紧张", "压力", "压迫", "危机", "愤怒", "悲伤",
-        "犹豫", "希望",
+        "犹豫", "希望", "坚定", "坚毅",
     ];
     trimmed.strip_prefix('的').is_some_and(|tail| {
         abstract_terms.iter().any(|term| {
@@ -10440,6 +10438,9 @@ fn role_tail_starts_with_non_name_phrase(text: &str) -> bool {
     if looks_like_possessive_abstract_phrase(text) {
         return true;
     }
+    if text.starts_with("中的") {
+        return true;
+    }
     if live_person_subject_state_terms().any(|prefix| text.starts_with(prefix)) {
         return true;
     }
@@ -10615,6 +10616,7 @@ fn looks_like_name_noise_candidate(candidate: &str) -> bool {
             "态势",
             "调度",
             "秩序",
+            "中的",
             "坚持",
         ],
     ) {
@@ -12734,7 +12736,10 @@ fn binding_source_fact_covered_by_rows(rows_text: &str, fact: &str) -> bool {
     if binding_a_ruin_duel_pressure_fact(&clean_fact) {
         return clean_rows.contains("主角")
             && clean_rows.contains("敌人")
-            && contains_any_story_term(&clean_rows, &["对峙", "对峙压力", "逼近", "缓步逼近", "压近"]);
+            && contains_any_story_term(
+                &clean_rows,
+                &["对峙", "对峙压力", "逼近", "缓步逼近", "压近"],
+            );
     }
     false
 }
@@ -13727,8 +13732,8 @@ mod tests {
         StoryboardGroundingContext, StoryboardPreviewPlanRequest,
         TEXT_MODEL_NETWORK_RETRY_RECOVERED_CODE, TEXT_MODEL_OUTPUT_CONTRACT_NORMALIZED_CODE,
         TEXT_MODEL_QA_NO_LOCAL_FALLBACK_CODE, ValidationExportPanelState,
-        append_storyboard_binding_field_clause_safe, binding_source_fact_covered_by_rows,
-        allocate_storyboard_row_durations, apply_live_storyboard_patch,
+        allocate_storyboard_row_durations, append_storyboard_binding_field_clause_safe,
+        apply_live_storyboard_patch, binding_source_fact_covered_by_rows,
         build_deterministic_expanded_story_material, build_deterministic_expanded_story_script,
         build_project_create_or_switch_snapshot_from_fixture, build_qwen_request_payload,
         build_storyboard_binding_evidence, build_storyboard_duration_plan,
@@ -14201,7 +14206,7 @@ mod tests {
         live_row.character_action =
             "孔泛从高架桥阴影下压低重心开始，到抬头承受压迫结束，镜头捕捉手指动作。".to_string();
 
-        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline.clone()]);
 
         assert!(
             warnings
@@ -14209,6 +14214,46 @@ mod tests {
                 .any(|warning| warning.message.contains("ungrounded character name")),
             "live storyboard rows should reject invented character names: {:?}",
             warnings
+        );
+    }
+
+    #[test]
+    fn live_validator_treats_private_use_shot_title_candidate_as_noise() {
+        let artifact_candidate = "\u{6D93}\u{E160}\u{6B91}";
+        let invented_name = "\u{674E}\u{660E}";
+
+        assert!(super::live_storyboard_field_character_candidate_is_noise(
+            "shot_title",
+            artifact_candidate
+        ));
+        assert!(!super::live_storyboard_field_character_candidate_is_noise(
+            "shot_title",
+            invented_name
+        ));
+        assert!(!super::live_storyboard_field_character_candidate_is_noise(
+            "person",
+            invented_name
+        ));
+        let role_tail_fragment = "中的坚";
+        assert!(super::role_tail_starts_with_non_name_phrase(role_tail_fragment));
+        assert!(super::looks_like_name_noise_candidate(role_tail_fragment));
+        assert!(super::extract_character_name_after_role(role_tail_fragment).is_none());
+
+        let baseline = test_live_validation_row("主角");
+        let mut invented_name_row = baseline.clone();
+        invented_name_row.person = invented_name.to_string();
+        invented_name_row.visual_description =
+            format!("主体为{invented_name}，中近景把{invented_name}放在废墟前侧。");
+        invented_name_row.character_action =
+            format!("{invented_name}从废墟前侧开始，到挡住退路时结束。");
+
+        let warnings = validate_live_storyboard_rows(&[invented_name_row], 10, &[baseline]);
+        assert!(
+            warnings.iter().any(
+                |warning| warning.message.contains("ungrounded character name")
+                    && warning.message.contains(invented_name)
+            ),
+            "invented names must remain hard-failed: {warnings:?}"
         );
     }
 
@@ -14705,7 +14750,7 @@ mod tests {
             "{allowed_warnings:?}"
         );
 
-        for fragment in ["准备反", "准备反击", "反击准备"] {
+        for fragment in ["准备反", "准备反击", "反击准备", "撑持"] {
             let mut action_fragment_row = baseline.clone();
             action_fragment_row.visual_description = format!(
                 "主体为敌人，中近景把敌人、主角和废墟放在前后层次里；冷光压住碎石与混凝土；当前视觉事件是敌人{fragment}时仍缓步逼近，主角仍单膝跪地；画面突出对峙压力。"
@@ -14758,7 +14803,7 @@ mod tests {
             "{title_subject_warnings:?}"
         );
 
-        for fragment in ["准备反", "准备反击", "反击准备"] {
+        for fragment in ["准备反", "准备反击", "反击准备", "撑持"] {
             let mut title_subject_row = baseline.clone();
             title_subject_row.person = "敌人".to_string();
             title_subject_row.scene_performance_projection.person = "敌人".to_string();
@@ -17665,8 +17710,7 @@ No more content."#;
     #[test]
     fn binding_field_clause_safe_avoids_colon_subject_false_positive() {
         let mut field =
-            "主体为主角，中景把主角与废墟放在前后层次里；当前视觉事件是主角顶住来袭。"
-                .to_string();
+            "主体为主角，中景把主角与废墟放在前后层次里；当前视觉事件是主角顶住来袭。".to_string();
         append_storyboard_binding_field_clause_safe(
             &mut field,
             "场景锚点",
@@ -17709,9 +17753,8 @@ No more content."#;
             shot_title: "废墟压近".to_string(),
             person: "主角".to_string(),
             scene_scale: "中近景".to_string(),
-            visual_description:
-                "主体为废墟，中近景把废墟压在主角前侧；当前视觉事件是废墟压近。"
-                    .to_string(),
+            visual_description: "主体为废墟，中近景把废墟压在主角前侧；当前视觉事件是废墟压近。"
+                .to_string(),
             character_action: "废墟从前景压近主角。".to_string(),
             camera_movement: "废墟定机位观察主角。".to_string(),
             dialogue: String::new(),
@@ -17727,16 +17770,32 @@ No more content."#;
             "{}",
             live_row.shot_title
         );
-        assert!(live_row.shot_title.contains("主角"), "{}", live_row.shot_title);
-        assert!(!live_row.shot_title.contains("废墟"), "{}", live_row.shot_title);
+        assert!(
+            live_row.shot_title.contains("主角"),
+            "{}",
+            live_row.shot_title
+        );
+        assert!(
+            !live_row.shot_title.contains("废墟"),
+            "{}",
+            live_row.shot_title
+        );
         assert_eq!(live_row.visual_description, baseline.visual_description);
-        assert!(!live_row.character_action.contains("废墟从前景"), "{}", live_row.character_action);
+        assert!(
+            !live_row.character_action.contains("废墟从前景"),
+            "{}",
+            live_row.character_action
+        );
         assert!(
             contains_any_story_term(&live_row.character_action, &["主角", "敌人", "逼近"]),
             "{}",
             live_row.character_action
         );
-        assert!(!live_row.camera_movement.contains("废墟定机位"), "{}", live_row.camera_movement);
+        assert!(
+            !live_row.camera_movement.contains("废墟定机位"),
+            "{}",
+            live_row.camera_movement
+        );
         assert!(
             contains_any_story_term(&live_row.camera_movement, &["主角", "敌人", "对峙压力"]),
             "{}",
@@ -17753,15 +17812,15 @@ No more content."#;
         baseline.scene_scale = "全景".to_string();
         baseline.scene_performance_projection.scene_scale = "全景".to_string();
         baseline.shot_script =
-            "废墟之上，主角单膝跪地，敌人缓步逼近。国战军阵建立只压紧阵位与战场调度。"
-                .to_string();
+            "废墟之上，主角单膝跪地，敌人缓步逼近。国战军阵建立只压紧阵位与战场调度。".to_string();
         baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
         repair_a_ruin_enemy_storyboard_row(&mut baseline);
         normalize_storyboard_row_subject_quality(&mut baseline);
 
         let mut live_row = baseline.clone();
         live_row.shot_title = "废墟压近".to_string();
-        live_row.visual_description = "主体为废墟，全景把废墟压在阵位前侧；当前视觉事件是废墟压近。".to_string();
+        live_row.visual_description =
+            "主体为废墟，全景把废墟压在阵位前侧；当前视觉事件是废墟压近。".to_string();
         live_row.character_action = "废墟从前景压近主角。".to_string();
         live_row.camera_movement = "废墟定机位观察主角。".to_string();
         live_row.scene_performance_projection.visual_description =
@@ -17787,8 +17846,7 @@ No more content."#;
 
     #[test]
     fn live_storyboard_repair_restores_a_source_camera_movement_after_visual_repair() {
-        let source =
-            "\u{5E9F}\u{589F}\u{4E4B}\u{4E0A}\u{FF0C}\u{4E3B}\u{89D2}\u{5355}\u{819D}\u{8DEA}\u{5730}\u{FF0C}\u{654C}\u{4EBA}\u{7F13}\u{6B65}\u{903C}\u{8FD1}\u{3002}";
+        let source = "\u{5E9F}\u{589F}\u{4E4B}\u{4E0A}\u{FF0C}\u{4E3B}\u{89D2}\u{5355}\u{819D}\u{8DEA}\u{5730}\u{FF0C}\u{654C}\u{4EBA}\u{7F13}\u{6B65}\u{903C}\u{8FD1}\u{3002}";
         let mut baseline = test_live_validation_row("\u{4E3B}\u{89D2}");
         baseline.shot_script = source.to_string();
         baseline.scene_performance_projection.fused_source_text = baseline.shot_script.clone();
@@ -17829,11 +17887,9 @@ No more content."#;
                 "主体为主角，中近景把{phrase}与主角所处退路压在同层；冷光压住碎石与混凝土；当前视觉事件是主角顶住来袭；画面突出危险逼近。"
             );
             live_row.character_action =
-                "主角从断楼残墙前侧开始，到顶住来袭时结束，镜头捕捉主角动作。"
-                    .to_string();
+                "主角从断楼残墙前侧开始，到顶住来袭时结束，镜头捕捉主角动作。".to_string();
             live_row.camera_movement =
-                "中近景定机位观察主角顶住来袭，镜头捕捉断楼残墙间的逼近压力。"
-                    .to_string();
+                "中近景定机位观察主角顶住来袭，镜头捕捉断楼残墙间的逼近压力。".to_string();
 
             let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline.clone()]);
             assert!(
@@ -17945,10 +18001,8 @@ No more content."#;
 
     #[test]
     fn binding_context_repaired_baseline_keeps_bare_source_role_grounded_for_rewrite() {
-        let source =
-            "\u{5E9F}\u{589F}\u{4E4B}\u{4E0A}\u{FF0C}\u{4E3B}\u{89D2}\u{5355}\u{819D}\u{8DEA}\u{5730}\u{FF0C}\u{654C}\u{4EBA}\u{7F13}\u{6B65}\u{903C}\u{8FD1}\u{3002}";
-        let rewrite_body =
-            "\u{5E9F}\u{589F}\u{524D}\u{4FA7}\u{7684}\u{5BF9}\u{5CD9}\u{538B}\u{529B}\u{4E0D}\u{65AD}\u{62AC}\u{9AD8}\u{3002}";
+        let source = "\u{5E9F}\u{589F}\u{4E4B}\u{4E0A}\u{FF0C}\u{4E3B}\u{89D2}\u{5355}\u{819D}\u{8DEA}\u{5730}\u{FF0C}\u{654C}\u{4EBA}\u{7F13}\u{6B65}\u{903C}\u{8FD1}\u{3002}";
+        let rewrite_body = "\u{5E9F}\u{589F}\u{524D}\u{4FA7}\u{7684}\u{5BF9}\u{5CD9}\u{538B}\u{529B}\u{4E0D}\u{65AD}\u{62AC}\u{9AD8}\u{3002}";
         let mut baseline = test_live_validation_row("");
         baseline.shot_script = rewrite_body.to_string();
         baseline.scene_performance_projection.fused_source_text = rewrite_body.to_string();
@@ -17994,9 +18048,9 @@ No more content."#;
 
         let warnings = validate_live_storyboard_rows(&[live_row], 10, &baselines);
         assert!(
-            !warnings
-                .iter()
-                .any(|warning| warning.message.contains("ungrounded character name: \u{4E3B}\u{89D2}")),
+            !warnings.iter().any(|warning| warning
+                .message
+                .contains("ungrounded character name: \u{4E3B}\u{89D2}")),
             "{warnings:?}"
         );
     }
@@ -18004,7 +18058,8 @@ No more content."#;
     #[test]
     fn live_storyboard_validator_ignores_war_setup_shot_title_fragment_candidate() {
         let mut baseline = test_live_validation_row("\u{4E3B}\u{89D2}");
-        baseline.primary_scene_label = "\u{56FD}\u{6218}\u{519B}\u{9635}\u{5EFA}\u{7ACB}".to_string();
+        baseline.primary_scene_label =
+            "\u{56FD}\u{6218}\u{519B}\u{9635}\u{5EFA}\u{7ACB}".to_string();
         baseline.shot_scene_label = "\u{56FD}\u{6218}\u{519B}\u{9635}\u{5EFA}\u{7ACB}".to_string();
         baseline.shot_script =
             "\u{5E9F}\u{589F}\u{4E4B}\u{4E0A}\u{FF0C}\u{4E3B}\u{89D2}\u{5355}\u{819D}\u{8DEA}\u{5730}\u{FF0C}\u{654C}\u{4EBA}\u{7F13}\u{6B65}\u{903C}\u{8FD1}\u{3002}\u{56FD}\u{6218}\u{519B}\u{9635}\u{5EFA}\u{7ACB}\u{53EA}\u{538B}\u{7D27}\u{9635}\u{4F4D}\u{4E0E}\u{6218}\u{573A}\u{8C03}\u{5EA6}\u{3002}"
@@ -18015,19 +18070,48 @@ No more content."#;
         live_row.shot_title =
             "\u{955C}\u{5934}1\u{FF1A}\u{5B9A}\u{57FA}\u{5E9F}\u{589F}\u{538B}\u{8FEB}".to_string();
 
-        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
+        let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline.clone()]);
         assert!(
-            !warnings
-                .iter()
-                .any(|warning| warning.message.contains("ungrounded character name: \u{5B9A}\u{57FA}")),
+            !warnings.iter().any(|warning| warning
+                .message
+                .contains("ungrounded character name: \u{5B9A}\u{57FA}")),
             "{warnings:?}"
+        );
+
+        let mut initial_formation_row = baseline.clone();
+        initial_formation_row.shot_title =
+            "\u{955C}\u{5934}1\u{FF1A}\u{521D}\u{9635}\u{5E9F}\u{589F}\u{538B}\u{8FEB}".to_string();
+        let initial_formation_warnings =
+            validate_live_storyboard_rows(&[initial_formation_row], 10, &[baseline.clone()]);
+        assert!(
+            !initial_formation_warnings
+                .iter()
+                .any(|warning| warning
+                    .message
+                    .contains("ungrounded character name: \u{521D}\u{9635}")),
+            "{initial_formation_warnings:?}"
+        );
+
+        let mut stake_setup_row = baseline.clone();
+        stake_setup_row.shot_title =
+            "\u{955C}\u{5934}1\u{FF1A}\u{5B9A}\u{6869}\u{5E9F}\u{589F}\u{538B}\u{8FEB}".to_string();
+        let stake_setup_warnings =
+            validate_live_storyboard_rows(&[stake_setup_row], 10, &[baseline]);
+        assert!(
+            !stake_setup_warnings
+                .iter()
+                .any(|warning| warning
+                    .message
+                    .contains("ungrounded character name: \u{5B9A}\u{6869}")),
+            "{stake_setup_warnings:?}"
         );
     }
 
     #[test]
     fn live_storyboard_validator_ignores_war_setup_shot_title_stance_candidate() {
         let mut baseline = test_live_validation_row("\u{4E3B}\u{89D2}");
-        baseline.primary_scene_label = "\u{56FD}\u{6218}\u{519B}\u{9635}\u{5EFA}\u{7ACB}".to_string();
+        baseline.primary_scene_label =
+            "\u{56FD}\u{6218}\u{519B}\u{9635}\u{5EFA}\u{7ACB}".to_string();
         baseline.shot_scene_label = "\u{56FD}\u{6218}\u{519B}\u{9635}\u{5EFA}\u{7ACB}".to_string();
         baseline.shot_script =
             "\u{5E9F}\u{589F}\u{4E4B}\u{4E0A}\u{FF0C}\u{4E3B}\u{89D2}\u{5355}\u{819D}\u{8DEA}\u{5730}\u{FF0C}\u{654C}\u{4EBA}\u{7F13}\u{6B65}\u{903C}\u{8FD1}\u{3002}\u{56FD}\u{6218}\u{519B}\u{9635}\u{5EFA}\u{7ACB}\u{53EA}\u{538B}\u{7D27}\u{9635}\u{4F4D}\u{4E0E}\u{6218}\u{573A}\u{8C03}\u{5EA6}\u{3002}"
@@ -18040,9 +18124,9 @@ No more content."#;
 
         let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
         assert!(
-            !warnings
-                .iter()
-                .any(|warning| warning.message.contains("ungrounded character name: \u{5B9A}\u{52BF}")),
+            !warnings.iter().any(|warning| warning
+                .message
+                .contains("ungrounded character name: \u{5B9A}\u{52BF}")),
             "{warnings:?}"
         );
     }
@@ -18057,7 +18141,9 @@ No more content."#;
             shot_title: "镜头1：主角初现于断墙前".to_string(),
             person: "主角初".to_string(),
             scene_scale: "中近景".to_string(),
-            visual_description: "主体为主角初，中近景把主角与断墙放在前侧；当前视觉事件是主角初现于断墙前。".to_string(),
+            visual_description:
+                "主体为主角初，中近景把主角与断墙放在前侧；当前视觉事件是主角初现于断墙前。"
+                    .to_string(),
             character_action: "主角初从断墙前停住，到敌人逼近时结束。".to_string(),
             camera_movement: "中近景定机位观察主角初现。".to_string(),
             dialogue: String::new(),
@@ -18085,10 +18171,11 @@ No more content."#;
             shot_title: "镜头1：初峙废墟压迫".to_string(),
             person: "主角".to_string(),
             scene_scale: "中近景".to_string(),
-            visual_description: "主体为主角，中近景把主角与废墟放在前侧；当前视觉事件是主角承受敌人逼近压力。".to_string(),
-            character_action:
-                "主角从废墟边缘开始，到敌人继续逼近时结束，镜头捕捉当前对峙压力。"
+            visual_description:
+                "主体为主角，中近景把主角与废墟放在前侧；当前视觉事件是主角承受敌人逼近压力。"
                     .to_string(),
+            character_action: "主角从废墟边缘开始，到敌人继续逼近时结束，镜头捕捉当前对峙压力。"
+                .to_string(),
             camera_movement: "中近景定机位观察主角与敌人对峙。".to_string(),
             dialogue: String::new(),
         };
@@ -18096,7 +18183,11 @@ No more content."#;
         apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
         normalize_storyboard_row_subject_quality(&mut live_row);
 
-        assert!(live_row.shot_title.contains("主角"), "{}", live_row.shot_title);
+        assert!(
+            live_row.shot_title.contains("主角"),
+            "{}",
+            live_row.shot_title
+        );
         assert!(
             !live_row.shot_title.contains("：初峙"),
             "{}",
@@ -18105,9 +18196,9 @@ No more content."#;
 
         let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
         assert!(
-            !warnings.iter().any(|warning| warning
-                .message
-                .contains("ungrounded character name: 初峙")),
+            !warnings
+                .iter()
+                .any(|warning| warning.message.contains("ungrounded character name: 初峙")),
             "{warnings:?}"
         );
     }
@@ -18134,7 +18225,11 @@ No more content."#;
         apply_live_storyboard_patch(&mut live_row, &patch, &baseline);
         normalize_storyboard_row_subject_quality(&mut live_row);
 
-        assert!(live_row.shot_title.contains("主角"), "{}", live_row.shot_title);
+        assert!(
+            live_row.shot_title.contains("主角"),
+            "{}",
+            live_row.shot_title
+        );
         assert!(
             !live_row.shot_title.contains("：初现"),
             "{}",
@@ -18143,9 +18238,9 @@ No more content."#;
 
         let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
         assert!(
-            !warnings.iter().any(|warning| warning
-                .message
-                .contains("ungrounded character name: 初现")),
+            !warnings
+                .iter()
+                .any(|warning| warning.message.contains("ungrounded character name: 初现")),
             "{warnings:?}"
         );
     }
@@ -18158,8 +18253,7 @@ No more content."#;
         let mut live_row = baseline.clone();
         live_row.shot_title = "镜头1：喘息压迫".to_string();
         live_row.visual_description =
-            "主体为主角，中近景把主角放在废墟前侧；当前视觉事件是主角撑住喘息。"
-                .to_string();
+            "主体为主角，中近景把主角放在废墟前侧；当前视觉事件是主角撑住喘息。".to_string();
         live_row.character_action =
             "主角从废墟前侧单膝跪地开始，到敌人逼近时仍撑住喘息结束。".to_string();
         live_row.camera_movement = "中近景定机位观察主角在废墟前侧喘息。".to_string();
@@ -18183,9 +18277,9 @@ No more content."#;
 
         let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
         assert!(
-            !warnings.iter().any(|warning| warning
-                .message
-                .contains("ungrounded character name: 喘息")),
+            !warnings
+                .iter()
+                .any(|warning| warning.message.contains("ungrounded character name: 喘息")),
             "{warnings:?}"
         );
     }
@@ -18293,7 +18387,11 @@ No more content."#;
             "{}",
             warning.message
         );
-        assert!(!warning.message.contains("post_untrusted_field=shot_title"), "{}", warning.message);
+        assert!(
+            !warning.message.contains("post_untrusted_field=shot_title"),
+            "{}",
+            warning.message
+        );
         assert!(
             !warning.message.contains("post_untrusted_candidate=初现"),
             "{}",
@@ -18309,8 +18407,7 @@ No more content."#;
         let mut live_row = baseline.clone();
         live_row.person = "李明".to_string();
         live_row.visual_description =
-            "主体为李明，中近景把李明放在废墟前侧；当前视觉事件是李明挡住退路。"
-                .to_string();
+            "主体为李明，中近景把李明放在废墟前侧；当前视觉事件是李明挡住退路。".to_string();
         live_row.character_action = "李明从废墟前侧开始，到挡住退路时结束。".to_string();
 
         let warnings = validate_live_storyboard_rows(&[live_row], 10, &[baseline]);
