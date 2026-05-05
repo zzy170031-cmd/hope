@@ -444,6 +444,7 @@ const LIVE_PERSON_ACTION_STATE_FRAGMENT_TERMS: &[&str] = &[
     "坚持",
     "坚定",
     "撑持",
+    "蓄力",
     "喘息",
     "喘息声",
     "急喘",
@@ -14750,7 +14751,7 @@ mod tests {
             "{allowed_warnings:?}"
         );
 
-        for fragment in ["准备反", "准备反击", "反击准备", "撑持"] {
+        for fragment in ["准备反", "准备反击", "反击准备", "撑持", "蓄力"] {
             let mut action_fragment_row = baseline.clone();
             action_fragment_row.visual_description = format!(
                 "主体为敌人，中近景把敌人、主角和废墟放在前后层次里；冷光压住碎石与混凝土；当前视觉事件是敌人{fragment}时仍缓步逼近，主角仍单膝跪地；画面突出对峙压力。"
@@ -14803,7 +14804,7 @@ mod tests {
             "{title_subject_warnings:?}"
         );
 
-        for fragment in ["准备反", "准备反击", "反击准备", "撑持"] {
+        for fragment in ["准备反", "准备反击", "反击准备", "撑持", "蓄力"] {
             let mut title_subject_row = baseline.clone();
             title_subject_row.person = "敌人".to_string();
             title_subject_row.scene_performance_projection.person = "敌人".to_string();
