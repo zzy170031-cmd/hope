@@ -302,6 +302,8 @@ const LIVE_PERSON_VISUAL_OR_ABSTRACT_TERMS: &[&str] = &[
     "特写",
     "近景",
     "中景",
+    "\u{8FC7}\u{80A9}",
+    "\u{8FC7}\u{80A9}\u{4E2D}",
     "全景",
     "远景",
     "低机位",
@@ -445,6 +447,7 @@ const LIVE_PERSON_ACTION_STATE_FRAGMENT_TERMS: &[&str] = &[
     "坚定",
     "撑持",
     "蓄力",
+    "\u{84C4}\u{52BF}",
     "喘息",
     "喘息声",
     "急喘",
@@ -8504,8 +8507,13 @@ fn live_storyboard_field_character_candidate_is_noise(field_name: &str, candidat
                     | "\u{5B9A}\u{52BF}"
                     | "\u{521D}\u{9635}"
                     | "\u{5B9A}\u{6869}"
+                    | "\u{98CE}\u{8D77}"
+                    | "\u{9483}\u{52EB}\u{5A0D}"
             ))
         || (field_name == "shot_title" && contains_private_use_or_replacement_char(trimmed))
+        || (field_name == "shot_title" && live_person_action_state_fragment_term(trimmed).is_some())
+        || (field_name == "visual_description"
+            && live_person_visual_or_abstract_term(trimmed).is_some())
 }
 
 fn contains_private_use_or_replacement_char(value: &str) -> bool {
@@ -14236,7 +14244,9 @@ mod tests {
             invented_name
         ));
         let role_tail_fragment = "中的坚";
-        assert!(super::role_tail_starts_with_non_name_phrase(role_tail_fragment));
+        assert!(super::role_tail_starts_with_non_name_phrase(
+            role_tail_fragment
+        ));
         assert!(super::looks_like_name_noise_candidate(role_tail_fragment));
         assert!(super::extract_character_name_after_role(role_tail_fragment).is_none());
 
@@ -14705,6 +14715,16 @@ mod tests {
                 .any(|warning| warning.message.contains("ungrounded character name: 全景")),
             "{warnings:?}"
         );
+        assert!(super::live_storyboard_field_character_candidate_is_noise(
+            "visual_description",
+            "\u{8FC7}\u{80A9}\u{4E2D}"
+        ));
+        assert!(super::live_person_visual_or_abstract_term("\u{8FC7}\u{80A9}").is_some());
+        assert!(super::live_person_visual_or_abstract_term("\u{674E}\u{660E}").is_none());
+        assert!(!super::live_storyboard_field_character_candidate_is_noise(
+            "visual_description",
+            "\u{674E}\u{660E}"
+        ));
 
         let mut invented_name_row = baseline.clone();
         invented_name_row.person = "李明".to_string();
@@ -14751,7 +14771,7 @@ mod tests {
             "{allowed_warnings:?}"
         );
 
-        for fragment in ["准备反", "准备反击", "反击准备", "撑持", "蓄力"] {
+        for fragment in ["准备反", "准备反击", "反击准备", "撑持", "蓄力", "蓄势"] {
             let mut action_fragment_row = baseline.clone();
             action_fragment_row.visual_description = format!(
                 "主体为敌人，中近景把敌人、主角和废墟放在前后层次里；冷光压住碎石与混凝土；当前视觉事件是敌人{fragment}时仍缓步逼近，主角仍单膝跪地；画面突出对峙压力。"
@@ -14804,7 +14824,7 @@ mod tests {
             "{title_subject_warnings:?}"
         );
 
-        for fragment in ["准备反", "准备反击", "反击准备", "撑持", "蓄力"] {
+        for fragment in ["准备反", "准备反击", "反击准备", "撑持", "蓄力", "蓄势"] {
             let mut title_subject_row = baseline.clone();
             title_subject_row.person = "敌人".to_string();
             title_subject_row.scene_performance_projection.person = "敌人".to_string();
@@ -18085,11 +18105,9 @@ No more content."#;
         let initial_formation_warnings =
             validate_live_storyboard_rows(&[initial_formation_row], 10, &[baseline.clone()]);
         assert!(
-            !initial_formation_warnings
-                .iter()
-                .any(|warning| warning
-                    .message
-                    .contains("ungrounded character name: \u{521D}\u{9635}")),
+            !initial_formation_warnings.iter().any(|warning| warning
+                .message
+                .contains("ungrounded character name: \u{521D}\u{9635}")),
             "{initial_formation_warnings:?}"
         );
 
@@ -18097,15 +18115,61 @@ No more content."#;
         stake_setup_row.shot_title =
             "\u{955C}\u{5934}1\u{FF1A}\u{5B9A}\u{6869}\u{5E9F}\u{589F}\u{538B}\u{8FEB}".to_string();
         let stake_setup_warnings =
-            validate_live_storyboard_rows(&[stake_setup_row], 10, &[baseline]);
+            validate_live_storyboard_rows(&[stake_setup_row], 10, &[baseline.clone()]);
         assert!(
-            !stake_setup_warnings
-                .iter()
-                .any(|warning| warning
-                    .message
-                    .contains("ungrounded character name: \u{5B9A}\u{6869}")),
+            !stake_setup_warnings.iter().any(|warning| warning
+                .message
+                .contains("ungrounded character name: \u{5B9A}\u{6869}")),
             "{stake_setup_warnings:?}"
         );
+
+        let mut artifact_fragment_row = baseline.clone();
+        artifact_fragment_row.shot_title =
+            "\u{955C}\u{5934}1\u{FF1A}\u{9483}\u{52EB}\u{5A0D}\u{5E9F}\u{589F}\u{538B}\u{8FEB}"
+                .to_string();
+        let artifact_fragment_warnings =
+            validate_live_storyboard_rows(&[artifact_fragment_row], 10, &[baseline.clone()]);
+        assert!(
+            !artifact_fragment_warnings.iter().any(|warning| warning
+                .message
+                .contains("ungrounded character name: \u{9483}\u{52EB}\u{5A0D}")),
+            "{artifact_fragment_warnings:?}"
+        );
+
+        let mut wind_rise_row = baseline.clone();
+        wind_rise_row.shot_title =
+            "\u{955C}\u{5934}1\u{FF1A}\u{98CE}\u{8D77}\u{5E9F}\u{589F}\u{538B}\u{8FEB}"
+                .to_string();
+        let wind_rise_warnings =
+            validate_live_storyboard_rows(&[wind_rise_row], 10, &[baseline.clone()]);
+        assert!(
+            !wind_rise_warnings.iter().any(|warning| warning
+                .message
+                .contains("ungrounded character name: \u{98CE}\u{8D77}")),
+            "{wind_rise_warnings:?}"
+        );
+
+        let mut momentum_row = baseline.clone();
+        momentum_row.shot_title =
+            "\u{955C}\u{5934}1\u{FF1A}\u{84C4}\u{52BF}\u{5E9F}\u{589F}\u{538B}\u{8FEB}"
+                .to_string();
+        let momentum_warnings =
+            validate_live_storyboard_rows(&[momentum_row], 10, &[baseline.clone()]);
+        assert!(
+            !momentum_warnings.iter().any(|warning| warning
+                .message
+                .contains("ungrounded character name: \u{84C4}\u{52BF}")),
+            "{momentum_warnings:?}"
+        );
+
+        assert!(!super::live_storyboard_field_character_candidate_is_noise(
+            "shot_title",
+            "\u{674E}\u{660E}"
+        ));
+        assert!(!super::live_storyboard_field_character_candidate_is_noise(
+            "person",
+            "\u{98CE}\u{8D77}"
+        ));
     }
 
     #[test]
