@@ -1366,6 +1366,15 @@ textarea {
   -webkit-line-clamp: 3;
 }
 
+.table-meta-line {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .storyboard-table td:nth-child(1),
 .storyboard-table th:nth-child(1) {
   width: 5%;
@@ -2622,6 +2631,22 @@ textarea {
 .script-dialog-block textarea:focus {
   border: 0;
   box-shadow: none;
+}
+
+.script-dialog-block__support {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(214, 177, 105, 0.32);
+  border-radius: var(--radius-sm);
+  background: #fffaf0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.script-dialog-block__support p {
+  margin: 0;
 }
 
 .story-material-editor {

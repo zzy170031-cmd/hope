@@ -1,0 +1,162 @@
+{
+  "name": "Hope desktop 403-case KB and golden-sample mapping",
+  "status": "formal_403_preflight_manifest",
+  "workspace_anchor": {
+    "branch": "codex/desktop-shell",
+    "head": "66d3b755d8790c0f5463b0e1064e48cc2ec34fc1"
+  },
+  "case_count_breakdown": {
+    "fixed_matrix_cases": 378,
+    "long_text_matrix_cases": 21,
+    "entry_baseline_cases": 4,
+    "total_cases": 403,
+    "formula": "378 + 21 + 4"
+  },
+  "entry_baseline_cases": [
+    {
+      "id": "A_hot_blood_battle",
+      "source_manifest": "tests/qa/desktop-four-groups.json",
+      "purpose": "baseline carrier guard before large 403 matrix"
+    },
+    {
+      "id": "A_chinese_war_formation",
+      "source_manifest": "tests/qa/desktop-four-groups.json",
+      "purpose": "scene rewrite and baseline carrier guard before large 403 matrix"
+    },
+    {
+      "id": "B_hot_blood_battle",
+      "source_manifest": "tests/qa/desktop-four-groups.json",
+      "purpose": "second source carrier guard before large 403 matrix"
+    },
+    {
+      "id": "B_slg_sandbox_view",
+      "source_manifest": "tests/qa/desktop-four-groups.json",
+      "purpose": "SLG scene carrier guard before large 403 matrix"
+    }
+  ],
+  "kb_rule_pack_boundary": {
+    "runtime_contract": "docs/hope-story-fact-frame-storyboard-binding-contract.md",
+    "kb_is_bounded_rule_pack": true,
+    "required_live_trace_fields": [
+      "story_fact_frame_binding_evidence.kb_rule_pack_ids",
+      "story_fact_frame_binding_evidence.kb_snapshot_hash"
+    ],
+    "must_not_inject": [
+      "source-external characters",
+      "source-external props",
+      "source-external places",
+      "source-external worldview",
+      "raw KB rows",
+      "source_register",
+      "overlay JSON"
+    ],
+    "prompt_text_policy": "accepted facts, StoryFactFrame, scene/duration, and sanitized rule tags only"
+  },
+  "golden_sample_sources": [
+    {
+      "file": "tests/qa/desktop-anime-scene-long-samples.index.json",
+      "kind": "27-sample candidate library",
+      "qa_only": true,
+      "reference_only": true,
+      "not_source_of_truth": true,
+      "raw_sample_text_for_runtime": false,
+      "approved_samples": 0,
+      "human_re_review_required": true,
+      "allowed_as_oracle": [
+        "scene taxonomy",
+        "craft tags",
+        "director rule tags",
+        "camera/motion anchors",
+        "negative drift tags",
+        "compact sample summary",
+        "expected_prompt_oracle",
+        "expected_row_oracle"
+      ],
+      "forbidden_in_prompt_text": [
+        "raw sample_text",
+        "smoke_extracts original text",
+        "sample character names",
+        "sample props",
+        "sample places",
+        "sample worldview"
+      ]
+    },
+    {
+      "file": "tests/qa/desktop-21-scene-type-reference-samples.draft.json",
+      "kind": "21-scene draft reference samples",
+      "qa_only": true,
+      "reference_only": true,
+      "not_source_of_truth": true,
+      "raw_sample_text_for_runtime": false,
+      "formal_import_allowed": false,
+      "kb_crosswalk_status": "candidate_not_exact_join",
+      "allowed_as_oracle": [
+        "scene taxonomy reference",
+        "duration profile reference",
+        "expected_prompt_oracle",
+        "expected_row_oracle",
+        "forbidden drift tags"
+      ],
+      "forbidden_in_prompt_text": [
+        "sample_text",
+        "storyboard row raw prose",
+        "smoke_extracts text",
+        "source_sample_id",
+        "sample character names",
+        "sample props",
+        "sample places",
+        "sample worldview"
+      ]
+    }
+  ],
+  "per_case_required_evidence": [
+    "result.ok=true",
+    "runner_assert_failures=[]",
+    "hard_gate_failures=[]",
+    "fallback_gate_evidence.no_http_403=true",
+    "fallback_gate_evidence.no_live_fallback=true",
+    "fallback_gate_evidence.fallback_used=false",
+    "fallback_gate_evidence.local_candidate=false",
+    "validator_gate_evidence.rows_match=true",
+    "validator_gate_evidence.row_diffs=[]",
+    "story_fact_frame_binding_evidence.present=true",
+    "story_fact_frame_binding_evidence.kb_rule_pack_ids is an array",
+    "story_fact_frame_binding_evidence.kb_snapshot_hash is non-empty",
+    "prompt_text_boundary_evidence.prompt_text_boundary_passed=true",
+    "prompt_text_boundary_evidence.sample_text_absent=true",
+    "prompt_text_boundary_evidence.raw_kb_rows_absent=true",
+    "prompt_text_boundary_evidence.source_sample_id_absent=true",
+    "prompt_text_boundary_evidence.sample_entity_marker_absent=true",
+    "prompt_text_boundary_evidence.smoke_extracts_absent=true",
+    "prompt_text_boundary_evidence.source_register_absent=true",
+    "prompt_text_boundary_evidence.overlay_json_absent=true"
+  ],
+  "forbidden_artifact_content": [
+    "API keys",
+    "tokens",
+    "raw env files",
+    "raw prompt_body",
+    "source_register",
+    "overlay JSON",
+    "full raw KB rows",
+    "raw sample_text",
+    "smoke_extracts original text"
+  ],
+  "formal_403_start_gate": {
+    "allowed_when": [
+      "this manifest validates",
+      "desktop-403-matrix.json total equals fixed + long + entry baseline",
+      "runner emits KB/snapshot and prompt leakage guards",
+      "certifier rejects missing leakage guards",
+      "full16 fresh pass remains accepted",
+      "dirty ownership is explicitly reported"
+    ],
+    "not_allowed_when": [
+      "human review is being claimed as sample approval",
+      "raw sample_text is used as source text",
+      "raw KB rows enter prompt_text",
+      "no-RepoRoot shell evidence is used",
+      "old artifacts are reused as formal pass evidence"
+    ]
+  }
+}

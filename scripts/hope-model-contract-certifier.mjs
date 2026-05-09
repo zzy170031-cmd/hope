@@ -2,13 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 const requiredTextGateModels = [
-  "qwen-plus-2025-07-28",
   "qwen3.6-plus",
   "qwen3.6-plus-2026-04-02",
-  "qwen3.6-max-preview",
-  "qwen3-max-2026-01-23",
-  "qwen3.6-flash",
-  "qwen-plus-2025-12-01",
 ];
 
 const aliasCompatibilityModels = ["qwen-plus"];
@@ -58,6 +53,8 @@ const requiredModelFields = [
 ];
 
 const requiredContractFields = [
+  "artifact_identity",
+  "source_integrity_preflight",
   "provider",
   "model",
   "script_goal",
@@ -65,6 +62,11 @@ const requiredContractFields = [
   "duration",
   "accepted_snapshot_hash",
   "story_fact_frame_hash",
+  "task_binding_evidence",
+  "kb_oracle_evidence",
+  "visible_body_scene_duration_evidence",
+  "rewrite_confirmation_evidence",
+  "visual_description_evidence",
   "source_text_hash",
   "rows",
   "source_fact_refs",
@@ -72,6 +74,7 @@ const requiredContractFields = [
   "forbidden_fact_refs",
   "prompt_text_boundary",
   "no_fallback_evidence",
+  "provider_retry_evidence",
   "validator_status",
   "hard_gate_failures",
   "quality_warnings",
@@ -84,10 +87,26 @@ const requiredContractFields = [
   "fallback_status",
 ];
 
+const requiredPromptBoundaryEvidenceFields = [
+  "prompt_text_boundary_passed",
+  "sample_text_absent",
+  "smoke_extracts_absent",
+  "raw_kb_rows_absent",
+  "source_sample_id_absent",
+  "sample_entity_marker_absent",
+  "source_register_absent",
+  "overlay_json_absent",
+  "prompt_text_readable_sections",
+  "prompt_text_no_internal_field_dump",
+  "prompt_text_no_raw_key_value_dump",
+  "prompt_text_user_facing_layout_passed",
+];
+
 function parseArgs(argv) {
   const args = {
     matrix: path.join("tests", "qa", "desktop-model-certification-matrix.json"),
     evidence: [],
+    evidenceList: [],
     availability: [],
     callableRequiredModels: [],
     requireLive3Pool: false,
@@ -99,6 +118,8 @@ function parseArgs(argv) {
       args.matrix = argv[++index];
     } else if (arg === "--evidence") {
       args.evidence.push(argv[++index]);
+    } else if (arg === "--evidence-list") {
+      args.evidenceList.push(argv[++index]);
     } else if (arg === "--availability") {
       args.availability.push(argv[++index]);
     } else if (arg === "--callable-required-model") {
@@ -294,6 +315,10 @@ function providerRetryEvidenceFromArtifact(artifact) {
     fallback?.retry_timeline ??
     result?.retry_timeline_artifact ??
     {};
+  const providerFailoverEvidence = retryEvidence?.provider_failover_evidence ??
+    fallback?.provider_failover_evidence ??
+    result?.provider_failover_evidence ??
+    {};
   const hardGateFailures = uniqueStrings([
     ...asArray(result?.hard_gate_failures),
     ...asArray(evidence?.hard_gate_failures),
@@ -327,8 +352,12 @@ function providerRetryEvidenceFromArtifact(artifact) {
     fallback?.validator_hard_gate_fail_edge === true;
   const providerHttpStatusPresent =
     hasOwn(retryEvidence, "provider_http_status") ||
+    hasOwn(retryEvidence, "final_http_status") ||
     hasOwn(result, "provider_http_status") ||
+    hasOwn(result, "final_http_status") ||
     hasOwn(fallback, "provider_http_status") ||
+    hasOwn(fallback, "final_http_status") ||
+    hasOwn(providerFailoverEvidence, "final_http_status") ||
     hasOwn(modelAvailability, "http_status");
   const retryExhausted = Boolean(retryEvidence?.retry_exhausted ?? result?.retry_exhausted ?? fallback?.retry_exhausted);
   const qaHardFail = Boolean(retryEvidence?.qa_hard_fail ?? result?.qa_hard_fail ?? fallback?.qa_hard_fail);
@@ -429,6 +458,76 @@ function providerRetryEvidenceFromArtifact(artifact) {
       fallback?.provider_http_status ??
       modelAvailability?.http_status ??
       null,
+    primary_model: retryEvidence?.primary_model ??
+      result?.primary_model ??
+      fallback?.primary_model ??
+      providerFailoverEvidence?.primary_model ??
+      "qwen3.6-plus",
+    fallback_model: retryEvidence?.fallback_model ??
+      result?.fallback_model ??
+      fallback?.fallback_model ??
+      providerFailoverEvidence?.fallback_model ??
+      "qwen3.6-plus-2026-04-02",
+    attempted_models: asArray(
+      retryEvidence?.attempted_models ??
+      result?.attempted_models ??
+      fallback?.attempted_models ??
+      providerFailoverEvidence?.attempted_models ??
+      [],
+    ),
+    selected_model: retryEvidence?.selected_model ??
+      result?.selected_model ??
+      fallback?.selected_model ??
+      providerFailoverEvidence?.selected_model ??
+      null,
+    final_model: retryEvidence?.final_model ??
+      result?.final_model ??
+      fallback?.final_model ??
+      providerFailoverEvidence?.final_model ??
+      null,
+    provider_failover_used: Boolean(
+      retryEvidence?.provider_failover_used ??
+      result?.provider_failover_used ??
+      fallback?.provider_failover_used ??
+      providerFailoverEvidence?.provider_failover_used ??
+      false,
+    ),
+    provider_failover_reason: retryEvidence?.provider_failover_reason ??
+      result?.provider_failover_reason ??
+      fallback?.provider_failover_reason ??
+      providerFailoverEvidence?.provider_failover_reason ??
+      "none",
+    primary_http_status: retryEvidence?.primary_http_status ??
+      result?.primary_http_status ??
+      fallback?.primary_http_status ??
+      providerFailoverEvidence?.primary_http_status ??
+      null,
+    final_http_status: retryEvidence?.final_http_status ??
+      result?.final_http_status ??
+      fallback?.final_http_status ??
+      providerFailoverEvidence?.final_http_status ??
+      null,
+    raw_primary_http_403_seen: Boolean(
+      retryEvidence?.raw_primary_http_403_seen ??
+      result?.raw_primary_http_403_seen ??
+      fallback?.raw_primary_http_403_seen ??
+      providerFailoverEvidence?.raw_primary_http_403_seen ??
+      false,
+    ),
+    provider_http_403_handled_by_model_failover: Boolean(
+      retryEvidence?.provider_http_403_handled_by_model_failover ??
+      result?.provider_http_403_handled_by_model_failover ??
+      fallback?.provider_http_403_handled_by_model_failover ??
+      providerFailoverEvidence?.provider_http_403_handled_by_model_failover ??
+      false,
+    ),
+    no_unhandled_http_403: Boolean(
+      retryEvidence?.no_unhandled_http_403 ??
+      result?.no_unhandled_http_403 ??
+      fallback?.no_unhandled_http_403 ??
+      providerFailoverEvidence?.no_unhandled_http_403 ??
+      true,
+    ),
     provider_http_status_present: providerHttpStatusPresent,
     validator_hard_gate_fail_edge: hasValidatorHardFail,
     qa_hard_fail_edge: qaHardFail,
@@ -454,6 +553,31 @@ function validateProviderRetryTelemetry(artifact, filePath) {
     retryEvidence.provider_retry_exhausted_hard_fail_edge ||
     retryEvidence.qa_hard_fail ||
     retryEvidence.retry_exhausted;
+  assertCondition(retryEvidence.primary_model === "qwen3.6-plus", `${filePath}: primary_model must be qwen3.6-plus`, failures);
+  assertCondition(retryEvidence.fallback_model === "qwen3.6-plus-2026-04-02", `${filePath}: fallback_model must be qwen3.6-plus-2026-04-02`, failures);
+  assertCondition(Array.isArray(retryEvidence.attempted_models), `${filePath}: attempted_models must be an array`, failures);
+  assertCondition(retryEvidence.attempted_models.includes(retryEvidence.final_model ?? retryEvidence.selected_model), `${filePath}: attempted_models must include final_model`, failures);
+  assertCondition(Boolean(retryEvidence.selected_model), `${filePath}: selected_model missing`, failures);
+  assertCondition(Boolean(retryEvidence.final_model), `${filePath}: final_model missing`, failures);
+  assertCondition(typeof retryEvidence.provider_failover_used === "boolean", `${filePath}: provider_failover_used must be boolean`, failures);
+  assertCondition(Boolean(retryEvidence.provider_failover_reason), `${filePath}: provider_failover_reason missing`, failures);
+  assertCondition(
+    ["none", "quota_exhausted", "model_unavailable", "entitlement_http_403", "permission_http_403"].includes(String(retryEvidence.provider_failover_reason)),
+    `${filePath}: provider_failover_reason not allowlisted`,
+    failures,
+  );
+  assertCondition(Object.prototype.hasOwnProperty.call(retryEvidence, "primary_http_status"), `${filePath}: primary_http_status missing`, failures);
+  assertCondition(Object.prototype.hasOwnProperty.call(retryEvidence, "final_http_status"), `${filePath}: final_http_status missing`, failures);
+  assertCondition(typeof retryEvidence.raw_primary_http_403_seen === "boolean", `${filePath}: raw_primary_http_403_seen must be boolean`, failures);
+  assertCondition(typeof retryEvidence.provider_http_403_handled_by_model_failover === "boolean", `${filePath}: provider_http_403_handled_by_model_failover must be boolean`, failures);
+  assertCondition(typeof retryEvidence.no_unhandled_http_403 === "boolean", `${filePath}: no_unhandled_http_403 must be boolean`, failures);
+  if (retryEvidence.provider_http_403_handled_by_model_failover) {
+    assertCondition(retryEvidence.raw_primary_http_403_seen === true, `${filePath}: provider HTTP 403 failover cannot be handled when raw_primary_http_403_seen=false`, failures);
+    assertCondition(retryEvidence.provider_failover_used === true, `${filePath}: provider HTTP 403 handled requires provider_failover_used=true`, failures);
+  }
+  assertCondition(retryEvidence.no_unhandled_http_403 === true, `${filePath}: unhandled HTTP 403 remains`, failures);
+  assertCondition(retryEvidence.fallback_used === false, `${filePath}: provider failover evidence cannot report fallback_used=true`, failures);
+  assertCondition(retryEvidence.local_candidate === false, `${filePath}: provider failover evidence cannot report local_candidate=true`, failures);
   if (!needsProviderRetryEvidence) {
     return failures;
   }
@@ -516,22 +640,184 @@ function validateProviderRetryTelemetry(artifact, filePath) {
   return failures;
 }
 
+function validateArtifactIdentity(artifact, filePath) {
+  const failures = [];
+  const result = artifact?.result ?? artifact ?? {};
+  const evidence = result.model_output_contract_evidence ?? artifact?.model_output_contract_evidence ?? {};
+  const identity = result.artifact_identity ?? evidence.artifact_identity ?? {};
+  const sourceIntegrity = result.source_integrity_preflight ?? evidence.source_integrity_preflight ?? {};
+  for (const field of [
+    "workspace",
+    "branch",
+    "HEAD",
+    "origin_HEAD",
+    "dirty_patch_hash",
+    "release_exe_sha256",
+    "runtime_rs_sha256",
+    "runner_sha256",
+    "certifier_sha256",
+    "matrix_sha256",
+    "kb_mapping_sha256",
+    "gate_level",
+    "case_id",
+    "started_at",
+    "completed_at",
+  ]) {
+    assertCondition(Boolean(identity[field]), `${filePath}: artifact_identity.${field} missing`, failures);
+  }
+  assertCondition(identity.source_integrity_preflight_passed === true, `${filePath}: source integrity preflight did not pass`, failures);
+  assertCondition(identity.runtime_rs_utf8_ok === true, `${filePath}: runtime_rs_utf8_ok must be true`, failures);
+  assertCondition(identity.runtime_rs_replacement_char_absent === true, `${filePath}: runtime replacement char must be absent`, failures);
+  assertCondition(identity.runtime_rs_sentinel_check_passed === true, `${filePath}: runtime sentinel check must pass`, failures);
+  assertCondition(identity.release_exe_fresh_for_runtime === true, `${filePath}: release exe is stale for runtime`, failures);
+  assertCondition(sourceIntegrity.runtime_rs_utf8_ok === true, `${filePath}: source_integrity_preflight.runtime_rs_utf8_ok must be true`, failures);
+  assertCondition(sourceIntegrity.runtime_rs_sentinel_check_passed === true, `${filePath}: source_integrity_preflight sentinel check must pass`, failures);
+  assertCondition(sourceIntegrity.source_integrity_preflight_passed === true, `${filePath}: source_integrity_preflight_passed must be true`, failures);
+  return failures;
+}
+
 function validateEvidenceArtifact(artifact, filePath) {
   const failures = [];
   const evidence = artifact?.result?.model_output_contract_evidence ?? artifact?.model_output_contract_evidence;
+  const result = artifact?.result ?? artifact ?? {};
+  const promptBoundaryEvidence = result.prompt_text_boundary_evidence ?? {};
   assertCondition(Boolean(evidence), `${filePath}: model_output_contract_evidence missing`, failures);
   if (!evidence) {
     return failures;
   }
+  failures.push(...validateArtifactIdentity(artifact, filePath));
   for (const field of requiredContractFields) {
     assertCondition(Object.prototype.hasOwnProperty.call(evidence, field), `${filePath}: evidence missing ${field}`, failures);
   }
   assertCondition(evidence.contract_kind === "structural_safety_contract_not_creative_style_template", `${filePath}: contract kind mismatch`, failures);
   assertCondition(evidence.raw_prompt_redacted === true, `${filePath}: raw prompt must be redacted`, failures);
   assertCondition(evidence.raw_provider_response_redacted === true, `${filePath}: raw provider response must be redacted`, failures);
+  assertCondition(evidence.task_binding_evidence?.present === true, `${filePath}: task_binding_evidence.present must be true`, failures);
+  assertCondition(Number(evidence.task_binding_evidence?.task_duration_seconds ?? 0) > 0, `${filePath}: task_duration_seconds missing`, failures);
+  assertCondition(evidence.kb_oracle_evidence?.raw_values_redacted === true, `${filePath}: kb_oracle_evidence must be redacted`, failures);
+  assertCondition(Boolean(evidence.kb_oracle_evidence?.expand?.kb_oracle_hash), `${filePath}: expand kb oracle hash missing`, failures);
+  assertCondition(asArray(evidence.kb_oracle_evidence?.expand?.kb_rule_pack_ids).length > 0, `${filePath}: expand kb rule pack missing`, failures);
+  assertCondition(Boolean(evidence.kb_oracle_evidence?.expand?.kb_snapshot_hash), `${filePath}: expand kb snapshot hash missing`, failures);
+  assertCondition(Number(evidence.kb_oracle_evidence?.expand?.full_kb_rows_included ?? 0) === 0, `${filePath}: expand kb raw rows must be absent`, failures);
+  if (evidence.kb_oracle_evidence?.pre?.present) {
+    assertCondition(Boolean(evidence.kb_oracle_evidence.pre.kb_oracle_hash), `${filePath}: pre kb oracle hash missing`, failures);
+    assertCondition(asArray(evidence.kb_oracle_evidence.pre.kb_rule_pack_ids).length > 0, `${filePath}: pre kb rule pack missing`, failures);
+    assertCondition(Number(evidence.kb_oracle_evidence.pre.full_kb_rows_included ?? 0) === 0, `${filePath}: pre kb raw rows must be absent`, failures);
+  }
+  assertCondition(
+    evidence.visible_body_scene_duration_evidence?.body_has_duration === true &&
+      (evidence.visible_body_scene_duration_evidence?.body_has_scene_label === true ||
+        evidence.visible_body_scene_duration_evidence?.body_has_selected_scene_text === true),
+    `${filePath}: visible scene/duration evidence missing`,
+    failures,
+  );
+  assertCondition(
+    evidence.visible_body_scene_duration_evidence?.rewrite_body_has_scene_label === true &&
+      evidence.visible_body_scene_duration_evidence?.rewrite_body_has_duration === true,
+    `${filePath}: visible rewrite body scene/duration evidence missing`,
+    failures,
+  );
+  assertCondition(
+    evidence.visible_body_scene_duration_evidence?.ui_rows_have_scene_label === true &&
+      evidence.visible_body_scene_duration_evidence?.ui_rows_have_duration === true,
+    `${filePath}: visible rows scene/duration evidence missing`,
+    failures,
+  );
+  const rewriteConfirmation = evidence.rewrite_confirmation_evidence ?? {};
+  for (const field of [
+    "rewrite_button_label_exact",
+    "rewrite_confirmation_dialog_present",
+    "rewrite_confirmation_body_first",
+    "rewrite_confirmation_main_body_is_story",
+    "rewrite_main_body_is_narrative_story",
+    "main_textarea_is_complete_story",
+    "narrative_body_has_continuous_actions",
+    "narrative_body_has_character_subjects",
+    "narrative_body_has_conflict_progression",
+    "narrative_body_has_character_goal",
+    "narrative_body_has_conflict_causality",
+    "narrative_body_has_emotional_turn",
+    "narrative_body_has_story_resolution_beat",
+    "narrative_body_has_scene_specific_expression",
+    "narrative_body_not_meta_strategy",
+    "narrative_body_not_action_choreography",
+    "narrative_body_not_strategy_or_trace",
+    "narrative_body_not_mechanical_rewrite_template",
+    "narrative_body_not_storyboard_breakdown",
+    "narrative_body_not_instructional_summary",
+    "narrative_body_not_fact_boundary_explanation",
+    "narrative_body_not_duration_plan_explanation",
+    "rewrite_confirmation_body_no_internal_analysis",
+    "rewrite_confirmation_body_no_storyboard_format",
+    "rewrite_confirmation_forbidden_internal_terms_absent",
+    "rewrite_body_changes_after_scene_or_duration_switch",
+    "rewrite_uses_current_confirmed_fact_source",
+    "rewrite_adapts_to_selected_scene_and_duration",
+    "kb_reference_not_trace_only",
+    "story_body_kb_oracle_present",
+    "story_body_kb_oracle_affects_structure",
+    "story_body_kb_raw_absent",
+    "story_body_scene_type_applied",
+    "story_body_duration_capacity_applied",
+    "story_body_changes_when_scene_changes",
+    "story_body_changes_when_duration_changes",
+    "story_body_expansion_uses_seed_source",
+    "story_body_rewrite_uses_current_accepted_fact_source",
+    "story_body_no_old_scene_style_residue",
+    "story_body_no_old_duration_strategy_residue",
+  ]) {
+    assertCondition(rewriteConfirmation[field] === true, `${filePath}: rewrite_confirmation_evidence.${field} must be true`, failures);
+  }
+  assertCondition(
+    rewriteConfirmation.rewrite_confirmation_first_block_label === "【改写剧本正文】",
+    `${filePath}: rewrite confirmation body must be first block`,
+    failures,
+  );
+  const visualDescription = evidence.visual_description_evidence ?? {};
+  assertCondition(
+    visualDescription.visual_description_visible_frame_passed === true,
+    `${filePath}: visual_description visible-frame gate failed`,
+    failures,
+  );
+  assertCondition(
+    visualDescription.visual_description_no_abstract_strategy_terms === true,
+    `${filePath}: visual_description abstract strategy terms present`,
+    failures,
+  );
+  for (const field of [
+    "visual_description_readable_structure",
+    "visual_description_scene_present",
+    "visual_description_composition_present",
+    "visual_description_character_action_present",
+    "visual_description_no_internal_field_dump",
+  ]) {
+    assertCondition(
+      visualDescription[field] === true,
+      `${filePath}: visual_description_evidence.${field} must be true`,
+      failures,
+    );
+  }
   assertCondition(asArray(evidence.hard_gate_failures).every((item) => typeof item === "string"), `${filePath}: hard_gate_failures must be string codes`, failures);
+  const validatorGate = result.validator_gate_evidence ?? {};
+  assertCondition(validatorGate.validator_gate_present === true, `${filePath}: validator gate must be present`, failures);
+  assertCondition(validatorGate.validator_gate_passed === true, `${filePath}: validator gate must pass`, failures);
+  if (validatorGate.rows_match === true) {
+    assertCondition(validatorGate.response_rows_non_empty === true, `${filePath}: rows_match=true requires non-empty response rows`, failures);
+    assertCondition(validatorGate.ui_rows_non_empty === true, `${filePath}: rows_match=true requires non-empty UI rows`, failures);
+    assertCondition(validatorGate.pseudo_success_detected !== true, `${filePath}: validator pseudo-success detected`, failures);
+  }
   assertCondition(asArray(evidence.quality_warnings).every((item) => item.raw_values_redacted === true), `${filePath}: quality warnings must be redacted`, failures);
   assertCondition(evidence.template_overconstraint_risk?.fixed_row_count_required === false, `${filePath}: fixed row count is forbidden`, failures);
+  assertCondition(Boolean(result.prompt_text_boundary_evidence), `${filePath}: prompt_text_boundary_evidence missing`, failures);
+  for (const field of requiredPromptBoundaryEvidenceFields) {
+    assertCondition(
+      promptBoundaryEvidence[field] === true,
+      `${filePath}: prompt_text_boundary_evidence.${field} must be true`,
+      failures,
+    );
+  }
+  assertCondition(promptBoundaryEvidence.prompt_text_missing === false, `${filePath}: prompt_text_missing must be false`, failures);
+  assertCondition(asArray(promptBoundaryEvidence.prompt_text_forbidden_source_hits).length === 0, `${filePath}: prompt_text forbidden source hits must be empty`, failures);
   failures.push(...validateProviderRetryTelemetry(artifact, filePath));
   return failures;
 }
@@ -586,7 +872,13 @@ function live3ArtifactPassed(artifact) {
     storyFactFrame.present === true &&
     String(acceptedSnapshot.accepted_snapshot_hash ?? evidence?.accepted_snapshot_hash ?? "").trim().length > 0 &&
     promptBoundary.prompt_text_boundary_passed === true &&
+    promptBoundary.prompt_text_missing === false &&
+    validator.validator_gate_present === true &&
+    validator.validator_gate_passed === true &&
     validator.rows_match === true &&
+    validator.response_rows_non_empty === true &&
+    validator.ui_rows_non_empty === true &&
+    validator.pseudo_success_detected !== true &&
     asArray(validator.row_diffs).length === 0;
 }
 
@@ -674,6 +966,12 @@ function validateLive3Pool(matrix, evidenceArtifacts, callableRequiredModels) {
 
 const args = parseArgs(process.argv.slice(2));
 const matrix = readJson(args.matrix);
+for (const evidenceListPath of args.evidenceList) {
+  const listValue = readJson(evidenceListPath);
+  for (const item of asArray(listValue.evidence_files ?? listValue.files ?? listValue)) {
+    args.evidence.push(item);
+  }
+}
 const matrixFailures = validateMatrix(matrix);
 const evidenceArtifacts = args.evidence.map((filePath) => ({ filePath, artifact: readJson(filePath) }));
 const evidenceFailures = evidenceArtifacts.flatMap(({ filePath, artifact }) => validateEvidenceArtifact(artifact, filePath));

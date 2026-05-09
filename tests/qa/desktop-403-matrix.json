@@ -5,13 +5,66 @@
   "scene_count": 21,
   "fixed_case_count": 378,
   "long_text_case_count": 21,
+  "entry_baseline_case_count": 4,
   "total_case_count": 403,
+  "case_count_formula": "fixed_case_count + long_text_case_count + entry_baseline_case_count",
+  "case_count_breakdown": {
+    "fixed_matrix": {
+      "count": 378,
+      "formula": "3 fixed texts x 21 scene types x 6 fixed durations",
+      "source": "desktop-403-matrix fixed text/duration/scene dimensions"
+    },
+    "long_text_matrix": {
+      "count": 21,
+      "formula": "1 long-text source x 21 scene types",
+      "source": "private local long-text sample path recorded below; raw docx must not be committed"
+    },
+    "entry_baseline_matrix": {
+      "count": 4,
+      "formula": "4 four-group carrier baseline cases rerun as formal 403 entry guards",
+      "source": "tests/qa/desktop-four-groups.json",
+      "case_ids": [
+        "A_hot_blood_battle",
+        "A_chinese_war_formation",
+        "B_hot_blood_battle",
+        "B_slg_sandbox_view"
+      ],
+      "purpose": "Prove the 403 run has not over-read full16 and still preserves baseline source binding, KB/golden leakage guards, shell/CDP lifecycle, provider hard gate, and rows_match before the large matrix starts."
+    }
+  },
+  "kb_golden_mapping_manifest": "tests/qa/desktop-403-kb-golden-mapping.json",
+  "fixed_text_sources": [
+    {
+      "id": "fixed_text_A_ruin_pressure",
+      "source_ref": "tests/qa/desktop-four-groups.json#cases[id=A_hot_blood_battle].source_text",
+      "source_policy": "formal_403_user_source_carrier"
+    },
+    {
+      "id": "fixed_text_B_alley_pursuit",
+      "source_ref": "tests/qa/desktop-four-groups.json#cases[id=B_hot_blood_battle].source_text",
+      "source_policy": "formal_403_user_source_carrier"
+    },
+    {
+      "id": "fixed_text_C_rainy_dock_photo",
+      "source_ref": "tests/qa/desktop-cross-drift-smoke.json#cases[case_id=cross_same_duration_same_scene_different_script].source",
+      "source_policy": "formal_403_user_source_carrier"
+    }
+  ],
+  "formal_403_preflight_requirements": [
+    "case count must equal 403 by the explicit 378 + 21 + 4 breakdown",
+    "each case must run in a fresh release WebView2/CDP shell with explicit -RepoRoot",
+    "each runner artifact must include story_fact_frame_binding_evidence.present=true",
+    "each runner artifact must include story_fact_frame_binding_evidence.kb_rule_pack_ids",
+    "each runner artifact must include story_fact_frame_binding_evidence.kb_snapshot_hash",
+    "each runner artifact must include prompt_text_boundary_evidence.sample_text_absent=true",
+    "each runner artifact must include prompt_text_boundary_evidence.raw_kb_rows_absent=true",
+    "each runner artifact must include prompt_text_boundary_evidence.source_sample_id_absent=true",
+    "each runner artifact must include prompt_text_boundary_evidence.sample_entity_marker_absent=true",
+    "no raw sample_text, smoke_extracts text, raw KB rows, source_register, overlay JSON, API key, token, or secret may appear in prompt_text, logs, chat, or QA artifacts"
+  ],
   "gate_model_order": [
-    "qwen-plus-2025-07-28",
     "qwen3.6-plus",
-    "qwen3.6-plus-2026-04-02",
-    "qvq-max-2025-03-25",
-    "qwen-plus"
+    "qwen3.6-plus-2026-04-02"
   ],
   "model_contract": {
     "certification_matrix": "tests/qa/desktop-model-certification-matrix.json",
@@ -25,6 +78,36 @@
   "long_text_sample": {
     "original_machine_path": "C:\\Users\\Administrator\\Desktop\\九州剧本文字版2.docx",
     "note": "Do not commit the private docx unless ownership is explicitly opened. Record the expected path and use a local copy on the target machine."
+  },
+  "golden_sample_boundary": {
+    "sample_sources": [
+      "tests/qa/desktop-anime-scene-long-samples.index.json",
+      "tests/qa/desktop-21-scene-type-reference-samples.draft.json"
+    ],
+    "allowed_uses": [
+      "scene taxonomy",
+      "craft tags",
+      "director rule tags",
+      "camera and motion anchors",
+      "negative drift tags",
+      "compact sample summary",
+      "expected prompt oracle",
+      "expected row oracle",
+      "structure-only checks"
+    ],
+    "forbidden_uses": [
+      "raw sample_text as user source",
+      "raw sample_text in prompt_text",
+      "smoke_extracts original text in prompt_text",
+      "sample character names in generated rows",
+      "sample props in generated rows",
+      "sample places in generated rows",
+      "sample worldview in generated rows",
+      "raw KB rows in prompt_text",
+      "source_register or overlay JSON in prompt_text"
+    ],
+    "human_review_required_before_approval_metadata": true,
+    "runtime_prompt_consumes_raw_sample_text": false
   },
   "scene_types": [
     { "value": "hot_blood_battle", "label": "热血战斗" },

@@ -163,3 +163,80 @@ fresh binary 证明至少要包含：
 shell，就必须继续显式传入当前被测 clean workspace 的 `-RepoRoot`，并在每个
 shell 生命周期后执行和回报 `StopOnly` cleanup。
 <small>When later entering `qwen3.6-plus` live3 or required text model pool live3, any shell start must still pass `-RepoRoot` for the clean workspace under test and must execute and report `StopOnly` cleanup after every shell lifecycle.</small>
+
+## 9. Launcher Proxy Isolation Addendum
+<small>9. Launcher proxy isolation addendum</small>
+
+The `AppDefault + LaunchDiagnosticOnly` shell gate remains the only formal
+shell gate. The 2026-05-07 recurrence does not replace `HOPE-SHELL-004`; it
+adds a launcher environment-isolation rule inside the same gate.
+
+- Before starting `hope-app.exe`, every release shell / WebView2 / CDP launch
+  path must clear `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`,
+  `http_proxy`, `https_proxy`, `all_proxy`, and `no_proxy` from the launch
+  process environment.
+- `-NoProxy` is QA/provider semantics and evidence only. It must not be the
+  only trigger for WebView2 environment isolation.
+- Accepted artifacts must record only sanitized evidence:
+  `launcher_process_env_proxy_present_before`,
+  `webview2_launch_env_proxy_cleared`, `app_process_env_proxy_present`, and
+  `no_proxy_loopback_only`.
+- Before starting `hope-app.exe`, the launcher must be able to query WebView2
+  process command lines. If `webview2_process_query_capability.query_ok=false`
+  or the query reports access denied, the launcher must fail closed before
+  starting the release shell. Otherwise `StopOnly` cannot prove that a WebView2
+  popup / crash lifecycle was cleaned.
+- WebView2 cleanup scope is Hope-owned only: `hope-app.exe` plus WebView2
+  processes whose command line names `hope-app.exe` or the
+  `hope-webview2-cdp` temp profile. System WebView2 processes owned by Windows
+  surfaces such as `SearchHost.exe` or `Widgets.exe` must be recorded as
+  `non_hope_process_count` / `non_hope_webview_exe_names`, not killed and not
+  reported as Hope release-shell residue.
+- Accepted artifacts must not include raw proxy values, raw env files, API
+  keys, tokens, or secrets.
+- `AppDefault` must not use `--noerrdialogs`, `--disable-breakpad`, or
+  `--disable-crash-reporter`; hiding a popup is not a startup pass.
+- `StopOnly` clean is cleanup evidence only. It is not a shell pass unless it
+  is paired with a passing `AppDefault + LaunchDiagnosticOnly` launch artifact.
+- If `0x80000003` or `HRESULT(0x8000FFFF)` appears, stop business gates and
+  route the run to shell/CDP blocker handling. Do not continue targeted,
+  `full16`, `403-case`, provider, runner, or package work from that lifecycle.
+
+2026-05-07 verification evidence for this addendum:
+
+- `AppDefault + LaunchDiagnosticOnly`
+- `ok=true`
+- `cdp_ready=true`
+- `target_url=http://tauri.localhost/#/workbench`
+- `webview2_popup_suppression_detected=false`
+- `webview2_app_popup_suppression_arg_present=false`
+- `webview2_launch_env_proxy_cleared=true`
+- `app_process_env_proxy_present=false`
+- paired `StopOnly` clean
+
+## 10. 2026-05-08 Business Gate Preflight Link
+<small>10. 2026-05-08 business gate preflight link</small>
+
+The shell/CDP contract now inherits the source and artifact freshness rules in:
+<small>The shell/CDP contract now inherits the source and artifact freshness rules in:</small>
+
+```text
+docs/hope-qa-evidence-freshness-contract.md
+```
+
+Before targeted, `full16`, or `formal403` starts, the launcher-side shell gate
+must be paired with current artifact identity:
+<small>Before targeted, `full16`, or `formal403` starts, the launcher-side shell gate must be paired with current artifact identity:</small>
+
+- current workspace
+- current branch / `HEAD`
+- current release exe SHA256
+- current `runtime_rs_sha256`
+- current runner/certifier/matrix/KB mapping hashes when applicable
+- paired `StopOnly`
+
+If WebView2 `0x80000003`, `HRESULT(0x8000FFFF)`, `cdp_ready=false`, wrong
+target, missing `tauri.localhost`, or missing `StopOnly` appears, stop business
+gates immediately. Do not continue with provider, runner, targeted, `full16`,
+`formal403`, or package work from that lifecycle.
+<small>If WebView2 `0x80000003`, `HRESULT(0x8000FFFF)`, `cdp_ready=false`, wrong target, missing `tauri.localhost`, or missing `StopOnly` appears, stop business gates immediately.</small>

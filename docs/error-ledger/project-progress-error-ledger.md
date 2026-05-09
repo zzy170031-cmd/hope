@@ -786,3 +786,672 @@
 <small>Bilingual formatting must keep the same discipline: Chinese first line, English second line, Markdown with `<small>...</small>`, and DOCX helper lines 2 pt smaller.</small>
 - 如果新的问题没有 fresh closure evidence，就只允许写成 open 或 reference-only，不得提前写成 closed。
 <small>If a new issue lacks fresh closure evidence, it may only be written as open or reference-only and may not be upgraded to closed early.</small>
+
+## 10. 2026-05-07 WebView2 Proxy-Isolation Update
+<small>10. 2026-05-07 WebView2 proxy-isolation update</small>
+
+This update does not reopen or replace `HOPE-SHELL-004`. It records a bounded
+correction inside the existing shell/CDP startup playbook: all release shell /
+WebView2 / CDP launch paths must isolate proxy environment before starting
+`hope-app.exe`.
+
+Updated prevention rule:
+
+- `AppDefault + LaunchDiagnosticOnly` remains the only formal shell gate.
+- `StopOnly` clean is required cleanup evidence, but it is not a shell pass by
+  itself.
+- `--noerrdialogs`, `--disable-breakpad`, and `--disable-crash-reporter` remain
+  forbidden as popup-suppression shortcuts.
+- The launcher must clear `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`,
+  `http_proxy`, `https_proxy`, `all_proxy`, and `no_proxy` before starting
+  `hope-app.exe`.
+- `-NoProxy` is QA/provider semantics and evidence only. It must not be the
+  only trigger for WebView2 environment isolation.
+- The launcher must fail closed before starting `hope-app.exe` when
+  `webview2_process_query_capability.query_ok=false` or command-line inspection
+  is denied; otherwise `StopOnly` cannot prove that WebView2 popup / crash
+  residue has been cleaned.
+- `StopOnly` cleanup scope is Hope-owned WebView2 only: command lines naming
+  `hope-app.exe` or the `hope-webview2-cdp` temp profile. System WebView2
+  processes owned by Windows surfaces such as `SearchHost.exe` or `Widgets.exe`
+  must be recorded as non-Hope context and must not be killed or reported as
+  Hope release-shell residue.
+- Artifacts must record sanitized evidence only:
+  `launcher_process_env_proxy_present_before`,
+  `webview2_launch_env_proxy_cleared`, `app_process_env_proxy_present`, and
+  `no_proxy_loopback_only`, plus
+  `webview2_process_query_capability.query_ok`.
+- If `0x80000003` or `HRESULT(0x8000FFFF)` appears, stop business gates and
+  route to shell/CDP blocker handling; do not continue targeted, `full16`,
+  `403-case`, provider, runner, or package work.
+
+Fresh 2026-05-07 validation evidence:
+
+- `AppDefault + LaunchDiagnosticOnly`
+- `ok=true`
+- `cdp_ready=true`
+- `target_url=http://tauri.localhost/#/workbench`
+- `webview2_popup_suppression_detected=false`
+- `webview2_app_popup_suppression_arg_present=false`
+- `webview2_launch_env_proxy_cleared=true`
+- `app_process_env_proxy_present=false`
+- paired `StopOnly` clean
+
+## 11. 2026-05-08 Contract-Boundary Update
+<small>11. 2026-05-08 contract-boundary update</small>
+
+This update records a docs-only boundary expansion. It does not mark any
+business QA gate as passed and does not close targeted, `full16`, `formal403`,
+or package readiness.
+<small>This update records a docs-only boundary expansion. It does not mark any business QA gate as passed and does not close targeted, `full16`, `formal403`, or package readiness.</small>
+
+Added companion contracts:
+<small>Added companion contracts:</small>
+
+- `docs/hope-field-aware-story-contract.md`
+- `docs/hope-provider-failover-contract.md`
+- `docs/hope-qa-evidence-freshness-contract.md`
+
+Boundary now fixed:
+<small>Boundary now fixed:</small>
+
+- story stage order from `SeedSourceFrame` to `StoryboardInputFrame`
+- narrative-first `扩写故事` / `改写剧本` body
+- field-aware entity resolution so situation/title words such as `危局` do not
+  become `person`
+- all 21 scene types through unified `SceneProfile`
+- target duration as narrative capacity
+- KB oracle positive and negative evidence
+- provider failover only for quota, unavailable model, or entitlement /
+  permission HTTP 403
+- evidence freshness fields and stale-trigger rules
+- UTF-8 and Chinese sentinel preflight for `runtime.rs`
+
+Next closure evidence required:
+<small>Next closure evidence required:</small>
+
+- implementation thread must report exact file allowlist before edits
+- runtime/UI/runner/certifier/matrix changes must produce fresh artifact
+  identity
+- targeted A/B/C/D must rerun fresh before `full16`
+- `full16` must rerun fresh before `formal403`
+- no old release exe, old runner output, old certifier output, or old CDP
+  artifact may be counted as current pass evidence
+
+## 12. 2026-05-08 Bounded Goal Error Cards
+<small>12. 2026-05-08 bounded goal error cards</small>
+
+This section is updated while the bounded `/goal` repair is running. It is an
+error ledger update only; it does not mark targeted, `full16`, `formal403`, or
+package gates as passed.
+
+### `HOPE-SHELL-017`: WebView2 popup / CDP launch failure
+
+- 错题编号: `HOPE-SHELL-017`
+- 问题现象: release shell may fail to materialize the CDP target, or earlier
+  runs may show WebView2 popup/crash symptoms such as `0x80000003` or
+  `HRESULT(0x8000FFFF)`.
+- 错误做法: masking the symptom with `--noerrdialogs`,
+  `--disable-breakpad`, or `--disable-crash-reporter`, or treating `StopOnly`
+  clean as a shell pass.
+- 根因: shell launch, WebView2 profile, proxy inheritance, and CDP target
+  readiness were previously conflated.
+- 正确处理: run `AppDefault + LaunchDiagnosticOnly`, isolate proxy env before
+  launch, require `target_url=http://tauri.localhost/#/workbench`, then run
+  `StopOnly`.
+- 必带证据: `ok=true`, `cdp_ready=true`, expected `target_url`,
+  `webview2_launch_env_proxy_cleared=true`,
+  `app_process_env_proxy_present=false`, popup suppression fields false, paired
+  `StopOnly` with no Hope-owned WebView2 residue.
+- 证据判读补充: do not inject `--noerrdialogs`,
+  `--disable-breakpad`, or `--disable-crash-reporter` through launcher or app
+  WebView2 arguments. If a WebView2 Runtime child process reports an internal
+  `has_noerrdialogs=true`, it is not sufficient by itself to fail the gate; the
+  hard evidence is `webview2_popup_suppression_detected=false`,
+  `webview2_app_popup_suppression_arg_present=false`,
+  `webview2_disable_breakpad_seen=false`, and
+  `webview2_disable_crash_reporter_seen=false`.
+- 防复发规则: any popup/crash or wrong-target signal stops business gates and
+  routes to shell/CDP repair first.
+- 当前验证状态: active; 2026-05-08 AppDefault gate on release exe
+  `C09056140DC7F777369D52C1E834EA4619D0896E190769B69E3AD8F532B814BF` passed,
+  followed by `StopOnly` clean. This is shell evidence only and does not mark
+  targeted or `full16` passed.
+- 相关文件 / artifact 类型: `scripts/start-hope-release-cdp.ps1`,
+  launch JSON, stop-only JSON.
+- 是否仍有风险: yes; WebView2 process query can require elevated permission on
+  this machine and must be handled before business gates.
+
+### `HOPE-SHELL-018`: proxy env contamination
+
+- 错题编号: `HOPE-SHELL-018`
+- 问题现象: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or `NO_PROXY` inherited
+  from the parent process can pollute WebView2 launch or provider QA evidence.
+- 错误做法: assuming `-NoProxy` alone is the WebView2 isolation switch.
+- 根因: provider QA semantics and WebView2 process environment isolation were
+  previously coupled.
+- 正确处理: release shell / CDP startup clears proxy env by default before
+  launching `hope-app.exe`; `-NoProxy` remains QA/provider evidence only.
+- 必带证据: sanitized before/after proxy presence,
+  `webview2_launch_env_proxy_cleared=true`,
+  `app_process_env_proxy_present=false`, no raw env values.
+- 防复发规则: every release shell launch artifact must include sanitized proxy
+  evidence.
+- 当前验证状态: active and enforced by launcher evidence.
+- 相关文件 / artifact 类型: `scripts/start-hope-release-cdp.ps1`, launch JSON.
+- 是否仍有风险: low if launch JSON is fresh and sanitized.
+
+### `HOPE-SRC-019`: `runtime.rs` non-ASCII corruption
+
+- 错题编号: `HOPE-SRC-019`
+- 问题现象: Chinese contract sentinels in `app/src/runtime.rs` become corrupted,
+  causing compile or semantic failures.
+- 错误做法: whole-file PowerShell/Node mechanical replacement on files
+  containing non-ASCII text.
+- 根因: unsafe text rewrite path and missing source integrity preflight.
+- 正确处理: save forensic copy, SHA256, and diff; export clean base from HEAD;
+  rebuild by small `apply_patch` edits or other UTF-8 safe scoped edits.
+- 必带证据: forensic artifact path, `runtime_rs_sha256`, UTF-8 readable check,
+  replacement-char absent, sentinel check for key Chinese terms.
+- 防复发规则: source integrity preflight must run before targeted/full16/formal
+  gates.
+- 当前验证状态: active; runtime tests passed after recovery in this chain.
+- 相关文件 / artifact 类型: `app/src/runtime.rs`, forensic target directory.
+- 是否仍有风险: medium; avoid full-file mechanical rewrites.
+
+### `HOPE-ENTITY-020`: field-unaware entity drift
+
+- 错题编号: `HOPE-ENTITY-020`
+- 问题现象: situation/title/action fragments such as `危局`, `林峰压`, or
+  `苏瑶并` can be misread as source-external character names.
+- 错误做法: adding one more broad noise word each time a false positive appears.
+- 根因: global string scanning without field role semantics.
+- 正确处理: use `FieldAwareEntityResolver` with `FieldRole` and `EntityKind`.
+  `person` stays strict; `shot_title` may classify situation terms;
+  `character_action` may classify action fragments; real external characters
+  still hard fail.
+- 必带证据: tests for `shot_title=危局` pass, `person=危局` fail,
+  `character_action` fragments do not become names, and real external names
+  remain blocked.
+- 防复发规则: every new false-positive category needs a field-aware test, not a
+  wider whitelist.
+- 当前验证状态: active; covered by runtime field-aware tests.
+- 相关文件 / artifact 类型: `app/src/runtime.rs`, Rust tests.
+- 是否仍有风险: medium; new field types must be classified before gate advance.
+
+### `HOPE-STORY-021`: narrative body replaced by strategy text
+
+- 错题编号: `HOPE-STORY-021`
+- 问题现象: expand/rewrite main body becomes action choreography, scene
+  strategy, duration plan, KB note, storyboard breakdown, or prompt-like text.
+- 错误做法: putting support explanations into the main textarea or
+  `acceptedConfirmationBody`.
+- 根因: `NarrativeStoryBody` and `SupportNotes` boundary was not hard enough.
+- 正确处理: main story body is first and complete; support notes may appear only
+  below the body or in trace/artifacts and must not become accepted source.
+- 必带证据: narrative body has character, goal, causality, emotional turn, and
+  resolution beat; no strategy/trace/prompt/KB explanation in user body.
+- 防复发规则: confirmation freezes only the narrative body, and storyboard input
+  derives from that confirmed body.
+- 当前验证状态: active; targeted A/B/C evidence passed earlier in this chain, but
+  latest-code group rerun is still required before `full16`.
+- 相关文件 / artifact 类型: `app/src/runtime.rs`, `ui/src/App.tsx`, runner JSON.
+- 是否仍有风险: yes until all targeted cases are rerun on the latest release exe.
+
+### `HOPE-SCENE-022`: scene and duration changed only as labels
+
+- 错题编号: `HOPE-SCENE-022`
+- 问题现象: changing `scene_type` or `target_duration` changes metadata but not
+  the story structure or storyboard rows.
+- 错误做法: checking only selected label text or duration string.
+- 根因: missing or incomplete `SceneProfile` and `DurationCapacity` application.
+- 正确处理: every scene uses a unified profile with expression, space,
+  conflict, rhythm, camera, positive tags, and drift bans; duration becomes
+  beat count, paragraph capacity, action density, and shot duration allocation.
+- 必带证据: story changes when scene/duration changes; rows bind current scene
+  and current total duration; no old scene style residue.
+- 防复发规则: do not advance from targeted to `full16` until scene and duration
+  evidence is fresh for all A/B/C/D cases.
+- 当前验证状态: active; targeted D exposed a visible duration evidence gap and is
+  being repaired before proceeding.
+- 相关文件 / artifact 类型: `app/src/runtime.rs`, UI table, runner JSON.
+- 是否仍有风险: yes until targeted D and latest-code targeted group pass.
+
+### `HOPE-KB-023`: KB trace-only pseudo evidence
+
+- 错题编号: `HOPE-KB-023`
+- 问题现象: artifacts contain KB hash or rule ids but do not prove that KB
+  affected story or storyboard structure.
+- 错误做法: treating KB trace presence as content correctness.
+- 根因: positive structural influence and raw leakage guards were separate.
+- 正确处理: require `kb_oracle_present`, `affects_structure`, rule pack evidence,
+  and raw-leak absence together.
+- 必带证据: KB oracle hashes/rule packs, structure-change evidence, raw KB rows
+  absent, raw sample text absent.
+- 防复发规则: KB evidence must be positive and negative; trace-only is not a
+  pass.
+- 当前验证状态: active; runner/certifier carry KB oracle gates.
+- 相关文件 / artifact 类型: runner JSON, certifier JSON, KB mapping JSON.
+- 是否仍有风险: medium; formal matrix must inherit this gate.
+
+### `HOPE-PROV-024`: provider failover confused with fallback
+
+- 错题编号: `HOPE-PROV-024`
+- 问题现象: model switching can accidentally hide validator, grounding, rows,
+  KB, or CDP failures.
+- 错误做法: using the secondary model as a general retry for business gate
+  failures.
+- 根因: provider failover was not typed narrowly enough.
+- 正确处理: only quota, unavailable model, or entitlement/permission HTTP 403
+  may switch from `qwen3.6-plus` to `qwen3.6-plus-2026-04-02`.
+- 必带证据: `attempted_models`, `final_model`, `provider_failover_used`,
+  `provider_failover_reason`, HTTP status fields, `fallback_used=false`,
+  `local_candidate=false`.
+- 防复发规则: validator/grounding/rows/KB/CDP failures remain hard gates and do
+  not become provider success.
+- 当前验证状态: active; latest targeted D evidence used primary model only and no
+  local fallback.
+- 相关文件 / artifact 类型: `app/src/runtime.rs`, runner JSON, certifier JSON.
+- 是否仍有风险: low if typed failover evidence is preserved.
+
+### `HOPE-ROWS-025`: `rows_match` pseudo success
+
+- 错题编号: `HOPE-ROWS-025`
+- 问题现象: `rows_match=true` can be over-read when runtime was blocked or rows
+  are empty/partial.
+- 错误做法: treating `rows_match` as full content correctness.
+- 根因: equality and non-empty/runtime-success checks were not bound together.
+- 正确处理: require `rows_non_empty`, `runtime_blocked=false`,
+  `validator_hard_gate_fail=false`, prompt boundary pass, and row diffs empty.
+- 必带证据: response rows count, UI rows count, row hashes, row diffs,
+  validator gate pass.
+- 防复发规则: `rows_match=true` is necessary but never sufficient.
+- 当前验证状态: active; runner hard gate includes pseudo-success guard.
+- 相关文件 / artifact 类型: `scripts/hope-ui-driven-trace-runner.mjs`,
+  runner JSON.
+- 是否仍有风险: medium; partial visible table evidence created the targeted D
+  duration blocker.
+- 2026-05-09 addendum: fresh full16 case
+  `rewrite_scene_same_duration_different_text_same` repeated the same boundary
+  with `response_rows_count=0`, `ui_rows_count=0`, `rows_match=true`, and
+  `validator_gate_passed=true`, while top-level accepted snapshot /
+  StoryFactFrame hashes were empty strings.
+- 2026-05-09 wrong fix path: do not route this class into provider / `403` /
+  CDP lanes, do not add word allowlists, and do not read `rows_match=true` or
+  `validator_gate_passed=true` alone as a pass.
+- 2026-05-09 prevention extension: blocked `generate_storyboard` responses must
+  preserve sanitized binding hashes, UI QA trace must fail the validator gate
+  on `status=Blocked` or zero rows, and runner/certifier must require non-empty
+  rows plus non-empty binding hashes together.
+
+### `HOPE-FRAME-026`: prompt and visible-frame contamination
+
+- 错题编号: `HOPE-FRAME-026`
+- 问题现象: user-facing `prompt_text` contains internal identifiers, or
+  `visual_description` reads like strategy/anchor notes instead of a visible
+  frame.
+- 错误做法: renaming internal fields or deleting the checker to pass.
+- 根因: renderer mixed internal evidence strings with user-facing fields.
+- 正确处理: render `visual_description` from `VisibleFrame`; render
+  `prompt_text` in layers: shot goal, image, action, camera, dialogue, and
+  constraints.
+- 必带证据: prompt boundary pass, forbidden internal-source terms absent,
+  visible frame has scene, people, positions, action, depth, camera, motion
+  trace, and material/lighting.
+- 防复发规则: internal evidence may stay in trace/artifact only, never in
+  user-visible row fields.
+- 当前验证状态: active; targeted B/C repairs passed visual/prompt gates, and
+  targeted D v5 fresh pass verified composite-person visible-frame rendering.
+- 相关文件 / artifact 类型: `app/src/runtime.rs`, UI rows, runner JSON.
+- 是否仍有风险: medium; latest-code targeted group rerun is required.
+
+### `HOPE-EVID-027`: stale release exe or stale artifact over-read
+
+- 错题编号: `HOPE-EVID-027`
+- 问题现象: runtime/UI/runner changes are followed by claims based on an older
+  release exe, old CDP profile, or old targeted/full16 artifact.
+- 错误做法: reading a prior pass as a current pass after source changes.
+- 根因: freshness identity was not enforced at every gate.
+- 正确处理: record runtime, runner, certifier, matrix, KB mapping, dirty patch,
+  and release exe SHA256; rebuild when source is newer than exe.
+- 必带证据: `release_exe_sha256`, `runtime_rs_sha256`, runner/certifier/matrix
+  hashes, artifact start/finish time, parent gate hash.
+- 防复发规则: every source or runner change invalidates downstream release gate
+  evidence until rebuild and fresh rerun.
+- 当前验证状态: active; current release exe SHA256 is recorded for targeted D v5:
+  `C59F5DAEAEE71A2C08ADE5D2B0477044275FEF3A509A38E0FA6660FCD6402156`.
+- 相关文件 / artifact 类型: release exe, launch JSON, runner JSON.
+- 是否仍有风险: yes until all targeted cases rerun on the latest exe.
+
+### `HOPE-BUILD-028`: Tauri schema / `app/Cargo.toml` build side effects
+
+- 错题编号: `HOPE-BUILD-028`
+- 问题现象: `cargo tauri build` can dirty generated schema files or
+  `app/Cargo.toml`, creating out-of-scope changes.
+- 错误做法: bulk reset, stash, clean, or mixing build side effects into business
+  changes.
+- 根因: build tooling writes tracked files outside the active implementation
+  surface.
+- 正确处理: save forensic copies, diffs, SHA256, and status; restore only
+  controller-approved build side-effect paths to HEAD; never touch unrelated
+  dirty.
+- 必带证据: forensic directory, exact restore path list, post-restore status,
+  release exe hash preserved.
+- 防复发规则: after every Tauri build, diff `app/Cargo.toml` and schema paths
+  before continuing gates.
+- 当前验证状态: active; three schema files were restored only after explicit
+  controller approval; the latest rebuild redirtied the same three files and
+  they were backed up under
+  `target/forensic-schema-restore/20260508-181643` before restoring only those
+  three paths.
+- 相关文件 / artifact 类型: `app/gen/schemas/*.json`, `app/Cargo.toml`,
+  forensic target directory.
+- 是否仍有风险: medium; must recheck after each rebuild.
+
+### `HOPE-UIROW-029`: paginated visible rows under-read
+
+- 错题编号: `HOPE-UIROW-029`
+- 问题现象: targeted D had six generated UI rows of 10 seconds each, but the
+  runner read only the current visible table page, saw two rows, and reported
+  `visible_rows_duration_missing` with a visible sum of 20 instead of 60.
+- 错误做法: passing from backend `ui_rows` alone, or treating the first visible
+  page as all user-visible rows.
+- 根因: the UI table is paginated; the runner's visible evidence collector did
+  not expand page size before calculating scene/duration evidence.
+- 正确处理: before visible row evidence is calculated, set the storyboard page
+  size control to the maximum available page size, wait for rows to render, then
+  compute visible duration and scene evidence from the expanded table.
+- 必带证据: `table_pagination_evidence`, `tableRowCount`, visible row duration
+  sum, expected duration, `rows_match`, non-empty rows, and StopOnly cleanup.
+- 防复发规则: visible-table gates must verify the evidence surface covers all
+  rows needed for the case; backend rows cannot replace user-visible proof.
+- 当前验证状态: fresh-verified; targeted D v5 passed on release exe
+  `C59F5DAEAEE71A2C08ADE5D2B0477044275FEF3A509A38E0FA6660FCD6402156` with
+  `table_pagination_evidence.after_rows=6`, visible duration sum `60`, and
+  paired StopOnly clean.
+- 相关文件 / artifact 类型: `scripts/hope-ui-driven-trace-runner.mjs`, UI runner
+  JSON.
+- 是否仍有风险: low for targeted D; still rerun A/B/C/D as a latest-code group
+  before claiming targeted group pass.
+
+### `HOPE-FULL16-030`: provider fallback evidence hidden below nested schema
+
+- 错题编号: `HOPE-FULL16-030`
+- 问题现象: fresh full16/targeted case 1 produced a valid runner result,
+  non-empty rows, primary model success, no hard gate failures, and clean
+  StopOnly, but the higher-gate orchestrator marked the case failed because
+  `fallback_used`, `local_candidate`, `rows_match`, and `row_diffs` were present
+  only inside nested evidence objects instead of the compact runner top level.
+- 错误做法: treating nested provider evidence as sufficient for higher gates, or
+  weakening the full16 orchestrator check to ignore `fallback_used=false` and
+  `local_candidate=false`.
+- 根因: runner/certifier evidence schema was not fully flattened for the fields
+  explicitly required by targeted/full16/formal403 handoff reports.
+- 正确处理: promote sanitized `fallback_used` and `local_candidate` from
+  `fallback_gate_evidence`, and `rows_match` / `row_diffs` / row counts from
+  `validator_gate_evidence`, into the compact runner result while keeping the
+  nested objects for detailed audit.
+- 必带证据: full16 case artifact with `ok=true`, non-empty rows,
+  `attempted_models`, `final_model`, `provider_failover_used=false`,
+  `fallback_used=false`, `local_candidate=false`, `rows_match=true`,
+  `row_diffs=[]`, non-empty row counts, `no_http_403=true`, and paired
+  StopOnly clean.
+- 防复发规则: higher-gate orchestrators must fail closed when required evidence
+  fields are missing, then fix the producer schema rather than deleting the
+  assertion.
+- 当前验证状态: producer-schema fix applied to
+  `scripts/hope-ui-driven-trace-runner.mjs`; fresh targeted A/B/C/D and full16
+  reruns are required before this card can be marked closed.
+- 相关文件 / artifact 类型: `scripts/hope-ui-driven-trace-runner.mjs`,
+  full16 runner JSON, full16 summary JSON.
+- 是否仍有风险: medium until full16 is rerun fresh with the promoted fields.
+
+### `HOPE-BIND-031`: narrative body sentence facts over-required as storyboard atoms
+
+- 错题编号: `HOPE-BIND-031`
+- 问题现象: fresh full16 case 2 generated non-empty rows and preserved the core B
+  alley pursuit facts, but `generate_storyboard` was marked `Blocked` because
+  `must_keep_facts` contained whole narrative-body sentences and a tokenization
+  fragment such as `阿青终`; the validator then reported `missing_source_facts`,
+  followed by visible row scene/duration failures because blocked rows were not
+  exposed in the table.
+- 错误做法: either forcing every narrative sentence to appear verbatim in rows,
+  or deleting `missing_source_facts` / visible row gates to pass.
+- 根因: StoryFactFrame binding mixed atomic source facts with narrative-body
+  prose beats; the equivalence layer only knew the canonical B source sentence,
+  not B-source narrative-body sentence coverage.
+- 正确处理: keep the hard gate, but map B-source narrative prose and short
+  tokenization fragments to atomic storyboard coverage: characters, protection,
+  reminder, pursuer, alley mouth, and pressure/approach must all be present in
+  real row fields.
+- 必带证据: Rust regression for B narrative-body facts, runner evidence with
+  `validator_gate_passed=true`, `rows_match=true`, non-empty row counts,
+  visible scene/duration evidence, and StopOnly clean.
+- 防复发规则: StoryFactFrame must distinguish atomic facts from narrative body
+  prose; rows prove story facts through structured equivalence, not by copying
+  whole paragraphs.
+- 当前验证状态: runtime fix and minimal Rust regression added; cargo and fresh
+  full16 rerun are still required before closing.
+- 相关文件 / artifact 类型: `app/src/runtime.rs`, full16 runner JSON,
+  StoryFactFrame binding evidence.
+- 是否仍有风险: medium until fresh full16 case 2 and the remaining 14 cases pass.
+
+### `HOPE-BIND-032`: agency-loss narrative fact over-required as visible row text
+
+- 错题编号: `HOPE-BIND-032`
+- 问题现象: fresh full16 case 3 produced non-empty backend rows for the hot-blood
+  battle / 30s path, but `generate_storyboard` was blocked before UI table
+  materialization because one narrative beat about losing the remaining
+  initiative was treated as a verbatim row requirement.
+- 错误做法: either copying the whole narrative beat into row text just to appease
+  `missing_source_facts`, or weakening `missing_source_facts`,
+  `visible_rows_scene_missing`, and `visible_rows_duration_missing`.
+- 根因: StoryFactFrame equivalence covered the original A ruin source sentence
+  and several pressure beats, but did not classify the initiative-loss sentence
+  as a narrative-level pressure/agency beat that can be proven by the current
+  source profile's visible row atoms.
+- 正确处理: keep `generate_storyboard` blocked on real binding failure, but map
+  this narrative beat to structured row atoms for the current source profile:
+  A ruin rows require protagonist, enemy, ruin/duel space, approach or
+  compressed distance, and a visible hold/brace action; B alley rows require
+  Lin Feng, Su Yao, A Qing, pursuer, alley mouth, and approach pressure.
+- 必带证据: Rust regression for the agency-loss beat, runner evidence with
+  `validator_gate_passed=true`, visible rows non-empty, scene/duration binding
+  present, `rows_match=true`, and paired `StopOnly` clean.
+- 防复发规则: narrative body beats are not storyboard copy text. Each new
+  narrative equivalence must name the atomic visible row facts it requires and
+  must not allow prompt-only coverage. This is now promoted into
+  `docs/hope-story-fact-frame-storyboard-binding-contract.md` and
+  `docs/hope-qa-evidence-freshness-contract.md` as the repeated blocker
+  promotion boundary.
+- 当前验证状态: runtime fix and minimal Rust regressions added for A ruin and B
+  alley variants; cargo, rebuild, AppDefault, targeted refresh, and full16 fresh
+  rerun are still required before closing.
+- 相关文件 / artifact 类型: `app/src/runtime.rs`, full16 runner JSON,
+  StoryFactFrame binding evidence.
+- 是否仍有风险: medium until fresh full16 reaches 16/16 on the latest release
+  exe.
+
+### `HOPE-CONTRACT-033`: recurring blocker fixed locally without prevention boundary
+
+- Error card: `HOPE-CONTRACT-033`
+- Problem symptom: the same failure class reappears under a new case, scene
+  type, duration, source profile, evidence layer, or shell lifecycle after a
+  previous local patch made one case pass.
+- Wrong fix path: continue the next gate, promise to document later, add a loose
+  word allowlist, weaken a runner/certifier assertion, broaden provider
+  failover, or reuse stale artifacts to preserve momentum.
+- Root cause: the repair loop treated each failure as an isolated local defect
+  instead of promoting the repeated class into a contract boundary, regression
+  test, evidence schema, and ledger entry.
+- Correct fix path: classify the live failure, name the wrong path, write the
+  relevant prevention boundary, add the smallest Rust test or runner/certifier
+  assertion, update this ledger immediately, then repair implementation without
+  weakening the hard gate.
+- Required evidence: contract section, regression/assertion name, sanitized
+  blocker artifact, fresh release/AppDefault/targeted/full16 rerun scope when
+  code or gate producers changed.
+- Regression or assertion: recurring blocker closure must fail closed when the
+  required contract boundary, regression/assertion, or fresh artifact identity
+  is missing.
+- Prevention rule: a recurring blocker is not closed by a single case pass. It
+  is closed only when the same mistake cannot pass through a different case or
+  layer without being caught.
+- Current validation status: active; `docs/hope-qa-evidence-freshness-contract.md`
+  now contains `Recurring Blocker Closure Boundary`.
+- Related files / artifact types:
+  `docs/hope-qa-evidence-freshness-contract.md`,
+  `docs/error-ledger/project-progress-error-ledger.md`, runner JSON, certifier
+  JSON, release launch JSON.
+- Remaining risk: medium until all active blocker classes have matching
+  executable assertions and the latest-code targeted/full16 reruns prove the
+  boundary in practice.
+
+### `HOPE-CONTRACT-034`: three field-aware incidents repaired as isolated words
+
+- Error card: `HOPE-CONTRACT-034`
+- Three incidents:
+  1. `危局` in `shot_title` / `visual_description` was at risk of becoming an
+     external person while `person=危局` must still hard fail.
+  2. `林峰压` / source-name action fragments were treated as possible names
+     instead of field-aware action fragments.
+  3. Fresh full16 case `expand_scene_same_duration_same_text_different`
+     blocked on `shot_title` candidate `苏瑶并`, producing empty rows with
+     `rows_match=true` and `validator_pseudo_success_detected`.
+  4. Fresh full16 case `expand_scene_same_duration_same_text_same` blocked on
+     `shot_title` candidate `临界`, another title/situation term promoted into
+     a person candidate.
+- Why same boundary: all three are non-`person` fields promoting situation
+  words, source-prefixed action fragments, or conjunction tails into person
+  candidates because field semantics were not decisive enough.
+- Wrong fix path: add each word to a broad global allowlist, weaken
+  `missing_source_facts`, delete `validator_pseudo_success_detected`, or treat
+  `rows_match=true` with empty rows as pass.
+- Root cause: `FieldAwareEntityResolver` did not fully classify
+  source-prefixed action/conjunction fragments before the generic
+  unknown-name candidate path.
+- Correct boundary: `person` remains strict; `shot_title`, `scene_title`,
+  `visual_description`, and `character_action` use field role plus source
+  prefix plus bounded tail classification. The prefix must be a current source
+  character or accepted role; the tail must be a bounded action, state, grammar,
+  or conjunction fragment.
+- Implementation integration point: `app/src/runtime.rs`
+  `resolve_field_aware_entity_candidate`,
+  `field_aware_source_action_fragment`, and validator tests.
+- Runner/certifier acceptance fields: non-empty response/UI rows,
+  `rows_match=true`, `validator_gate_passed=true`,
+  `validator_pseudo_success_detected=false`, prompt boundary pass, visible-frame
+  pass, and fresh artifact identity.
+- Counterexample that must still fail: `person=危局`, `person=断戟立`, and a
+  true source-external person such as `李明` when absent from the current source
+  or accepted narrative frame.
+- Current validation status: active; contract boundary added to
+  `docs/hope-qa-evidence-freshness-contract.md` and
+  `docs/hope-field-aware-story-contract.md`; runtime regression and fresh rerun
+  are required before closure.
+- Related files / artifact types: `app/src/runtime.rs`,
+  `docs/hope-field-aware-story-contract.md`,
+  `docs/hope-qa-evidence-freshness-contract.md`, full16 runner JSON.
+- Remaining risk: medium until fresh full16 no longer reproduces empty-row
+  pseudo-success from this field-aware class.
+
+### `HOPE-RUNNER-035`: launch JSON truncated by Node child-process buffer
+
+- Error card: `HOPE-RUNNER-035`
+- Problem symptom: fresh targeted A stopped at `launch_failed_not_run`; the
+  case launch and StopOnly artifacts were `{}`, while the same release shell
+  command run directly returned valid AppDefault/CDP JSON for the current exe.
+- Wrong fix path: rerun the same gate, treat it as a WebView2/CDP failure,
+  weaken launch evidence, or continue to B/C/D with an empty launch artifact.
+- Root cause: the targeted/full16 orchestration path used Node `spawnSync`
+  without an explicit `maxBuffer`, so a large sanitized launcher JSON could be
+  truncated before parsing and collapse into `{}`. In the sandboxed Codex
+  process, the same path can also fail with `spawnSync powershell.exe EPERM`
+  unless the gate is rerun with controlled escalation.
+- Correct fix path: keep launch evidence required, increase the child-process
+  buffer for release-shell and runner subprocesses, and preserve process
+  status/error fields when JSON parsing fails or when the child process emits no
+  stdout. If the recorded process error is sandbox `EPERM`, rerun the same
+  orchestrator under controlled escalation instead of changing the gate.
+- Required evidence: direct same-argument release shell pass, StopOnly clean,
+  orchestrator rerun with non-empty launch/StopOnly JSON, and unchanged hard
+  checks for `cdp_ready`, target URL, proxy clearing, no fallback, and non-empty
+  rows.
+- Prevention rule: an empty launch artifact is not a content failure and is not
+  allowed to advance gates; the evidence producer must carry enough buffered
+  output or fail with explicit process status.
+- Current validation status: active; targeted/full16 temporary orchestrators and
+  the formal403 runner now set an explicit child-process `maxBuffer`. Fresh
+  targeted and full16 reruns are required before closing.
+- Related files / artifact types: `target/qa-targeted-fresh-*` orchestrator,
+  `target/qa-full16-fresh-*` orchestrator,
+  `tests/qa/desktop-formal403-runner.mjs`, release launch JSON, StopOnly JSON.
+- Remaining risk: low after fresh targeted proves non-empty launch/StopOnly
+  artifacts; keep watching formal403 because it emits the largest evidence set.
+
+### `HOPE-BIND-036`: A-ruin decision pressure prose required as row text
+
+- Error card: `HOPE-BIND-036`
+- Problem symptom: fresh full16 case `expand_scene_different_duration_same_text_same`
+  produced real non-empty rows for the A ruin source under the national-war
+  scene, but `missing_source_facts` still blocked because a narrative sentence
+  about ruin pressure, front-line standoff, and judging the next move was
+  treated as text that rows must reproduce.
+- Wrong fix path: copy the whole narrative sentence into `visual_description`,
+  count `prompt_text` as source coverage, remove `missing_source_facts`, or
+  accept `rows_match=true` while the validator remains blocked.
+- Root cause: the StoryFactFrame equivalence layer covered A-ruin pressure and
+  agency-loss beats, but not the decision-pressure beat where visible row atoms
+  should prove the same fact through protagonist, enemy, ruin/duel space,
+  approach pressure, and a visible brace/look/decision response.
+- Correct fix path: add a source-profile equivalence rule for A-ruin decision
+  pressure, require visible row atoms, and add a Rust regression proving the
+  full prose sentence is not required verbatim.
+- Required evidence: Rust regression
+  `binding_gate_maps_a_ruin_decision_pressure_narrative_to_visible_atoms`,
+  fresh full16 case rerun with `validator_gate_passed=true`, non-empty UI and
+  response rows, visible scene/duration evidence, prompt boundary pass, and
+  StopOnly clean.
+- Prevention rule: narrative beats about motive, pressure, decision, agency, or
+  resolution must be mapped by source-profile equivalence; rows prove visible
+  atoms, not prose sentences or prompt-only fields.
+- Current validation status: active; runtime and contract boundary updated,
+  cargo/rebuild/AppDefault/targeted/full16 rerun are still required.
+- Related files / artifact types: `app/src/runtime.rs`,
+  `docs/hope-story-fact-frame-storyboard-binding-contract.md`,
+  full16 runner JSON, StoryFactFrame binding evidence.
+- Remaining risk: medium until the latest release exe reaches fresh full16
+  16/16 without new StoryFactFrame narrative-beat misses.
+
+### `HOPE-PROV-037`: prompt-like expand output fell to local candidate
+
+- Error card: `HOPE-PROV-037`
+- Problem symptom: fresh full16 case `rewrite_scene_same_duration_same_text_same`
+  passed CDP, rows, prompt boundary, and provider HTTP 200, but failed
+  `live_fallback_detected` because the pre-rewrite expand step emitted
+  `text_model_live_expand_fallback` after a prompt/storyboard-like provider
+  response failed story-body validation.
+- Wrong fix path: treat `rows_match=true` as sufficient, hide the warning,
+  switch models on validator failure, or allow a deterministic local candidate
+  to count as live provider success.
+- Root cause: `repair_live_expanded_script_text` returned `None` before
+  source-bound canonical repair whenever live text looked like prompt or
+  storyboard packaging, so the caller fell back to local candidate text.
+- Correct fix path: keep validator failure distinct from provider failover;
+  discard prompt-like provider text only into source-bound narrative repair with
+  `_repaired` evidence and `fallback_used=false`, `local_candidate=false`,
+  `no_live_fallback=true`. If no source-bound repair exists, block.
+- Required evidence: Rust regression
+  `live_expand_repair_converts_prompt_like_output_without_local_fallback`,
+  fresh targeted pass, fresh full16 rerun with no `text_model_live_expand_fallback`
+  signal, provider attempted model evidence, and StopOnly clean.
+- Prevention rule: prompt-like live output is not accepted as story body and is
+  not local fallback. It may only become a sanitized source-bound narrative
+  repair; model failover is still restricted to provider availability failures.
+- Current validation status: active; runtime and provider contract updated,
+  cargo/rebuild/AppDefault/targeted/full16 rerun are required before closure.
+- Related files / artifact types: `app/src/runtime.rs`,
+  `docs/hope-provider-failover-contract.md`, full16 runner JSON,
+  provider/fallback evidence.
+- Remaining risk: medium until full16 reaches 16/16 with no local fallback
+  signals on expand or storyboard stages.

@@ -23,6 +23,9 @@ continuation:
 - `docs/desktop-qa-preflight-ownership-contract.md`
 - `docs/desktop-gate-evidence-ladder-contract.md`
 - `docs/hope-story-fact-frame-storyboard-binding-contract.md`
+- `docs/hope-field-aware-story-contract.md`
+- `docs/hope-provider-failover-contract.md`
+- `docs/hope-qa-evidence-freshness-contract.md`
 
 ## Repo-Local Launcher
 
@@ -557,7 +560,30 @@ Current scope:
 - scene types: 21
 - fixed matrix: 3 texts x 21 scenes x 6 durations = 378 cases
 - long text matrix: 1 docx long text x 21 scenes = 21 cases
-- total: 403 cases
+- entry baseline guard: 4 cases from `tests/qa/desktop-four-groups.json`
+- total: 403 cases (`378 + 21 + 4`)
+
+The four entry baseline cases are formal 403 entry guards, not a substitute for
+the fixed or long-text matrix: `A_hot_blood_battle`,
+`A_chinese_war_formation`, `B_hot_blood_battle`, and `B_slg_sandbox_view`.
+They must be rerun fresh with the same release WebView2/CDP shell lifecycle,
+provider hard gate, prompt boundary, StoryFactFrame, KB rule-pack evidence, and
+StopOnly cleanup required for every other formal 403 case.
+
+The executable KB/golden boundary manifest is:
+
+```text
+tests/qa/desktop-403-kb-golden-mapping.json
+```
+
+Formal 403 evidence must prove `kb_rule_pack_ids` and `kb_snapshot_hash` from
+the live trace. Golden/reference samples may be used only as sanitized
+structure oracles: scene taxonomy, craft tags, director rule tags, camera or
+motion anchors, negative drift tags, compact sample summaries, expected prompt
+oracle, and expected row oracle. Raw `sample_text`, raw `smoke_extracts`, raw
+KB rows, sample names, sample props, sample places, sample worldview,
+`source_register`, and overlay JSON must not enter `prompt_text`, logs, chat, or
+QA artifacts.
 
 Long-text sample path on the original machine:
 
@@ -672,3 +698,157 @@ Every QA or environment thread that can touch Tauri build paths must also
 follow `docs/desktop-qa-preflight-ownership-contract.md`, including preflight
 and postflight `app/Cargo.toml` diff recording and tracked-file ownership
 reporting.
+
+## Launcher Proxy Isolation Addendum
+
+The `AppDefault + LaunchDiagnosticOnly` shell gate remains unchanged. The
+2026-05-07 WebView2 popup recurrence only adds an environment-isolation rule to
+the repo-local launcher; it does not replace the existing `HOPE-SHELL-004`
+playbook.
+
+For every release shell / WebView2 / CDP startup, the launcher must clear proxy
+environment before starting `hope-app.exe`, regardless of whether `-NoProxy` is
+passed:
+
+```text
+HTTP_PROXY
+HTTPS_PROXY
+ALL_PROXY
+NO_PROXY
+http_proxy
+https_proxy
+all_proxy
+no_proxy
+```
+
+`-NoProxy` remains QA/provider semantics and evidence only. It must not be the
+only trigger for WebView2 environment isolation.
+
+Before any release shell launch, the launcher must also prove that WebView2
+process command-line inspection is available. If
+`webview2_process_query_capability.query_ok=false` or access is denied, stop
+before starting `hope-app.exe`; otherwise the lifecycle cannot prove stale
+WebView2 popup / crash cleanup.
+
+Shell and UI-driven artifacts must record these non-secret fields:
+
+```text
+launcher_process_env_proxy_present_before
+webview2_launch_env_proxy_cleared
+app_process_env_proxy_present
+no_proxy_loopback_only
+webview2_process_query_capability.query_ok
+webview2_process_query_capability.hope_process_count
+webview2_process_query_capability.non_hope_process_count
+webview2_process_query_capability.non_hope_webview_exe_names
+```
+
+The artifacts must not include raw proxy values, raw env files, API keys,
+tokens, or secrets.
+
+`StopOnly` cleanup scope is Hope-owned WebView2 only: command lines naming
+`hope-app.exe` or the `hope-webview2-cdp` temp profile. System WebView2
+processes owned by Windows surfaces such as `SearchHost.exe` or `Widgets.exe`
+must be reported separately as non-Hope context and must not be killed or
+counted as Hope release-shell residue.
+
+The shell gate still forbids `--noerrdialogs`, `--disable-breakpad`, and
+`--disable-crash-reporter`; popup suppression cannot be used as a pass. A
+`StopOnly` clean artifact is required cleanup evidence, but it is not a shell
+pass without a paired `AppDefault + LaunchDiagnosticOnly` launch artifact.
+
+If `0x80000003` or `HRESULT(0x8000FFFF)` appears, stop targeted, `full16`,
+`403-case`, provider, runner, and package work immediately and route the issue
+back to shell/CDP blocker handling.
+
+2026-05-07 validation evidence for the addendum:
+
+```text
+AppDefault LaunchDiagnosticOnly ok=true
+cdp_ready=true
+target_url=http://tauri.localhost/#/workbench
+webview2_popup_suppression_detected=false
+webview2_app_popup_suppression_arg_present=false
+webview2_launch_env_proxy_cleared=true
+app_process_env_proxy_present=false
+StopOnly clean
+```
+
+## Scene Rewrite Narrative Contract Addendum
+
+The executable rewrite contract is
+`docs/hope-scene-type-rewrite-contract.md`.
+
+All `扩写故事` and `改写剧本` UI-driven gates must prove this shared pipeline:
+
+```text
+current accepted story fact source
++ target scene_type
++ target duration
++ KB scene rule pack
+= narrative story body
+```
+
+The main visible story text must be narrative prose. It must not be action
+choreography, scene blocking notes, storyboard breakdown, strategy explanation,
+duration-plan explanation, KB trace, prompt text, `source_register`, overlay
+JSON, raw KB rows, raw sample text, or internal validator output.
+
+The duration check applies to every product target duration, not only 15/30/60
+probes. The current fixed duration set is `5`, `10`, `15`, `30`, `45`, and `60`
+seconds, but any current or future positive fixed duration must map into the
+same narrative-capacity rule before generation. A gate must fail if only
+`duration_seconds` changes while the visible story prose keeps the same
+capacity.
+
+KB must be visible through better structure, not through explanatory prose.
+`扩写故事` and `改写剧本` must use KB writing/director/golden structure rules to
+shape situation setup, conflict progression, emotional turn, and closing beat.
+The user-visible story body must not say "根据 KB", "知识库规则", or expose raw
+KB/sample/source-register/overlay data.
+
+Targeted cases may use `热血战斗 -> 场域追逐` and other strong-difference scene
+switches, but implementation and certification must not special-case those
+paths. Fresh full16 and formal403 inherit the same `story_body_gate`,
+scene/duration binding evidence, KB leakage guard, and visual-description gate.
+Desktop release UI review is mandatory: backend/runtime pass alone is
+insufficient. The visible main editor text, confirmation dialog body, task
+candidate text, generated storyboard rows, and expanded/edit dialogs must all
+show the same scene/duration/KB narrative binding.
+
+## 2026-05-08 Field-Aware Story / Failover / Freshness Addendum
+
+The executable boundary for the current scene-body gate is now split into three
+companion contracts:
+
+```text
+docs/hope-field-aware-story-contract.md
+docs/hope-provider-failover-contract.md
+docs/hope-qa-evidence-freshness-contract.md
+```
+
+Release QA must inherit all three before targeted, `full16`, or `formal403`
+can resume.
+
+Required inherited checks:
+
+- `NarrativeStoryBody` is the first visible story block in the main editor and
+  confirmation first screen.
+- `FieldAwareEntityResolver` semantics are enforced so situation/title words
+  such as `危局` do not become `person` facts.
+- All 21 scene types resolve through one `SceneProfile` shape, not hot-path
+  special cases.
+- `target_duration` changes narrative capacity, not only stored seconds.
+- KB oracle evidence is positive and structural while raw KB/sample/source
+  content remains absent.
+- Provider model failover is limited to quota, unavailable model, or
+  entitlement/permission HTTP 403 and cannot hide validator, grounding, row,
+  prompt, KB, visual, or CDP failures.
+- Artifacts record workspace, branch, `HEAD`, origin head, dirty patch hash,
+  release exe hash, runtime/runner/certifier/matrix/KB mapping hashes, gate
+  level, case ID, parent summary hash, and timestamps.
+- Any runtime, UI, runner, certifier, matrix, or KB mapping change makes older
+  release exe and older gate evidence `stale` / `reference-only`.
+
+This addendum does not authorize running targeted, `full16`, `formal403`,
+packaging, commit, or push work.

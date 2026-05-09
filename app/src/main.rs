@@ -224,6 +224,14 @@ fn configure_qa_webview2_from_args(args: &[String]) {
             .map(|value| sanitize_diagnostic_value(&value))
             .unwrap_or_else(|| "<unset>".to_string())
     ));
+    append_shell_diagnostic(&format!(
+        "app_process_env_proxy_present={}",
+        app_process_env_proxy_present()
+    ));
+    append_shell_diagnostic(&format!(
+        "app_process_no_proxy_loopback_only={}",
+        app_process_no_proxy_loopback_only()
+    ));
 }
 
 fn apply_qa_env_file(path: &str) {
@@ -277,6 +285,36 @@ fn set_process_env_var(key: &str, value: &str) {
     unsafe {
         std::env::set_var(key, value);
     }
+}
+
+fn app_process_env_proxy_present() -> bool {
+    [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ]
+        .iter()
+        .any(|key| std::env::var(key).is_ok_and(|value| !value.trim().is_empty()))
+}
+
+fn app_process_no_proxy_loopback_only() -> bool {
+    let entries = ["NO_PROXY", "no_proxy"]
+        .iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(|entry| entry.trim().to_ascii_lowercase())
+                .filter(|entry| !entry.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    entries.iter().all(|entry| {
+        matches!(entry.as_str(), "localhost" | "127.0.0.1" | "::1")
+    })
 }
 
 fn print_contract_smoke() {

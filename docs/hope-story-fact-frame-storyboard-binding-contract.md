@@ -10,6 +10,11 @@ Stop storyboard drift by binding every generated row to the current user input, 
 
 This contract is a product/runtime/QA contract. It is not only a prompt instruction.
 
+This contract inherits `docs/hope-scene-type-rewrite-contract.md`. StoryFactFrame
+must bind to the confirmed narrative story body and stable atomic facts, not to
+old scene style, old duration strategy, storyboard text, prompt text, or QA
+trace.
+
 ## Ownership
 
 - Initiator: frontend UI starts a current-case run when the user inputs text, chooses scene type and duration, and confirms the rewrite.
@@ -22,6 +27,15 @@ This contract is a product/runtime/QA contract. It is not only a prompt instruct
 ## StoryFactFrame
 
 StoryFactFrame is created before or at accepted rewrite confirmation.
+
+For rewrite, the source side of StoryFactFrame is the current accepted story
+fact source after stable-fact extraction. The selected `scene_type` and duration
+are control inputs, not facts. They may shape expression and capacity, but they
+must not rewrite the fact boundary.
+Duration binding applies to every product target duration. Current fixed values
+and future positive fixed values must normalize into capacity bands; a changed
+duration must change narrative capacity and downstream storyboard timing, not
+only the stored `duration_seconds` field.
 
 Minimum MVP fields:
 
@@ -120,6 +134,70 @@ Every generate_storyboard response exposes binding evidence:
 
 This evidence must be sanitized. It must not include secret, raw env, raw prompt body, raw KB rows, source register, or overlay JSON.
 
+## Narrative Beat Binding Boundary
+
+`StoryFactFrame.must_keep_facts` must separate three classes before validation:
+
+- atomic source facts: explicit people, roles, places, objects explicitly in the
+  source, visible actions, conflict pressure, and event order.
+- narrative beats: complete-story prose about motive, pressure, emotion,
+  relation change, decision, agency, or resolution.
+- field noise: title words, situation words, action fragments, support notes,
+  prompt packaging, trace labels, and UI evidence strings.
+
+Storyboard rows must prove atomic source facts directly in row fields. Narrative
+beats must never be required as verbatim row text. They must be mapped through a
+source-profile equivalence rule into visible row atoms.
+
+Required equivalence rule shape:
+
+```text
+source_profile
+narrative_beat_kind
+required_visible_row_atoms
+forbidden_shortcut_fields
+regression_test_name
+error_ledger_card
+```
+
+Examples of required visible row atoms:
+
+- A ruin / duel pressure: protagonist, enemy, ruin or duel space, approach or
+  compressed distance, and a visible hold/brace action.
+- A ruin / decision pressure: protagonist, enemy, ruin or duel space, approach
+  or pressure, plus a visible decision/response atom such as bracing, looking
+  toward the enemy, or holding the duel distance. Do not require the full prose
+  sentence about "judging the next move" to appear in rows.
+- B alley pursuit pressure: Lin Feng, Su Yao, A Qing, pursuer, alley mouth, and
+  approach pressure.
+
+Forbidden shortcuts:
+
+- Do not copy the entire `NarrativeStoryBody` sentence into a storyboard row to
+  satisfy `missing_source_facts`.
+- Do not count `prompt_text`, support notes, trace, source register, overlay
+  JSON, hidden backend-only fields, or QA diagnostic text as story-fact coverage.
+- Do not resolve repeated `missing_source_facts` by adding a global loose word
+  allowlist.
+- Do not remove or downgrade `missing_source_facts`, visible row scene/duration,
+  prompt boundary, KB leakage, or pseudo-success gates to make a case pass.
+
+When a fresh gate exposes a new narrative-beat binding miss:
+
+1. Classify it as atomic source fact, narrative beat, or field noise.
+2. If it is a narrative beat, add or update a source-profile equivalence rule.
+3. Add the smallest Rust regression proving the beat maps to required visible
+   row atoms and does not use prompt-only coverage.
+4. Add or update runner/certifier assertion only if the evidence path is the
+   real gap.
+5. Add or update an error-ledger card with phenomenon, root cause, wrong path,
+   correct fix, evidence, and remaining risk.
+6. Rebuild release and rerun targeted before rerunning `full16`.
+
+This boundary exists to prevent recurring local fixes where each fresh full16
+case discovers the same narrative-body sentence problem under a different
+source profile.
+
 ## UI Contract
 
 The rewrite confirmation editor should become a fact-locking point.
@@ -163,3 +241,31 @@ Each case records source_profile, scene_type, duration, accepted_text_hash, dura
 - Do not use fallback rows as qwen live pass.
 - Do not enter 403-case before binding and cross drift gates.
 - Do not package before 403-case or an explicitly accepted degraded gate.
+
+## 2026-05-08 Field-Aware Binding Addendum
+
+This contract inherits:
+
+```text
+docs/hope-field-aware-story-contract.md
+docs/hope-provider-failover-contract.md
+docs/hope-qa-evidence-freshness-contract.md
+```
+
+`StoryFactFrame` must bind to `AcceptedNarrativeFrame` and the confirmed
+`NarrativeStoryBody`, not to `SupportNotes`, storyboard rows, `prompt_text`, or
+old scene/duration expression.
+
+Before storyboard generation, `StoryboardInputFrame` must prove:
+
+- current accepted body hash
+- current scene type and profile ID
+- current duration capacity profile
+- KB rule-pack IDs and snapshot hash
+- positive KB structural evidence
+- negative raw-leakage evidence
+- field-aware entity classification for `person`, title fields,
+  `visual_description`, `character_action`, and `prompt_text`
+
+Storyboard rows cannot flow backward into the story body. `prompt_text` remains
+packaging and lineage evidence, not a source of person or story facts.

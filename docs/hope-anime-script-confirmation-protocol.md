@@ -50,6 +50,27 @@ The confirmation text box is the user-visible checkpoint for accepted narrative
 and performance anchors. It is not a database editor and not a raw prompt
 debugging surface.
 
+## Scene Rewrite Narrative Contract
+
+The scene rewrite boundary is defined in
+`docs/hope-scene-type-rewrite-contract.md`.
+
+The confirmation editor must show the narrative story body first. The editable
+main body must not contain action choreography, storyboard fields, prompt text,
+KB trace, hashes, `source_register`, overlay JSON, duration-plan explanation, or
+scene-strategy explanation.
+
+`扩写故事` confirms a narrative body expanded from seed source facts plus the
+current scene type, target duration, and KB/golden structure oracle.
+
+`改写剧本` confirms a narrative body rewritten from the current accepted story
+fact source plus the new scene type, new target duration, and KB/golden
+structure oracle.
+
+Old scene expression and old duration strategy are not accepted facts. They must
+not pollute the next rewrite after the user changes scene type or target
+duration.
+
 ## Confirmation Text Contract
 
 The confirmation text may contain plain script prose plus short, human-readable
@@ -182,6 +203,12 @@ StoryFactFrame.
 ## Duration And Rhythm Rules
 
 The selected target duration is part of the accepted binding. Duration planning
+applies to every product target duration, not only the current common probes.
+Current fixed values (`5`, `10`, `15`, `30`, `45`, `60`) and future positive
+fixed values must be normalized into narrative-capacity bands before story text
+is accepted. The confirmation body must not simply print the duration or expose
+a duration-plan explanation; it must show different prose capacity, obstacle
+count, reaction beats, and closure shape.
 may use rhythm anchors such as hook, information peak, action beat, reaction
 beat, or suspense landing, but these anchors must remain tied to accepted facts.
 
@@ -346,3 +373,29 @@ confirmation:
 - Hope outputs production handoff material for AI image, AI video, and human
   editing workflows without directly generating images or videos.
 - cross-drift smoke becomes a required pre-403 acceptance gate.
+
+## 2026-05-08 Narrative-First Confirmation Addendum
+
+This protocol now inherits:
+
+```text
+docs/hope-field-aware-story-contract.md
+docs/hope-provider-failover-contract.md
+docs/hope-qa-evidence-freshness-contract.md
+```
+
+The confirmation editor is narrative-first:
+
+- first screen: confirmed `NarrativeStoryBody`
+- later or folded support: people, scene, pacing, KB summary, and boundary
+  notes
+- never first screen: trace, KB explanation, prompt text, storyboard breakdown,
+  validator text, hashes, or raw evidence
+
+The confirmation action freezes `AcceptedNarrativeFrame`. Scene or duration
+switches after confirmation must rebuild a new `SceneRewritePlan` from current
+accepted facts, current scene profile, current duration capacity profile, and
+KB oracle. Old scene expression and old duration strategy are not durable facts.
+
+`prompt_text` remains downstream packaging and may not rewrite the confirmed
+body or become a person/source-fact surface.

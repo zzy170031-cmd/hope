@@ -160,3 +160,45 @@ source、runtime、shell、validator、build provenance 任一相关变化后，
 
 如果当前证据只够支撑较低层，就必须停在较低层。
 <small>If current evidence supports only a lower layer, the report must stop at that lower layer.</small>
+
+## 9. 2026-05-08 Evidence Freshness Addendum
+<small>9. 2026-05-08 evidence freshness addendum</small>
+
+Targeted, `full16`, and `formal403` evidence must inherit:
+<small>Targeted, `full16`, and `formal403` evidence must inherit:</small>
+
+```text
+docs/hope-field-aware-story-contract.md
+docs/hope-provider-failover-contract.md
+docs/hope-qa-evidence-freshness-contract.md
+```
+
+Every artifact must record:
+<small>Every artifact must record:</small>
+
+- `workspace`
+- `branch`
+- `HEAD`
+- `origin_HEAD`
+- `dirty_patch_hash`
+- `release_exe_sha256`
+- `runtime_rs_sha256`
+- `runner_sha256`
+- `certifier_sha256`
+- `matrix_sha256`
+- `kb_mapping_sha256`
+- `gate_level`
+- `case_id`
+- `parent_gate_summary_hash`
+- `started_at`
+- `completed_at`
+
+If runtime, UI, runner, certifier, matrix, KB mapping, or release build
+provenance changes, older evidence automatically becomes `stale` /
+`reference-only`.
+<small>If runtime, UI, runner, certifier, matrix, KB mapping, or release build provenance changes, older evidence automatically becomes `stale` / `reference-only`.</small>
+
+Before any business gate, the source integrity preflight must prove `runtime.rs`
+is UTF-8 readable and the sentinels `热血战斗`, `场域追逐`, `危局`, `林峰`, and
+`苏瑶` are intact.
+<small>Before any business gate, the source integrity preflight must prove `runtime.rs` is UTF-8 readable and the sentinels `热血战斗`, `场域追逐`, `危局`, `林峰`, and `苏瑶` are intact.</small>

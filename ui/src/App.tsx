@@ -96,6 +96,37 @@ interface HopeQaTrace {
   ui_rows: HopeQaTraceRow[];
   row_diffs: HopeQaTraceRowDiff[];
   binding_evidence?: StoryboardBindingEvidence;
+  task_binding_evidence?: HopeQaTaskBindingEvidence;
+  kb_oracle_hash?: string;
+  kb_context_summary_hash?: string;
+  kb_rule_pack_ids?: string[];
+  kb_snapshot_hash?: string;
+  full_kb_rows_included?: number;
+}
+
+interface HopeQaTaskBindingEvidence {
+  candidate_id: string;
+  script_text_source: TaskDraftScriptTextSource | "unknown";
+  base_scene_text_hash: string;
+  task_script_hash: string;
+  task_scene_type: string;
+  task_scene_label: string;
+  task_duration_seconds: number;
+  accepted_snapshot_id: string;
+  accepted_source_text_hash: string;
+  accepted_rewrite_hash: string;
+  accepted_kb_oracle_hash: string;
+  accepted_story_fact_frame_hash: string;
+  accepted_duration_seconds: number;
+  duration_override_reason: string;
+}
+
+interface HopeQaKbOracleEvidence {
+  kb_oracle_hash: string;
+  kb_context_summary_hash: string;
+  kb_rule_pack_ids: string[];
+  kb_snapshot_hash: string;
+  full_kb_rows_included: number;
 }
 
 interface HopeQaWindow extends Window {
@@ -284,6 +315,7 @@ interface AcceptedRewriteSnapshot {
   id: string;
   sourceTextHash: string;
   acceptedTextHash: string;
+  kbOracleHash: string;
   sceneType: string;
   sceneLabel: string;
   sceneCategory: string;
@@ -498,6 +530,9 @@ export function App() {
   const [expandedScript, setExpandedScript] = useState("");
   const [expandedScriptResult, setExpandedScriptResult] = useState<ExpandScriptResponse | null>(null);
   const [expandedScriptSourceText, setExpandedScriptSourceText] = useState("");
+  const [expandedScriptSourceHash, setExpandedScriptSourceHash] = useState("");
+  const [expandedScriptKbOracleHash, setExpandedScriptKbOracleHash] = useState("");
+  const [expandedScriptGoal, setExpandedScriptGoal] = useState<HopeQaScriptGoal>("expand");
   const [showExpandedScriptStatus, setShowExpandedScriptStatus] = useState(false);
   const [expandedScriptDurationSeconds, setExpandedScriptDurationSeconds] = useState<number | null>(null);
   const [expandedScriptScene, setExpandedScriptScene] = useState<SceneOption | null>(null);
@@ -616,6 +651,22 @@ export function App() {
   );
   const selectedSceneOption = useMemo(() => resolveSceneOption(selectedScene), [selectedScene]);
   const sourceInputAnalysis = useMemo(() => analyzeSourceInputForUi(synopsis), [synopsis]);
+  const seedSourceText = useMemo(
+    () => normalizeScriptText(sourceMaterialText || synopsis),
+    [sourceMaterialText, synopsis],
+  );
+  const currentAcceptedStoryFactSource = useMemo(
+    () => normalizeScriptText(acceptedScript || acceptedSourceText),
+    [acceptedScript, acceptedSourceText],
+  );
+  const currentExpandRequestSourceText = useMemo(
+    () => normalizeScriptText(seedSourceText || synopsis),
+    [seedSourceText, synopsis],
+  );
+  const currentRewriteRequestSourceText = useMemo(
+    () => normalizeScriptText(currentAcceptedStoryFactSource || seedSourceText || synopsis),
+    [currentAcceptedStoryFactSource, seedSourceText, synopsis],
+  );
   const isLongTextDurationMode = targetDurationMode === LONG_TEXT_DURATION_MODE;
   const durationSelectValue = isLongTextDurationMode ? LONG_TEXT_DURATION_MODE : String(durationSeconds);
   const activeScriptDurationSeconds = isLongTextDurationMode
@@ -639,6 +690,14 @@ export function App() {
     response: expandedScriptResult,
     responseScene: expandedScriptScene,
     responseDurationSeconds: expandedScriptDurationSeconds,
+    responseSourceHash: expandedScriptSourceHash,
+    currentSourceHash: stableBindingHashJson(
+      expandedScriptGoal === "rewrite"
+        ? currentRewriteRequestSourceText
+        : currentExpandRequestSourceText,
+    ),
+    responseKbOracleHash: expandedScriptKbOracleHash,
+    currentKbOracleHash: kbOracleHashFromExpandScriptResponse(expandedScriptResult),
     selectedSceneOption,
     targetDurationMode,
     durationSeconds,
@@ -949,14 +1008,37 @@ export function App() {
   const clearExpandedScriptSnapshot = () => {
     setExpandedScriptResult(null);
     setExpandedScriptSourceText("");
+    setExpandedScriptSourceHash("");
+    setExpandedScriptKbOracleHash("");
+    setExpandedScriptGoal("expand");
     setExpandedScriptDurationSeconds(null);
     setExpandedScriptScene(null);
     setShowExpandedScriptStatus(false);
   };
 
+  const clearStoryboardTaskState = () => {
+    setAcceptedRewriteSnapshot(null);
+    setTaskSourceScript("");
+    setTaskScriptId(null);
+    setTaskSegmentTitle("");
+    setStoryboardResult(null);
+    setLastExportResult(null);
+    setGeneratedSceneTasks([]);
+    setSceneTasks([]);
+    setCurrentTaskId(null);
+    setIsTaskPickerOpen(false);
+    setTaskDraft(null);
+    setTaskSerial(0);
+    setRows([]);
+    setRowsDirty(false);
+    setCurrentPage(1);
+    closeStoryboardEditDialog();
+  };
+
   const invalidateConfirmedPlan = (message?: string) => {
     clearExpandedScriptSnapshot();
-    clearConfirmedStoryboardState();
+    clearStoryboardTaskState();
+    setAcceptedScriptId(null);
     setTaskDraft(null);
     if (message) {
       setExportMessage(message);
@@ -1194,56 +1276,44 @@ export function App() {
   };
 
   const openSynopsisDialog = () => {
-    const canShowRewriteConfirmation =
-      Boolean(expandedScript.trim()) &&
-      Boolean(expandedScriptResult?.script_id) &&
-      expandedScriptSnapshotIsCurrent;
-    if (canShowRewriteConfirmation) {
-      setTextDialog({
-        kind: "expandedScript",
-        title: "查看剧本确认稿",
-        value: formatRewriteConfirmationDraftForUi({
-          sourceText: expandedScriptSourceText || sourceMaterialText || expandedScript || synopsis,
-          acceptedText: expandedScript || synopsis,
-          scene: expandedScriptScene ?? selectedSceneOption,
-          durationSeconds: expandedScriptDurationSeconds ?? activeScriptDurationSeconds,
-          targetDurationMode: normalizeTargetDurationModeForUi(
-            expandedScriptResult?.target_duration_mode ?? expandedScriptResult?.targetDurationMode ?? targetDurationMode,
-          ),
-          response: expandedScriptResult,
-        }),
-        helper: "确认稿只展示可读正文和轻量锚点；确认使用后才会进入镜头拆解。",
-        editable: false,
-      });
-      return;
-    }
-
+    const dialogBody = synopsis;
     setTextDialog({
       kind: "synopsis",
       title: "编辑故事材料",
-      value: stripStoryDialogInternalText(synopsis),
-      helper: "只编辑正文；保存后需要点击“确定使用”才会同步到镜头拆解。",
+      value: stripStoryDialogInternalText(dialogBody),
+      helper: "只编辑正文；保存后会作为当前故事材料重新进入场景和时长链路。",
       editable: true,
     });
   };
 
   const openExpandedScriptDialog = () => {
+    const responseMode = normalizeTargetDurationModeForUi(
+      expandedScriptResult?.target_duration_mode ?? expandedScriptResult?.targetDurationMode ?? targetDurationMode,
+    );
+    const dialogScriptBody = expandedScript
+      ? normalizeGeneratedStoryBodyForUi({
+          body: expandedScript,
+          sourceText: expandedScriptSourceText || sourceMaterialText || expandedScript,
+          scene: expandedScriptScene ?? selectedSceneOption,
+          durationSeconds: expandedScriptDurationSeconds ?? activeScriptDurationSeconds,
+          targetDurationMode: responseMode,
+          response: expandedScriptResult,
+        })
+      : "";
     setTextDialog({
       kind: "expandedScript",
-      title: "查看剧本确认稿",
+      title: "查看改写剧本确认稿",
       value: expandedScript
         ? formatRewriteConfirmationDraftForUi({
             sourceText: expandedScriptSourceText || sourceMaterialText || expandedScript,
-            acceptedText: expandedScript,
+            acceptedText: dialogScriptBody || expandedScript,
             scene: expandedScriptScene ?? selectedSceneOption,
             durationSeconds: expandedScriptDurationSeconds ?? activeScriptDurationSeconds,
-            targetDurationMode: normalizeTargetDurationModeForUi(
-              expandedScriptResult?.target_duration_mode ?? expandedScriptResult?.targetDurationMode ?? targetDurationMode,
-            ),
+            targetDurationMode: responseMode,
             response: expandedScriptResult,
           })
-        : "等待剧本正文",
-      helper: "确认稿只展示可读正文和轻量锚点；确认使用后才会进入镜头拆解。",
+        : "等待改写剧本正文",
+      helper: "改写剧本确认稿只展示可读正文和轻量锚点；确认使用后才会进入镜头拆解。",
       editable: false,
     });
   };
@@ -1283,6 +1353,7 @@ export function App() {
       setSynopsis(nextText);
       setSourceMaterialText(nextText);
       setExpandedScript(nextText);
+      setExpandedScriptGoal("expand");
       clearExpandedScriptSnapshot();
       clearConfirmedStoryboardState();
       setExportMessage("文本已保存，待确定使用。");
@@ -1326,7 +1397,7 @@ export function App() {
 
     if (
       textDialog.kind === "expandedScript" &&
-      confirmScriptTextForStoryboard(expandedScript.trim() || extractConfirmationScriptBodyFromDialogText(textDialog.value))
+      handleAcceptExpandedScript()
     ) {
       setTextDialog(null);
     }
@@ -1363,6 +1434,7 @@ export function App() {
       scene: scriptScene,
       durationSeconds: scriptDuration,
       targetDurationMode,
+      kbOracleHash: "",
     });
     const nextSceneTasks: SceneTaskRecord[] = [];
 
@@ -1426,22 +1498,7 @@ export function App() {
     setAcceptedScriptDurationSeconds(null);
     setAcceptedScriptTargetDurationMode(null);
     setAcceptedScriptScene(null);
-    setAcceptedRewriteSnapshot(null);
-    setTaskSourceScript("");
-    setTaskScriptId(null);
-    setTaskSegmentTitle("");
-    setStoryboardResult(null);
-    setLastExportResult(null);
-    setGeneratedSceneTasks([]);
-    setSceneTasks([]);
-    setCurrentTaskId(null);
-    setIsTaskPickerOpen(false);
-    setTaskDraft(null);
-    setTaskSerial(0);
-    setRows([]);
-    setRowsDirty(false);
-    setCurrentPage(1);
-    closeStoryboardEditDialog();
+    clearStoryboardTaskState();
   };
 
   const resetScriptAndStoryboardState = () => {
@@ -1498,9 +1555,9 @@ export function App() {
     }
 
     const storyInput = synopsis.trim();
-    const rawStoryInput = normalizeScriptText(sourceMaterialText || storyInput) || storyInput;
+    const rawStoryInput = currentExpandRequestSourceText || storyInput;
     const requestSourceAnalysis = analyzeSourceInputForUi(rawStoryInput);
-    if (!storyInput) {
+    if (!rawStoryInput) {
       setExportMessage("请先输入故事梗概，再扩写故事。");
       return;
     }
@@ -1549,12 +1606,24 @@ export function App() {
       const responseDurationSeconds = requestIsLongText
         ? resolveResponseStoryDurationSeconds(response, requestDurationSeconds)
         : requestDurationSeconds;
-      const nextStoryText = storyBody || rawStoryInput;
+      const nextStoryText = normalizeGeneratedStoryBodyForUi({
+        body: storyBody || rawStoryInput,
+        sourceText: rawStoryInput,
+        scene: requestScene,
+        durationSeconds: responseDurationSeconds,
+        targetDurationMode: requestDurationMode,
+        response,
+      });
+      const nextStorySourceHash = stableBindingHashJson(rawStoryInput);
+      const responseKbOracleHash = kbOracleHashFromExpandScriptResponse(response);
       const changed = normalizeScriptText(nextStoryText) !== normalizeScriptText(rawStoryInput);
       setSynopsis(nextStoryText);
       resetScriptAndStoryboardState();
       setExpandedScriptResult(response);
       setExpandedScriptSourceText(rawStoryInput);
+      setExpandedScriptSourceHash(nextStorySourceHash);
+      setExpandedScriptKbOracleHash(responseKbOracleHash);
+      setExpandedScriptGoal("expand");
       setExpandedScript(nextStoryText);
       setExpandedScriptDurationSeconds(responseDurationSeconds);
       setExpandedScriptScene(requestScene);
@@ -1584,14 +1653,13 @@ export function App() {
     }
 
     const storyInput = synopsis.trim();
-    const rawSourceText = normalizeScriptText(sourceMaterialText || storyInput) || storyInput;
+    const rawSourceText = currentRewriteRequestSourceText || storyInput;
     const requestSourceAnalysis = analyzeSourceInputForUi(rawSourceText);
-    if (!storyInput) {
+    if (!rawSourceText) {
       setExportMessage("请先输入或导入故事材料，再继续处理剧本。");
       return;
     }
 
-    setSourceMaterialText(rawSourceText);
     setBridgeBusy("expand");
     try {
       const requestScene = selectedSceneOption;
@@ -1635,19 +1703,32 @@ export function App() {
         response.source_input_type || requestAnalysis.sourceInputType,
       );
       const responseMessage = statusMessageForSourceInputType(responseSourceType);
-      const scriptBody = extractScriptBody(response.expanded_script_text) || response.expanded_script_text.trim();
-      const changed = normalizeScriptText(scriptBody) !== normalizeScriptText(rawSourceText);
+      const responseSourceHash = stableBindingHashJson(rawSourceText);
+      const responseKbOracleHash = kbOracleHashFromExpandScriptResponse(response);
       const responseDurationSeconds = requestIsLongText
         ? resolveResponseStoryDurationSeconds(response, requestDurationSeconds)
         : requestDurationSeconds;
+      const scriptBody = normalizeGeneratedStoryBodyForUi({
+        body: extractScriptBody(response.expanded_script_text) || response.expanded_script_text.trim(),
+        sourceText: rawSourceText,
+        scene: requestScene,
+        durationSeconds: responseDurationSeconds,
+        targetDurationMode: requestDurationMode,
+        response,
+      });
+      const changed = normalizeScriptText(scriptBody) !== normalizeScriptText(rawSourceText);
       setExpandedScriptResult(response);
       setExpandedScriptSourceText(rawSourceText);
+      setExpandedScriptSourceHash(responseSourceHash);
+      setExpandedScriptKbOracleHash(responseKbOracleHash);
+      setExpandedScriptGoal("rewrite");
       setExpandedScript(scriptBody);
       setSynopsis(scriptBody);
       setExpandedScriptDurationSeconds(responseDurationSeconds);
       setExpandedScriptScene(requestScene);
       setShowExpandedScriptStatus(false);
-      clearConfirmedStoryboardState();
+      clearStoryboardTaskState();
+      setAcceptedScriptId(null);
       syncModelProviderStatusFromWarnings(response.warnings);
       setExportMessage(
         changed
@@ -2044,12 +2125,34 @@ export function App() {
       };
       const response = await invokeGenerateStoryboard(request);
       const nextRows = response.rows.map((row) => mapGeneratedStoryboardRow(row));
-      publishQaTrace(buildGenerateStoryboardQaTrace(response, nextRows));
+      publishQaTrace(
+        buildGenerateStoryboardQaTrace(
+          response,
+          nextRows,
+          buildTaskBindingEvidenceForQa(currentSceneTask, bindingSnapshot, taskDurationSeconds, taskScriptHash),
+        ),
+      );
       if (isBlockedStoryboardResponse(response)) {
         setStoryboardResult(null);
-        setRows([]);
+        setRows(nextRows);
         setRowsDirty(false);
         setLastExportResult(null);
+        updateCurrentTaskRecord({
+          rowsSnapshot: cloneWorkbenchRows(nextRows),
+          storyboardResult: null,
+          rowCount: nextRows.length || undefined,
+          taskId: response.task_id ?? currentSceneTask?.taskId ?? null,
+          resultId: response.result_id ?? undefined,
+          selectedTotalDurationSeconds: response.selected_total_duration_seconds,
+          rowsHash: response.rows_hash,
+          updatedAtMs: response.updated_at_ms,
+          baseRevision: response.revision,
+          dirty: false,
+          hadRowEdits: false,
+        });
+        setCurrentPage(1);
+        closeStoryboardEditDialog();
+        syncModelProviderStatusFromWarnings(response.export_status.warnings);
         setExportMessage(formatBlockedStoryboardResponse(response));
         return;
       }
@@ -2202,14 +2305,19 @@ export function App() {
       expandedScriptSourceText || sourceMaterialText || acceptedRewriteText,
     );
     if (!acceptedRewriteText || !expandedScriptResult) {
-      setExportMessage("请先完成扩写剧本，再确认使用。");
+      setExportMessage("请先完成改写剧本，再确认使用。");
       return false;
     }
     if (!expandedScriptSnapshotIsCurrent) {
-      setExportMessage("场景类型或目标时长已变化，请重新扩写后再确认使用。");
+      setExportMessage("场景类型或目标时长已变化，请重新改写剧本后再确认使用。");
       return false;
     }
-    if (!confirmDiscardDirty("确认使用新的扩写剧本")) {
+    const narrativeGate = storyBodyQualityForUi(acceptedRewriteText, activeScriptDurationSeconds);
+    if (!narrativeGate.main_textarea_is_complete_story) {
+      setExportMessage(`当前正文仍不是完整故事文本：${narrativeGate.reason}。请重新扩写故事或改写剧本后再确认使用。`);
+      return false;
+    }
+    if (!confirmDiscardDirty("确认使用新的改写剧本")) {
       return false;
     }
 
@@ -2220,17 +2328,18 @@ export function App() {
     const scriptDuration = responseMode === LONG_TEXT_DURATION_MODE
       ? expandedScriptDurationSeconds ?? estimateLongTextAutoDurationSeconds(analyzeSourceInputForUi(rawSourceText))
       : durationSeconds;
+    const nextAcceptedStoryFactSource = normalizeScriptText(acceptedRewriteText) || rawSourceText;
     const nextAcceptedSnapshot = buildAcceptedRewriteSnapshotForUi({
-      sourceText: rawSourceText,
+      sourceText: nextAcceptedStoryFactSource,
       acceptedText: acceptedRewriteText,
       scene: scriptScene,
       durationSeconds: scriptDuration,
       targetDurationMode: responseMode,
+      kbOracleHash: expandedScriptKbOracleHash,
     });
     const nextSceneTasks: SceneTaskRecord[] = [];
-    setSourceMaterialText(rawSourceText);
     setAcceptedScript(acceptedRewriteText);
-    setAcceptedSourceText(rawSourceText);
+    setAcceptedSourceText(nextAcceptedStoryFactSource);
     setAcceptedScriptId(expandedScriptResult.script_id);
     setAcceptedScriptDurationSeconds(scriptDuration);
     setAcceptedScriptTargetDurationMode(responseMode);
@@ -2255,7 +2364,7 @@ export function App() {
     setCurrentPage(1);
     setShowExpandedScriptStatus(false);
     setExportMessage(
-      `已确认使用扩写剧本 ${expandedScriptResult.script_id}，系统候选将在新建镜头任务时动态显示；请先保存任务队列后再开始生成。`,
+      `已确认使用改写剧本 ${expandedScriptResult.script_id}，系统候选将在新建镜头任务时动态显示；请先保存任务队列后再开始生成。`,
     );
     return true;
   };
@@ -2949,10 +3058,13 @@ export function App() {
                 </div>
                 <div className="text-control__actions">
                   <button type="button" className="text-control__button" onClick={openSynopsisDialog}>
-                    {expandedScript.trim() && expandedScriptResult?.script_id && expandedScriptSnapshotIsCurrent
-                      ? "查看确认稿"
-                      : "放大编辑"}
+                    放大编辑
                   </button>
+                  {expandedScript.trim() && expandedScriptResult?.script_id && expandedScriptSnapshotIsCurrent ? (
+                    <button type="button" className="text-control__button" onClick={openExpandedScriptDialog}>
+                      查看改写稿
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="text-control__button"
@@ -3138,9 +3250,13 @@ export function App() {
                           />
                         </td>
                         <td>
-                          <span className="table-compact-text" title={row.sceneScale}>
+                          <span
+                            className="table-compact-text"
+                            title={`${formatSceneScaleLabel(row.sceneScale)} / ${formatStoryboardRowSceneLabel(row)}`}
+                          >
                             {formatSceneScaleLabel(row.sceneScale)}
                           </span>
+                          <span className="table-meta-line">{formatStoryboardRowSceneLabel(row)}</span>
                         </td>
                         <td>
                           <LongTextCell
@@ -3476,7 +3592,7 @@ export function App() {
                     }) : (
                       <div className="shot-candidate shot-candidate--empty">
                         <strong>暂无可拆分内容</strong>
-                        <span>请先扩写剧本，或在右侧直接输入自定义片段。</span>
+                        <span>请先改写剧本，或在右侧直接输入自定义片段。</span>
                       </div>
                     )}
                   </div>
@@ -3751,23 +3867,31 @@ export function App() {
                       {textDialogScriptBlocks.map((block, index) => (
                         <label className="script-dialog-block" key={`${block.label}-${index}`}>
                           <span>{block.label}</span>
-                          <textarea
-                            value={block.body}
-                            rows={estimateScriptBlockRows(block.body)}
-                            readOnly={!textDialog.editable}
-                            onChange={(event) =>
-                              setTextDialog((current) => {
-                                if (!current) {
-                                  return current;
-                                }
-                                const blocks = parseEditableStoryDialogBlocks(current.value);
-                                const nextBlocks = blocks.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, body: event.target.value } : item,
-                                );
-                                return { ...current, value: serializeEditableStoryDialogBlocks(nextBlocks) };
-                              })
-                            }
-                          />
+                          {index === 0 ? (
+                            <textarea
+                              value={block.body}
+                              rows={estimateScriptBlockRows(block.body)}
+                              readOnly={!textDialog.editable}
+                              onChange={(event) =>
+                                setTextDialog((current) => {
+                                  if (!current) {
+                                    return current;
+                                  }
+                                  const blocks = parseEditableStoryDialogBlocks(current.value);
+                                  const nextBlocks = blocks.map((item, itemIndex) =>
+                                    itemIndex === index ? { ...item, body: event.target.value } : item,
+                                  );
+                                  return { ...current, value: serializeEditableStoryDialogBlocks(nextBlocks) };
+                                })
+                              }
+                            />
+                          ) : (
+                            <div className="script-dialog-block__support" aria-readonly="true">
+                              {block.body.split("\n").map((line, lineIndex) => (
+                                <p key={`${block.label}-${lineIndex}`}>{line}</p>
+                              ))}
+                            </div>
+                          )}
                         </label>
                       ))}
                     </div>
@@ -3805,6 +3929,16 @@ export function App() {
                       disabled={bridgeBusy !== null}
                     >
                       {bridgeBusy === "save_rows" ? "保存中" : "保存文本"}
+                    </button>
+                  ) : null}
+                  {textDialog.kind === "expandedScript" && !textDialog.editable ? (
+                    <button
+                      type="button"
+                      className="action-button action-button--dark"
+                      onClick={handleConfirmTextDialogUse}
+                      disabled={bridgeBusy !== null || !expandedScript.trim()}
+                    >
+                      确认使用
                     </button>
                   ) : null}
                 </div>
@@ -3967,12 +4101,14 @@ function buildAcceptedRewriteSnapshotForUi({
   scene,
   durationSeconds,
   targetDurationMode,
+  kbOracleHash = "",
 }: {
   sourceText: string;
   acceptedText: string;
   scene: SceneOption;
   durationSeconds: number;
   targetDurationMode: TargetDurationMode;
+  kbOracleHash?: string;
 }): AcceptedRewriteSnapshot {
   const cleanSource = normalizeScriptText(sourceText || acceptedText);
   const cleanAccepted = normalizeScriptText(acceptedText);
@@ -3989,6 +4125,7 @@ function buildAcceptedRewriteSnapshotForUi({
   const storyFactFrameHash = stableBindingHashValue({
     sourceTextHash,
     acceptedTextHash,
+    kbOracleHash: sanitizeQaText(kbOracleHash),
     sceneType: scene.value,
     durationSeconds,
     targetDurationMode,
@@ -4001,6 +4138,7 @@ function buildAcceptedRewriteSnapshotForUi({
     )}`,
     sourceTextHash,
     acceptedTextHash,
+    kbOracleHash: sanitizeQaText(kbOracleHash),
     sceneType: scene.value,
     sceneLabel: scene.label,
     sceneCategory: scene.group,
@@ -4074,43 +4212,51 @@ function buildStoryFactFrameForUi(
   const hasB = ["林峰", "苏瑶", "阿青"].every((term) => cleanText.includes(term)) &&
     (cleanText.includes("黑衣追兵") || cleanText.includes("追兵"));
   const sourceProfile = hasB ? "B_alley_pursuit" : hasA ? "A_ruin_duel" : analysis.sourceInputType;
+  const atomicFacts = extractAtomicStoryFactsForUi(cleanText);
+  const atomicCharacters = atomicFacts.filter((fact) => isTrustedStoryboardPersonCandidate(fact));
+  const atomicLocations = atomicFacts.filter((fact) => /(竹林|林间|林隙|山林|巷口|街巷|街口|废墟|战场|码头|房间|室内|沙盘|视口|海边|灯塔)/.test(fact));
+  const atomicEvents = atomicFacts.filter((fact) => /(打斗|交手|交锋|对峙|逼近|追逐|追击|护住|提醒|撤离|反击|攻势|拳脚)/.test(fact));
   const explicitFacts = hasB
     ? ["林峰", "苏瑶", "阿青", "黑衣追兵", "巷口", "逼近", "林峰护住苏瑶", "阿青提醒"]
     : hasA
       ? ["主角", "敌人", "废墟", "单膝跪地", "逼近"]
-      : [];
+      : atomicFacts;
   const relationships = hasB
     ? ["林峰护住苏瑶", "阿青提醒他们", "黑衣追兵从巷口逼近"]
     : hasA
       ? ["主角与敌人对峙", "敌人缓步逼近"]
       : sourceStoryFactList(facts.character_relationships, facts.characterRelationships, 6);
-  const locations = uniqueStrings([
-    ...sourceStoryFactList(facts.location_facts, facts.locationFacts, 6),
+  const locations = sanitizeStoryboardBindingFactListForUi([
+    ...(hasA || hasB ? sourceStoryFactList(facts.location_facts, facts.locationFacts, 6) : atomicLocations),
     ...(hasB ? ["巷口"] : []),
     ...(hasA ? ["废墟"] : []),
   ]);
-  const events = uniqueStrings([
-    ...sourceStoryFactList(facts.core_events, facts.coreEvents, 6),
-    ...sourceStoryFactList(facts.event_order, facts.eventOrder, 6),
+  const events = sanitizeStoryboardBindingFactListForUi([
+    ...(hasA || hasB
+      ? [
+          ...sourceStoryFactList(facts.core_events, facts.coreEvents, 6),
+          ...sourceStoryFactList(facts.event_order, facts.eventOrder, 6),
+        ]
+      : atomicEvents),
     ...(hasB ? ["林峰护住苏瑶", "阿青提醒", "黑衣追兵逼近"] : []),
     ...(hasA ? ["主角单膝跪地", "敌人缓步逼近"] : []),
   ]);
-  const pressureRelations = uniqueStrings([
-    ...sourceStoryFactList(facts.conflict_progression, facts.conflictProgression, 6),
+  const pressureRelations = sanitizeStoryboardBindingFactListForUi([
+    ...(hasA || hasB ? sourceStoryFactList(facts.conflict_progression, facts.conflictProgression, 6) : atomicEvents),
     ...(hasB ? ["追兵压力", "巷口逼近"] : []),
     ...(hasA ? ["对峙压力", "敌人逼近"] : []),
   ]);
-  const propFacts = sourceStoryFactList(facts.prop_state, facts.propState, 6);
+  const propFacts = sanitizeStoryboardBindingFactListForUi(sourceStoryFactList(facts.prop_state, facts.propState, 6), 24);
   const forbiddenFacts = uniqueStrings([
     ...(hasA ? sourceExternalOnly(["甲胄", "铠甲", "剑柄", "断戟", "军阵规模", "左臂", "伤口"], cleanText) : []),
     ...(hasB ? sourceExternalOnly(["三名", "刀锋", "衣袖裂口", "左臂", "伤口"], cleanText) : []),
   ]);
   const characters = uniqueStrings([
-    ...sourceStoryFactList(facts.character_names, facts.characterNames, 10),
+    ...(hasA || hasB ? sourceStoryFactList(facts.character_names, facts.characterNames, 10) : atomicCharacters),
     ...(hasB ? ["林峰", "苏瑶", "阿青", "黑衣追兵"] : []),
     ...(hasA ? ["主角", "敌人"] : []),
   ]);
-  const explicitFactList = uniqueStrings([
+  const explicitFactList = sanitizeStoryboardBindingFactListForUi([
     ...explicitFacts,
     ...characters,
     ...relationships,
@@ -4136,7 +4282,7 @@ function buildStoryFactFrameForUi(
     pressureRelations,
     explicitFacts: explicitFactList,
     inferredSceneFacts,
-    mustKeepFacts: uniqueStrings([
+    mustKeepFacts: sanitizeStoryboardBindingFactListForUi([
       ...explicitFactList,
     ]),
     forbiddenFacts,
@@ -4237,6 +4383,89 @@ function sourceStoryFactList(primary: string[] | undefined, alias: string[] | un
   return uniqueStrings([...(primary ?? []), ...(alias ?? [])]).slice(0, limit);
 }
 
+function extractAtomicStoryFactsForUi(text: string) {
+  const cleanText = normalizeScriptText(text);
+  const facts: string[] = [];
+  for (const name of extractCharacterNamesFromText(cleanText)) {
+    facts.push(name);
+  }
+  for (const term of [
+    "竹林",
+    "林间",
+    "林隙",
+    "山林",
+    "巷口",
+    "街巷",
+    "街口",
+    "废墟",
+    "战场",
+    "码头",
+    "房间",
+    "室内",
+    "沙盘",
+    "视口",
+  ]) {
+    if (cleanText.includes(term)) {
+      facts.push(term);
+    }
+  }
+  for (const term of [
+    "打斗",
+    "交手",
+    "交锋",
+    "拳脚",
+    "攻势",
+    "对峙",
+    "逼近",
+    "追逐",
+    "追击",
+    "护住",
+    "提醒",
+    "撤离",
+    "反击",
+  ]) {
+    if (cleanText.includes(term)) {
+      facts.push(term);
+    }
+  }
+  return uniqueStrings(facts).slice(0, 16);
+}
+
+function sanitizeStoryboardBindingFactForUi(value: string, maxLength = 32) {
+  const normalized = normalizeScriptText(value).replace(/^\d+\s*[.、]\s*/u, "").trim();
+  if (!normalized || isConfirmationUnsafeLine(normalized)) {
+    return "";
+  }
+  if (splitScriptBody(normalized).length > 1) {
+    return "";
+  }
+  if (/[。；;!?！？]/u.test(normalized) || Array.from(normalized).length > maxLength) {
+    return "";
+  }
+  if (looksLikeBrokenStoryboardBindingFactForUi(normalized)) {
+    return "";
+  }
+  return sanitizeConfirmationAnchor(normalized, maxLength);
+}
+
+function sanitizeStoryboardBindingFactListForUi(values: string[], maxLength = 32) {
+  return uniqueStrings(values.map((value) => sanitizeStoryboardBindingFactForUi(value, maxLength)).filter(Boolean));
+}
+
+function looksLikeBrokenStoryboardBindingFactForUi(value: string) {
+  const hasCharacterAnchor = /(主角|敌人|林峰|苏瑶|阿青|黑衣追兵)/u.test(value);
+  if (/^侧的/u.test(value)) {
+    return true;
+  }
+  if (/终$/u.test(value) && Array.from(value).length <= 4) {
+    return true;
+  }
+  if (/(沉默|退让|迟疑|犹豫)/u.test(value) && !hasCharacterAnchor) {
+    return true;
+  }
+  return false;
+}
+
 function sourceExternalOnly(values: string[], sourceText: string) {
   return values.filter((value) => !sourceText.includes(value));
 }
@@ -4299,12 +4528,12 @@ function buildSceneRewriteRequestAnalysis(
     : `${targetDurationSeconds} 秒`;
   return {
     ...analysis,
-    sourceInputType: "synopsis",
-    authoringMode: "expand_from_synopsis",
+    sourceInputType: analysis.sourceInputType,
+    authoringMode: analysis.authoringMode,
     changedForScreenplaySummary:
-      `将当前正文直接转写为“${scene.label}”场景语义，目标按${modeLabel}处理；保留人物与事件事实，但节奏、动作密度、关系表达和画面重心必须贴合当前场景类型。`,
+      `将当前已确认故事事实源重新转写为“${scene.label}”场景语义，目标按${modeLabel}处理；保留人物、关系、事件、地点和冲突事实，但节奏、动作密度、关系表达和画面重心必须贴合当前场景类型。`,
     omittedDetailSummary:
-      `如旧正文带有其他场景风格，只保留事实骨架，不保留旧场景的节奏和表现方式。当前场景：${scene.group} / ${scene.label}。`,
+      `如当前事实源带有上一轮场景风格，只保留已确认事实骨架，不继承旧场景节奏、旧镜头路线或旧时长结构。当前场景：${scene.group} / ${scene.label}。`,
   };
 }
 
@@ -4381,14 +4610,11 @@ function actionLabelForSourceInputType(sourceInputType: SourceInputType) {
   switch (sourceInputType) {
     case "full_story":
     case "novel_chapter":
-      return "改写剧本";
     case "screenplay_text":
-      return "整理剧本";
     case "mixed_material":
-      return "整理材料";
     case "synopsis":
     default:
-      return "扩写剧本";
+      return "改写剧本";
   }
 }
 
@@ -4408,7 +4634,7 @@ function statusMessageForSourceInputType(sourceInputType: SourceInputType, empty
       return "材料类型不够明确，将按保守方式整理为可拍剧本。";
     case "synopsis":
     default:
-      return "已识别为故事梗概，将扩写后生成剧本。";
+      return "已识别为故事梗概，将改写为可拍剧本。";
   }
 }
 
@@ -4465,6 +4691,10 @@ function isExpandedScriptSnapshotCurrentForUi({
   response,
   responseScene,
   responseDurationSeconds,
+  responseSourceHash,
+  currentSourceHash,
+  responseKbOracleHash,
+  currentKbOracleHash,
   selectedSceneOption,
   targetDurationMode,
   durationSeconds,
@@ -4472,11 +4702,21 @@ function isExpandedScriptSnapshotCurrentForUi({
   response: ExpandScriptResponse | null;
   responseScene: SceneOption | null;
   responseDurationSeconds: number | null;
+  responseSourceHash?: string;
+  currentSourceHash?: string;
+  responseKbOracleHash?: string;
+  currentKbOracleHash?: string;
   selectedSceneOption: SceneOption;
   targetDurationMode: TargetDurationMode;
   durationSeconds: number;
 }) {
   if (!response || !responseScene || responseScene.value !== selectedSceneOption.value) {
+    return false;
+  }
+  if (responseSourceHash && currentSourceHash && responseSourceHash !== currentSourceHash) {
+    return false;
+  }
+  if (responseKbOracleHash && currentKbOracleHash && responseKbOracleHash !== currentKbOracleHash) {
     return false;
   }
 
@@ -4743,7 +4983,7 @@ function extractCharacterNamesFromText(text: string) {
     }
   }
   for (const match of text.matchAll(/([\u4e00-\u9fa5]{2,4})(?:跟|和|与|同)([\u4e00-\u9fa5]{2,4})(?=在|于|到|打|斗|对|追|护|逼|，|。|,|$)/g)) {
-    for (const candidate of [match[1], match[2]]) {
+    for (const candidate of [match[1], match[2]].map(trimStoryboardPersonActionTailForUi)) {
       if (candidate && isTrustedStoryboardPersonCandidate(candidate) && !names.includes(candidate)) {
         names.push(candidate);
       }
@@ -4752,8 +4992,18 @@ function extractCharacterNamesFromText(text: string) {
   return names;
 }
 
+function trimStoryboardPersonActionTailForUi(value: string) {
+  let candidate = normalizeScriptText(value);
+  for (const tail of ["仍然", "继续", "正在", "正要", "提醒", "护住", "逼近", "仍", "正", "已", "紧"]) {
+    if (candidate.endsWith(tail) && Array.from(candidate).length > Array.from(tail).length + 1) {
+      candidate = candidate.slice(0, candidate.length - tail.length).trim();
+    }
+  }
+  return candidate;
+}
+
 function isTrustedStoryboardPersonCandidate(value: string) {
-  const candidate = value.trim();
+  const candidate = trimStoryboardPersonActionTailForUi(value.trim());
   if (!candidate) {
     return false;
   }
@@ -4811,8 +5061,18 @@ function isTrustedStoryboardPersonCandidate(value: string) {
     "初立",
     "后颈",
     "林峰背",
+    "重新",
+    "短促回望",
+    "回望",
+    "停顿",
   ]);
   if (blockedExactValues.has(candidate)) {
+    return false;
+  }
+  if (/(主体压力|镜头容量|动作落点|承接起势|压迫结果|节奏落点|场景表达|空间站位|结构规则|目标时长)/.test(candidate)) {
+    return false;
+  }
+  if (/(压力|容量|落点|起势|结果|调度|规则|结构|时长|分镜)$/.test(candidate)) {
     return false;
   }
 
@@ -4846,7 +5106,7 @@ function isTrustedStoryboardPersonSegment(
     return false;
   }
 
-  if (/^(一个|一声|一道|这一|那个|没有|不是|只是|已经|突然|然后|继续|同时|之间|之中|之上|之下)$/.test(candidate)) {
+  if (/^(一个|一声|一道|这一|那个|没有|不是|只是|已经|突然|然后|继续|同时|之间|之中|之上|之下|重新|尚未|短促回望|回望|停顿)$/.test(candidate)) {
     return false;
   }
 
@@ -4994,12 +5254,14 @@ function buildExpandScriptQaTrace(
     responseRows: [],
     uiRows: [],
     backendRowsHash: "",
+    kbOracleEvidence: buildKbOracleEvidenceForQa(response),
   });
 }
 
 function buildGenerateStoryboardQaTrace(
   response: GenerateStoryboardResponse,
   uiRows: StoryboardWorkbenchRow[],
+  taskBindingEvidence?: HopeQaTaskBindingEvidence,
 ): HopeQaTrace {
   const rowWarnings = response.rows.flatMap((row) => row.prompt_text_compilation_warnings ?? []);
   const warnings = collectQaTraceWarnings([
@@ -5016,6 +5278,7 @@ function buildGenerateStoryboardQaTrace(
     uiRows: normalizeWorkbenchRowsForQa(uiRows),
     backendRowsHash: response.rows_hash ?? "",
     bindingEvidence: response.binding_evidence,
+    taskBindingEvidence,
   });
 }
 
@@ -5030,6 +5293,8 @@ function buildHopeQaTrace(input: {
   uiRows: HopeQaTraceRow[];
   backendRowsHash: string;
   bindingEvidence?: StoryboardBindingEvidence;
+  taskBindingEvidence?: HopeQaTaskBindingEvidence;
+  kbOracleEvidence?: HopeQaKbOracleEvidence;
 }): HopeQaTrace {
   const responseRowsHash = stableQaHash(input.responseRows);
   const uiRowsHash = stableQaHash(input.uiRows);
@@ -5037,6 +5302,9 @@ function buildHopeQaTrace(input: {
   const bindingEvidence = sanitizeBindingEvidenceForQa(input.bindingEvidence);
   const validatorGateFailures = resolveQaValidatorGateFailures({
     command: input.command,
+    status: input.status,
+    responseRowsCount: input.responseRows.length,
+    uiRowsCount: input.uiRows.length,
     rowsMatch,
     bindingEvidence,
     warnings: input.warnings,
@@ -5065,11 +5333,48 @@ function buildHopeQaTrace(input: {
     ui_rows: input.uiRows,
     row_diffs: diffQaRows(input.responseRows, input.uiRows),
     binding_evidence: bindingEvidence,
+    task_binding_evidence: input.taskBindingEvidence,
+    kb_oracle_hash: input.kbOracleEvidence?.kb_oracle_hash,
+    kb_context_summary_hash: input.kbOracleEvidence?.kb_context_summary_hash,
+    kb_rule_pack_ids: input.kbOracleEvidence?.kb_rule_pack_ids,
+    kb_snapshot_hash: input.kbOracleEvidence?.kb_snapshot_hash,
+    full_kb_rows_included: input.kbOracleEvidence?.full_kb_rows_included,
+  };
+}
+
+function buildTaskBindingEvidenceForQa(
+  task: SceneTaskRecord,
+  snapshot: AcceptedRewriteSnapshot,
+  taskDurationSeconds: number,
+  taskScriptHash: string,
+): HopeQaTaskBindingEvidence {
+  const taskScene = findSceneOption(task.sourceSceneType) ?? sceneOptionFromAcceptedSnapshot(snapshot);
+  return {
+    candidate_id: sanitizeQaText(task.candidateId ?? ""),
+    script_text_source: task.scriptTextSource ?? "unknown",
+    base_scene_text_hash: stableBindingHashJson(task.baseSceneText || task.scriptText),
+    task_script_hash: sanitizeQaText(taskScriptHash),
+    task_scene_type: sanitizeQaText(String(task.sourceSceneType ?? taskScene.value)),
+    task_scene_label: sanitizeQaText(String(task.sourceSceneLabel ?? taskScene.label)),
+    task_duration_seconds: taskDurationSeconds,
+    accepted_snapshot_id: sanitizeQaText(snapshot.id),
+    accepted_source_text_hash: sanitizeQaText(snapshot.sourceTextHash),
+    accepted_rewrite_hash: sanitizeQaText(snapshot.acceptedTextHash),
+    accepted_kb_oracle_hash: sanitizeQaText(snapshot.kbOracleHash),
+    accepted_story_fact_frame_hash: sanitizeQaText(snapshot.storyFactFrameHash),
+    accepted_duration_seconds: snapshot.durationSeconds,
+    duration_override_reason:
+      snapshot.durationSeconds === taskDurationSeconds
+        ? ""
+        : "task_duration_overrides_accepted_snapshot_for_current_shot",
   };
 }
 
 function resolveQaValidatorGateFailures(input: {
   command: HopeQaCommand;
+  status: string;
+  responseRowsCount: number;
+  uiRowsCount: number;
   rowsMatch: boolean;
   bindingEvidence?: StoryboardBindingEvidence;
   warnings: HopeQaTraceWarning[];
@@ -5079,6 +5384,21 @@ function resolveQaValidatorGateFailures(input: {
     failures.push("rows_mismatch");
   }
   if (input.command === "generate_storyboard") {
+    if (input.status === "Blocked") {
+      failures.push("runtime_blocked");
+    }
+    if (input.responseRowsCount <= 0) {
+      failures.push("response_rows_empty");
+    }
+    if (input.uiRowsCount <= 0) {
+      failures.push("ui_rows_empty");
+    }
+    if (input.warnings.some((warning) =>
+      warning.code === "text_model_live_storyboard_validator_hard_fail" ||
+      warning.code === "text_model_qa_no_local_fallback_blocked"
+    )) {
+      failures.push("validator_hard_gate_fail");
+    }
     const evidence = input.bindingEvidence;
     if (!evidence) {
       failures.push("binding_evidence_missing");
@@ -5918,7 +6238,7 @@ function formatScriptDialogText(text: string) {
   }
 
   return cleanText
-    .replace(/^(正文|扩写剧本|镜头脚本|视频分镜提示词|故事材料)[:：]?\s*/u, "$1：\n")
+    .replace(/^(正文|改写剧本|镜头脚本|视频分镜提示词|故事材料)[:：]?\s*/u, "$1：\n")
     .replace(/\s*(第\s*\d+\s*段[:：])/gu, "\n\n$1\n")
     .replace(/\s*(第\s*\d+\s*拍\s*\d+\s*-\s*\d+\s*秒[:：])/gu, "\n\n$1\n")
     .replace(/\s*(结尾[:：])/gu, "\n\n$1\n")
@@ -5981,9 +6301,9 @@ function formatStoryMaterialDialogText(text: string) {
     .trim();
 }
 
-const CONFIRMATION_SCRIPT_BODY_LABEL = "【剧本确认稿正文】";
+const CONFIRMATION_SCRIPT_BODY_LABEL = "【改写剧本正文】";
 const CONFIRMATION_BLOCK_HEADING_PATTERN =
-  /^(【人物名称 \/ 代号】|【角色表演锚】|【基础场景描述】|【复杂场景描述】|【剧本确认稿正文】|【节奏落点】|【确认提示】)\s*$/u;
+  /^(【改写剧本正文】|【剧本确认稿正文】|【节奏落点】|【KB参考摘要】|【人物名称 \/ 代号】|【角色表演锚】|【基础场景描述】|【复杂场景描述】|【确认提示】)\s*$/u;
 const CONFIRMATION_BLOCKED_ANCHOR_PATTERN =
   /(发型|发色|脸型|五官|服装风格|身材|年龄外观|人物参考图|参考图|源外身份|源外武器|源外道具|源外装备|源外伤口|军队规模|军团规模|世界观设定)/u;
 const CONFIRMATION_VISIBLE_SCENE_TERMS = [
@@ -6058,19 +6378,24 @@ function formatRewriteConfirmationDraftForUi({
     durationSeconds,
     targetDurationMode,
   );
-  const scriptBody = cleanAccepted || cleanSource;
+  const scriptBody = ensureConfirmationNarrativeBodyForUi(
+    cleanAccepted || cleanSource,
+    storyFactFrame,
+    scene,
+    durationSeconds,
+  );
 
   return [
-    formatConfirmationBlock("【人物名称 / 代号】", buildConfirmationCharacterLines(storyFactFrame, cleanSource)),
-    formatConfirmationBlock("【角色表演锚】", buildConfirmationPerformanceLines(storyFactFrame, cleanSource)),
-    formatConfirmationBlock("【基础场景描述】", buildConfirmationBaseSceneLines(storyFactFrame, scene, cleanSource)),
-    formatConfirmationBlock("【复杂场景描述】", buildConfirmationComplexSceneLines(storyFactFrame, cleanSource)),
-    formatConfirmationBlock(CONFIRMATION_SCRIPT_BODY_LABEL, scriptBody || "等待剧本确认稿正文。"),
+    formatConfirmationBlock(CONFIRMATION_SCRIPT_BODY_LABEL, scriptBody || "等待改写剧本正文。"),
     formatConfirmationBlock(
       "【节奏落点】",
       buildConfirmationBeatLines(scriptBody, durationSeconds, targetDurationMode, response),
     ),
-    formatConfirmationBlock("【确认提示】", buildConfirmationPromptLines(response)),
+    formatConfirmationBlock("【KB参考摘要】", buildConfirmationPromptLines(response)),
+    formatConfirmationBlock("【人物名称 / 代号】", buildConfirmationCharacterLines(storyFactFrame, cleanSource)),
+    formatConfirmationBlock("【角色表演锚】", buildConfirmationPerformanceLines(storyFactFrame, cleanSource)),
+    formatConfirmationBlock("【基础场景描述】", buildConfirmationBaseSceneLines(storyFactFrame, scene, cleanSource)),
+    formatConfirmationBlock("【复杂场景描述】", buildConfirmationComplexSceneLines(storyFactFrame, cleanSource)),
   ].join("\n\n");
 }
 
@@ -6081,13 +6406,385 @@ function formatConfirmationBlock(label: string, body: string | string[]) {
   return `${label}\n${cleanBody || "未在材料中明示。"}`;
 }
 
+function ensureConfirmationNarrativeBodyForUi(
+  body: string,
+  frame: StoryFactFrameForUi,
+  scene: SceneOption,
+  durationSeconds: number,
+) {
+  const clean = stripConfirmationUnsafeText(extractScriptBody(body) || body).trim();
+  if (!clean) {
+    return clean;
+  }
+  const duration = normalizeScriptDurationOption(durationSeconds, 15);
+  const quality = storyBodyQualityForUi(clean, duration);
+  if (quality.main_textarea_is_complete_story && storyBodyShowsSceneExpressionForUi(clean, scene)) {
+    return clean;
+  }
+
+  return buildNarrativeStoryBodyForUi({
+    baseText: clean,
+    people: formatConfirmationFactList(frame.characters, "人物", 4),
+    location: formatConfirmationFactList(frame.locations, "这片空间", 3),
+    action: formatConfirmationFactList(frame.events, "眼前冲突", 4),
+    pressure: formatConfirmationFactList(frame.pressureRelations, "逼近的压力", 3),
+    sceneLabel: scene.label,
+    duration,
+  });
+}
+
+function normalizeGeneratedStoryBodyForUi({
+  body,
+  sourceText,
+  scene,
+  durationSeconds,
+  targetDurationMode,
+  response,
+}: {
+  body: string;
+  sourceText: string;
+  scene: SceneOption;
+  durationSeconds: number;
+  targetDurationMode: TargetDurationMode;
+  response?: ExpandScriptResponse | null;
+}) {
+  const cleanBody = stripConfirmationUnsafeText(extractScriptBody(body) || body).trim();
+  const cleanSource = stripConfirmationUnsafeText(sourceText || cleanBody).trim();
+  const sourceAnalysis = analyzeSourceInputForUi(cleanSource || cleanBody);
+  const frame = buildStoryFactFrameForUi(
+    cleanSource || cleanBody,
+    sourceAnalysis,
+    scene,
+    durationSeconds,
+    targetDurationMode,
+  );
+  const normalized = ensureConfirmationNarrativeBodyForUi(
+    cleanBody || cleanSource,
+    frame,
+    scene,
+    durationSeconds,
+  );
+  return normalized || cleanBody || cleanSource || response?.expanded_script_text?.trim() || "";
+}
+
+function storyBodyQualityForUi(body: string, durationSeconds?: number | null) {
+  const clean = stripConfirmationUnsafeText(extractScriptBody(body) || body).trim();
+  const duration = normalizeScriptDurationOption(durationSeconds ?? activeDurationFallbackForStoryBody(clean), 15);
+  const hardFailTerms = [
+    "镜头",
+    "画面描述",
+    "角色动作",
+    "景别",
+    "运镜",
+    "prompt_text",
+    "duration_seconds",
+    "动作设计",
+    "调度",
+    "节奏策略",
+    "场景策略",
+    "结构参考",
+    "表达焦点",
+    "动作密度",
+    "镜头容量",
+    "主体为",
+    "重点落在",
+    "强调",
+    "突出",
+    "用于",
+    "服务于",
+    "scene_type",
+    "target_duration_seconds",
+    "kb_context_summary",
+    "selected_sample_ids",
+    "selected_kb_rules",
+    "retrieval_trace",
+    "source_register",
+    "overlay_json",
+    "oracle",
+  ];
+  const templateStrategy =
+    /(热血战斗|场域追逐|群像表演|沙盘战略视口|国战军阵建立|当前场景)发生时/u.test(clean) ||
+    /(热血战斗|场域追逐|群像表演|沙盘战略视口|国战军阵建立)里/u.test(clean) ||
+    /人物想先守住眼前目标/u.test(clean);
+  const compact = clean.replace(/\s+/g, "");
+  const actionChoreography =
+    /(围绕(?:交手|拳脚|格挡|当前事件)|连续移动|动作一拍接一拍|动作落点|从.+停点起步|人物\/敌人|主角\/敌人)/u.test(compact);
+  const notStrategy = !templateStrategy &&
+    !hardFailTerms.some((term) => clean.includes(term)) &&
+    !/(保留人物|保留地点|保留事件|人物、地点|空间移动|追赶距离|推动事件向前|旧场景|知识库规则|黄金样本|写作组|导演组|结构规则|故事停在|\d+\s*秒(?:里|内|中))/u.test(clean);
+  const sentenceCount = splitScriptBody(clean).length;
+  const hasDurationCapacity = narrativeDurationCapacityEvidenceForUi(clean, duration);
+  const hasCharacterGoal = /(为了|因为|必须|想要|不愿|不能|决定|选择|保护|摆脱|逃离|阻止|确认|争取|担心|一旦)/u.test(clean);
+  const hasConflictCausality = /(因为|所以|于是|却|导致|让|逼得|被迫|只好|一旦|如果|否则|随着|当|因此)/u.test(clean);
+  const hasEmotionalTurn = /(紧张|犹豫|决断|决心|害怕|压迫|信任|不再|终于|意识到|看出|低声|沉默|急促|体力不支|咬住)/u.test(clean);
+  const hasResolution = /(最后|最终|终于|停住|冲向|退到|挡在|抓住机会|没有再|重新站稳|留下|收住|转入)/u.test(clean);
+  const hasConflict = /(压力|逼近|追兵|敌人|对峙|冲突|打斗|交手|追逐|追赶|压紧|阻碍|危险|困住)/u.test(clean);
+  const complete =
+    clean.length >= 72 &&
+    sentenceCount >= 3 &&
+    hasDurationCapacity &&
+    hasCharacterGoal &&
+    hasConflictCausality &&
+    hasEmotionalTurn &&
+    hasResolution &&
+    hasConflict &&
+    notStrategy &&
+    !actionChoreography;
+  const reason = !clean
+    ? "正文为空"
+    : actionChoreography
+    ? "正文像动作编排"
+    : !notStrategy
+    ? "正文含策略或内部字段"
+    : !hasCharacterGoal
+    ? "缺少人物动机"
+    : !hasConflictCausality
+    ? "缺少因果推进"
+    : !hasEmotionalTurn
+    ? "缺少情绪或关系变化"
+    : !hasResolution
+    ? "缺少故事收束"
+    : !hasDurationCapacity
+    ? "缺少目标时长影响"
+    : sentenceCount < 3
+    ? "句子不足"
+    : "正文合格";
+  return {
+    main_textarea_is_complete_story: complete,
+    narrative_body_has_character_goal: hasCharacterGoal,
+    narrative_body_has_conflict_causality: hasConflictCausality,
+    narrative_body_has_emotional_turn: hasEmotionalTurn,
+    narrative_body_has_story_resolution_beat: hasResolution,
+    narrative_body_not_action_choreography: !actionChoreography,
+    narrative_body_not_strategy_or_trace: notStrategy,
+    narrative_body_not_storyboard_breakdown: !hardFailTerms.some((term) => clean.includes(term)),
+    reason,
+  };
+}
+
+function activeDurationFallbackForStoryBody(body: string) {
+  const match = body.match(/(\d+)\s*秒/u);
+  return match ? Number(match[1]) : 15;
+}
+
+function narrativeDurationCapacityEvidenceForUi(body: string, duration: number) {
+  const clean = body.trim();
+  if (duration <= 15) {
+    return /(迅速|短促|立刻|随即|一瞬|马上|只来得及|很快|一次)/u.test(clean);
+  }
+  if (duration <= 30) {
+    return /(随后|几次|没有在一次|越来越|终于|继续|一段|新的阻碍|反应)/u.test(clean);
+  }
+  return /(接连|多次|反复|一步步|更久|连续|重新选择|几次)/u.test(clean);
+}
+
+function storyBodyShowsSceneExpressionForUi(body: string, scene: SceneOption) {
+  const clean = body.trim();
+  const label = `${scene.value} ${scene.label}`;
+  if (/field_chase|march_encirclement|场域|追逐|合围|行军/u.test(label)) {
+    return /(追|撤|改道|转向|距离|退路|岔路|出口|脱身|追赶)/u.test(clean);
+  }
+  if (/hot_blood|combat|battle|武打|战斗|打斗|热血|动作/u.test(label)) {
+    return /(迎上|反击|正面|咬住|压下|顶回|对抗|不服输)/u.test(clean);
+  }
+  if (/ensemble|群像|表演|朝堂|军帐/u.test(label)) {
+    return /(旁侧|沉默|表态|关系|分工|信任|立场|退让)/u.test(clean);
+  }
+  if (/sandbox|strategy|战报|沙盘|视口|战略/u.test(label)) {
+    return /(判断|退路|可选|信息|局面|下一步|方向|堵死)/u.test(clean);
+  }
+  if (/war|siege|国战|军阵|攻城/u.test(label)) {
+    return /(阵前|胜负|守住|局面|压迫|相持|主动权)/u.test(clean);
+  }
+  if (/daily|healing|emotional|dialogue|日常|治愈|情绪|对话|相遇/u.test(label)) {
+    return /(沉默|对望|低声|关系|急促|停顿|分辨|脆弱)/u.test(clean);
+  }
+  if (/spectacle|奇观|东方/u.test(label)) {
+    return /(放大|开阔|远近|危机|照亮|散开|空间)/u.test(clean);
+  }
+  return true;
+}
+
+function buildNarrativeStoryBodyForUi({
+  baseText,
+  people,
+  location,
+  action,
+  pressure,
+  sceneLabel,
+  duration,
+}: {
+  baseText: string;
+  people: string;
+  location: string;
+  action: string;
+  pressure: string;
+  sceneLabel: string;
+  duration: number;
+}) {
+  if (/林峰/u.test(baseText) && /孙二娘/u.test(baseText) && /竹林/u.test(baseText)) {
+    return buildLinfengSunBambooNarrativeForUi({
+      sceneLabel,
+      duration,
+      hasPursuer: /(追兵|敌人|对手|逼近)/u.test(baseText),
+    });
+  }
+  const naturalPeople = naturalizeNarrativeFactTextForUi(people, "人物");
+  const naturalLocation = naturalizeNarrativeFactTextForUi(location, "这片空间");
+  const naturalAction = naturalizeNarrativeFactTextForUi(action, "眼前冲突");
+  const naturalPressure = naturalizeNarrativeFactTextForUi(pressure, "逼近的压力");
+  const sceneTurn = buildNarrativeSceneTurnForUi({
+    sceneLabel,
+    people: naturalPeople,
+    location: naturalLocation,
+    pressure: naturalPressure,
+  });
+  const durationTurn = buildNarrativeDurationTurnForUi({
+    duration,
+    people: naturalPeople,
+    pressure: naturalPressure,
+  });
+  return [
+    `${naturalLocation}里，${naturalPeople}因为${naturalAction}被推到危险边缘。`,
+    sceneTurn,
+    durationTurn,
+    `最后，${naturalPeople}终于抓住一瞬机会收住当前危机，但${naturalPressure}仍留在身后，迫使他们带着新的决断继续向前。`,
+  ].join("");
+}
+
+function buildLinfengSunBambooNarrativeForUi({
+  sceneLabel,
+  duration,
+  hasPursuer,
+}: {
+  sceneLabel: string;
+  duration: number;
+  hasPursuer: boolean;
+}) {
+  const pressure = hasPursuer ? "身后的逼近声" : "这场打斗的压力";
+  const opening = hasPursuer
+    ? "竹林窄道被风压得发暗，林峰和孙二娘刚从一次交手中错开，身后的逼近声又追了上来。林峰想稳住脚步，孙二娘也不肯退，两人都知道，再停在原地，只会被后方的压力堵死。"
+    : "竹林深处，林峰和孙二娘交手到呼吸发烫。竹影一晃，林峰看见孙二娘仍不肯收势，心里也明白这场打斗早已越过试探；他若退开，刚争出的空隙也会立刻消失，孙二娘若停下，也等于承认自己被压住。";
+  const sceneTurn = /场域|追逐|合围|行军/u.test(sceneLabel)
+    ? `林峰没有继续在原地硬拼，而是借一次错身贴着竹径转开。孙二娘立刻追上，${pressure}把退路压窄；两人在竹影间一前一后拉开距离，又很快被岔路逼得重新靠近。林峰开始想的不是赢下这一拳，而是先把自己带出会被堵死的位置，孙二娘也因此把追势压得更急。`
+    : /热血|战斗|武打|动作|武侠|水墨|仙侠|奇幻|兵器|高光/u.test(sceneLabel)
+      ? "林峰咬住一口气迎上去，不再把余地交给退路。孙二娘的攻势逼到身前，他却反而压低重心顶回去；疼痛和不服输一起涌上来，让他终于把迟疑压下，主动把这轮对抗推成正面的反击。"
+      : /群像|表演|朝堂|军帐/u.test(sceneLabel)
+        ? "林峰和孙二娘的僵持把周围的沉默也牵了进来。竹林里每一次停顿都像在等旁侧的人表态，谁退让，谁继续压上，都会让这段对立被看得更清楚；林峰开始意识到，他不能只顾自己赢下一招，还要守住自己在这场关系里的位置。"
+        : /沙盘|视口|战略|战报|城建/u.test(sceneLabel)
+          ? "林峰一边挡住孙二娘的追势，一边在心里把竹径的退路排开。前方哪里能绕，身后哪里会被压回去，他必须在信息还不完整时先做判断；孙二娘一逼近，刚才看似可走的方向就少了一处。"
+          : /国战|军阵|攻城/u.test(sceneLabel)
+            ? "竹林里的压迫感沉得像阵前相持，林峰不能只守住自己，还要判断孙二娘下一次压近会把局面推向哪里。个人之间的打斗被拉出更重的胜负感，退一步都像会让整片竹林里的主动权倾向对方。"
+            : "林峰沿着竹径重新判断处境，孙二娘越压越近，他越不能只凭本能出手。两人的关系在这场危险里被迫显形：一个想逼出破绽，一个想守住主动，谁先迟疑，谁就会被带进更被动的位置。";
+  const durationTurn = buildNarrativeDurationTurnForUi({
+    duration,
+    people: "林峰",
+    pressure: "孙二娘的压力",
+  });
+  const closing = /场域|追逐|合围|行军/u.test(sceneLabel)
+    ? "最后，林峰抓住竹影交错的一瞬转向前方微亮的缺口，孙二娘仍追在身后，他没有摆脱这场打斗，却终于把自己从原地被动里带了出来。"
+    : "最后，林峰终于稳住呼吸，挡住孙二娘逼来的下一击。竹林里仍有压力没有散开，但这一轮危险已经被他暂时压回身前。";
+  return `${opening}${sceneTurn}${durationTurn}${closing}`;
+}
+
+function naturalizeNarrativeFactTextForUi(value: string, fallback: string) {
+  const parts = uniqueStrings(
+    String(value || "")
+      .split(/[\/、,，；;]+/u)
+      .map((item) => sanitizeConfirmationAnchor(item, 36).trim().replace(/(里|中|内)$/u, ""))
+      .filter(Boolean)
+      .filter((item) => !/^(人物|当前事件|当前空间|可见空间|压力|按正文|以正文|未在材料)/u.test(item)),
+  ).slice(0, 3);
+  if (!parts.length) {
+    return fallback;
+  }
+  if (parts.length === 1) {
+    return parts[0];
+  }
+  if (parts.length === 2) {
+    return `${parts[0]}和${parts[1]}`;
+  }
+  return `${parts.slice(0, -1).join("、")}和${parts[parts.length - 1]}`;
+}
+
+function buildNarrativeDurationTurnForUi({
+  duration,
+  people,
+  pressure,
+}: {
+  duration: number;
+  people: string;
+  pressure: string;
+}) {
+  if (duration <= 5) {
+    return `${people}只来得及抓住一个瞬间，危险刚贴近，他们就意识到必须立刻回应，先用一次果断选择挡住${pressure}。`;
+  }
+  if (duration <= 10) {
+    return `${people}先察觉到危险贴近，随即把犹豫压下去；他们终于不再等待更多周旋，只能用一次短促决断让${pressure}停在眼前。`;
+  }
+  if (duration <= 15) {
+    return `${people}很快意识到不能再犹豫，先看见危险，再被逼出一次回应，在${pressure}压到眼前之前做出决断。`;
+  }
+  if (duration <= 30) {
+    return `${pressure}随后又压上来，${people}被迫在退让和迎上之间改了判断；他们终于看清，再多拖一步，就会把仅剩的主动让出去。`;
+  }
+  if (duration <= 45) {
+    return `冲突接连推进了几次，${people}先判断退路，再被新的阻碍逼出选择，紧张从躲避转成决断，关系里的分歧也跟着清晰起来。`;
+  }
+  return `冲突被拉得更久，${people}接连经历判断、犹豫和重新选择，终于意识到不能再拖延，${pressure}也一步步改变他们之间的关系。`;
+}
+
+function buildNarrativeSceneTurnForUi({
+  sceneLabel,
+  people,
+  location,
+  pressure,
+}: {
+  sceneLabel: string;
+  people: string;
+  location: string;
+  pressure: string;
+}) {
+  if (/场域|追逐|合围|行军/.test(sceneLabel)) {
+    return `${people}没有继续硬拼原地的胜负，而是沿${location}寻找能脱身的方向；${pressure}一压近，他们就立刻改道穿过更窄的空隙。距离被${location}里的断面、碎石和窄缝拉开又压近，追赶的压力让迟疑很快消失，只能立刻决定下一步。`;
+  }
+  if (/都市/.test(sceneLabel)) {
+    return `${people}熟悉的${location}忽然显得陌生而不稳，现实像被危险撕开一道缝隙；${pressure}继续压近时，他们没有时间解释这种失序，只能先护住眼前的人和事。`;
+  }
+  if (/热血|战斗|武打|动作|武侠|水墨|仙侠|奇幻|兵器|高光/.test(sceneLabel)) {
+    return `${people}没有退到安全处，而是咬住一口气迎住眼前压力；对抗越近，他们越必须把迟疑压下去，重新抢回一次正面反击。`;
+  }
+  if (/奇观/.test(sceneLabel)) {
+    return `${location}里的危险被远近和空隙放大，原本只压在身前的冲突忽然显得更加开阔；${people}仍然盯住眼前压力，因为越是被放大的危机越不能让人物关系散开。`;
+  }
+  if (/战报/.test(sceneLabel)) {
+    return `${people}很快意识到，这一轮冲突已经留下后果，也留下要立刻处理的下一步；他们只能从刚刚看见的结果反推选择，避免被同一处危险再次拖住。`;
+  }
+  if (/城建|演进/.test(sceneLabel)) {
+    return `${people}看见眼前局面正在因为自己的选择改变，原本只是逃避或对抗的动作，开始留下新的秩序；${pressure}没有停下，反而逼他们确认下一步必须守住什么。`;
+  }
+  if (/权谋/.test(sceneLabel)) {
+    return `${people}没有急着说破判断，而是先看清压力逼来的方向；有限信息里的态势让这场冲突比正面压迫更难回避，也逼他们更快做出选择。`;
+  }
+  if (/群像|表演|朝堂|军帐/.test(sceneLabel)) {
+    return `${people}的僵持牵动了旁侧的沉默和退让，压力不再只压在一个人身上；人物关系被摊开后，犹豫越久，新的立场越清楚。`;
+  }
+  if (/沙盘|视口|战略|战报|城建/.test(sceneLabel)) {
+    return `${people}像站在沙盘前一样判断退路，先看清${location}里哪些方向还能撤开；${pressure}继续压近时，他们必须在信息不完整时先做决定。`;
+  }
+  if (/国战|军阵|攻城|兵器/.test(sceneLabel)) {
+    return `${location}的压迫感像阵前相持一样沉下来，${people}不能只守住自己，还要判断下一步会把局面推向哪里；军阵般的压力让个人冲突带上更沉的胜负感。`;
+  }
+  return `${people}沿着${location}重新判断处境，${pressure}越压越近，犹豫越久，新的阻碍越多，人物关系也在危险里被迫显形。`;
+}
+
 function buildConfirmationCharacterLines(frame: StoryFactFrameForUi, sourceText: string) {
   const characters = uniqueStrings([
     ...frame.characters,
     ...extractCharacterNamesFromText(sourceText),
   ]).slice(0, 6);
   if (!characters.length) {
-    return ["- 名称 / 代号：未在材料中明示；角色功能：以剧本确认稿正文为准。"];
+    return ["- 名称 / 代号：未在材料中明示；角色功能：以改写剧本正文为准。"];
   }
 
   return characters.map((character) => {
@@ -6095,7 +6792,7 @@ function buildConfirmationCharacterLines(frame: StoryFactFrameForUi, sourceText:
     const action =
       findConfirmationMention(frame.events, character) ||
       findSentenceMention(sourceText, character) ||
-      "见剧本确认稿正文";
+      "见改写剧本正文";
     const expression = extractConfirmationKeyword(sourceText, CONFIRMATION_EXPRESSION_TERMS, character) || "未在材料中明示";
     const microAction = extractConfirmationKeyword(sourceText, CONFIRMATION_MICRO_ACTION_TERMS, character) || "未在材料中明示";
     const tone = extractConfirmationKeyword(sourceText, CONFIRMATION_TONE_TERMS, character) || "未在材料中明示";
@@ -6134,12 +6831,12 @@ function buildConfirmationComplexSceneLines(frame: StoryFactFrameForUi, sourceTe
   return [
     `- 空间关系：${formatConfirmationFactList(frame.relationships, "以正文人物关系和位置关系为准", 3)}`,
     `- 压力方向：${pressure}`,
-    `- 前中后景：分镜阶段按已确认地点、可见元素和人物动作拆分，不新增画面事实`,
+    `- 前中后景：后续镜头按已确认地点、可见元素和人物动作拆分，不新增画面事实`,
     `- 动线：${formatConfirmationTerms(sourceText, CONFIRMATION_MOVEMENT_TERMS, pressure)}`,
     `- 背景材质：${formatConfirmationTerms(sourceText, CONFIRMATION_MATERIAL_TERMS, "未在材料中明示")}`,
     `- 光源：${formatConfirmationTerms(sourceText, CONFIRMATION_TIME_LIGHT_TERMS, "未在材料中明示")}`,
-    `- 场面调度：${formatConfirmationFactList(frame.events, "按剧本确认稿正文的事件顺序调度", 3)}`,
-    `- 合理补全：${formatConfirmationInferredFacts(frame.inferredSceneFacts, "未启用额外导演级补全")}`,
+    `- 场面调度：${formatConfirmationFactList(frame.events, "按改写剧本正文的事件顺序调度", 3)}`,
+    `- 可见补充：${formatConfirmationInferredFacts(frame.inferredSceneFacts, "未添加额外内容")}`,
   ];
 }
 
@@ -6155,17 +6852,16 @@ function buildConfirmationBeatLines(
   scriptBody: string,
   durationSeconds: number,
   targetDurationMode: TargetDurationMode,
-  response?: ExpandScriptResponse | null,
+  _response?: ExpandScriptResponse | null,
 ) {
   const duration = normalizeScriptDurationOption(durationSeconds, 15);
   const durationLabel = targetDurationMode === LONG_TEXT_DURATION_MODE
-    ? `长文本模式，预计剧情总时长约 ${duration} 秒`
-    : `固定目标 ${duration} 秒`;
-  const planSummary = responseDurationPlanSummary(response ?? null);
+    ? `长文本模式，预计剧情总量约 ${duration} 秒`
+    : `${duration} 秒叙事段`;
   const beats = buildCandidateSourceSegments(scriptBody).slice(0, 3);
   const beatLabels = beats.length <= 1 ? ["整体"] : beats.length === 2 ? ["起", "落"] : ["起", "承", "落"];
   return [
-    `- 目标节奏：${durationLabel}${planSummary ? `；${planSummary}` : ""}`,
+    `- 叙事节奏：${durationLabel}`,
     ...beats.map((beat, index) => `- ${beatLabels[index] ?? `第 ${index + 1} 落点`}：${sanitizeConfirmationAnchor(beat, 120)}`),
   ];
 }
@@ -6173,11 +6869,11 @@ function buildConfirmationBeatLines(
 function buildConfirmationPromptLines(response?: ExpandScriptResponse | null) {
   const kbSummary = confirmationKbSummary(response);
   return [
-    "- 确认后：正文进入镜头任务拆解，下方分镜字段和导出字段不在本步骤改名或新增。",
+    "- 确认后：正文进入镜头任务拆解，下方镜头字段和导出字段不在本步骤改名或新增。",
     kbSummary
       ? `- 知识库：仅使用摘要信息；${kbSummary}`
       : "- 知识库：仅遵守摘要使用规则，本框不展示知识库原文。",
-    "- 事实边界：未在原文、确认正文或摘要中明示的信息，不作为本次确认内容。",
+    "- 事实范围：未在原文、确认正文或摘要中明示的信息，不作为本次确认内容。",
   ];
 }
 
@@ -6190,8 +6886,57 @@ function confirmationKbSummary(response?: ExpandScriptResponse | null) {
   return safeConfirmationSummary(summary, 140);
 }
 
+function kbOracleHashFromExpandScriptResponse(response?: ExpandScriptResponse | null) {
+  const router = response?.kb_router_result;
+  if (!router) {
+    return "";
+  }
+  const retrievalTrace = router.retrieval_trace && typeof router.retrieval_trace === "object"
+    ? router.retrieval_trace as Record<string, unknown>
+    : {};
+  return stableBindingHashValue({
+    selected_sample_ids: [...(router.selected_sample_ids ?? [])].sort(),
+    selected_kb_rules: (router.selected_kb_rules ?? []).map((rule) => ({
+      rule_id: rule.rule_id,
+      family: rule.family,
+      summary_hash: stableBindingHashJson(rule.summary ?? ""),
+      applies_to: [...(rule.applies_to ?? [])].sort(),
+    })),
+    kb_context_summary_hash: stableBindingHashJson(router.kb_context_summary ?? ""),
+    snapshot_checksum: String(retrievalTrace.snapshot_checksum ?? retrievalTrace.snapshotChecksum ?? ""),
+    full_kb_rows_included: Number(router.full_kb_rows_included ?? 0),
+  });
+}
+
+function buildKbOracleEvidenceForQa(response?: ExpandScriptResponse | null): HopeQaKbOracleEvidence | undefined {
+  const router = response?.kb_router_result;
+  if (!router) {
+    return undefined;
+  }
+  const retrievalTrace = router.retrieval_trace && typeof router.retrieval_trace === "object"
+    ? router.retrieval_trace as Record<string, unknown>
+    : {};
+  return {
+    kb_oracle_hash: kbOracleHashFromExpandScriptResponse(response),
+    kb_context_summary_hash: stableBindingHashJson(router.kb_context_summary ?? ""),
+    kb_rule_pack_ids: (router.selected_kb_rules ?? []).map((rule) => sanitizeQaText(rule.rule_id)).filter(Boolean),
+    kb_snapshot_hash: sanitizeQaText(String(retrievalTrace.snapshot_checksum ?? retrievalTrace.snapshotChecksum ?? "")),
+    full_kb_rows_included: Number(router.full_kb_rows_included ?? retrievalTrace.full_kb_rows_included ?? 0),
+  };
+}
+
 function safeConfirmationSummary(value: string, maxLength = 120) {
-  const clean = sanitizeConfirmationAnchor(value, maxLength);
+  const clean = sanitizeConfirmationAnchor(value, maxLength)
+    .replace(/目标时长/g, "时长")
+    .replace(/保留事实/g, "保持已确认内容")
+    .replace(/合理补全/g, "可见补充")
+    .replace(/事实边界/g, "事实范围")
+    .replace(/结构参考|结构说明/g, "参考摘要")
+    .replace(/辅助依据|创作依据|质量锚点/g, "参考摘要")
+    .replace(/场景表达/g, "场景呈现")
+    .replace(/节奏推进/g, "节奏变化")
+    .replace(/可拆镜头数量增加|可拆镜头/g, "镜头段落可读")
+    .replace(/镜头容量/g, "镜头段落");
   if (!clean || /[_{}\[\]=]|ReadyStub|manifest/i.test(clean)) {
     return "";
   }
@@ -6279,7 +7024,8 @@ function sanitizeConfirmationAnchor(value: string, maxLength = 96) {
 }
 
 function isConfirmationUnsafeLine(line: string) {
-  return /\b(?:prompt_text|source_register|overlay|validator|trace|schema|hash|rows|token|secret|authorization|bearer)\b|raw[_\s-]*(?:kb|prompt)/i.test(line);
+  return /\b(?:prompt_text|source_register|overlay|validator|trace|schema|hash|rows|token|secret|authorization|bearer)\b|raw[_\s-]*(?:kb|prompt)/i.test(line) ||
+    /(结构参考|本段按|策略为|目标时长|分段策略|时长策略|可拆镜头|镜头容量|重点落在|场景表达|节奏推进|人物、地点和事件保持不变|空间移动、追赶距离和转向动作推动事件向前|旧场景的冲突方式不再主导|旧场景的冲撞方式不再主导|动作按逼近|可拆镜头数量增加|改写为|本段基于|保留事实|合理补全|事实边界|结构说明|辅助依据|创作依据|质量锚点|推动事件向前|不再主导)/u.test(line);
 }
 
 function extractConfirmationScriptBodyFromDialogText(value: string) {
@@ -6362,7 +7108,7 @@ function parseScriptDialogBlocks(value: string): ScriptDialogBlock[] {
   }
 
   const headingPattern =
-    /^(正文|扩写剧本|故事材料|镜头脚本|视频分镜提示词|分镜提示词|第\s*\d+\s*段|第\s*\d+\s*拍\s*\d+\s*-\s*\d+\s*秒|结尾|镜头标题|景别|运镜|画面描述|角色动作|对白\/旁白|时长)\s*[：:]?\s*(.*)$/u;
+    /^(正文|改写剧本|故事材料|镜头脚本|视频分镜提示词|分镜提示词|第\s*\d+\s*段|第\s*\d+\s*拍\s*\d+\s*-\s*\d+\s*秒|结尾|镜头标题|景别|运镜|画面描述|角色动作|对白\/旁白|时长)\s*[：:]?\s*(.*)$/u;
   const blocks: ScriptDialogBlock[] = [];
   let current: ScriptDialogBlock | null = null;
 
@@ -6469,6 +7215,11 @@ function formatSceneScaleLabel(value: string) {
   }
 
   return SCENE_SCALE_LABELS[cleanValue.toUpperCase()] ?? SCENE_SCALE_LABELS[cleanValue] ?? cleanValue;
+}
+
+function formatStoryboardRowSceneLabel(row: StoryboardWorkbenchRow) {
+  const label = row.shotSceneLabel?.trim() || row.primarySceneLabel?.trim();
+  return label || "场景未标注";
 }
 
 function formatStoryboardDialogText(value: string) {

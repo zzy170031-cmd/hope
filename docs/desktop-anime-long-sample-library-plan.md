@@ -110,4 +110,38 @@ This validation is not approval. It is only evidence that the current candidate 
 
 Human re-review of all 27 long samples remains required before any approval metadata, runtime consumption change, 403-case, packaging, push, or release step.
 
+## Formal 403 Boundary
+
+The 27 long samples are allowed in formal 403 only as sanitized QA oracle
+material after the controller opens the gate. They remain `qa_only`,
+`reference_only`, `not_source_of_truth`, and `raw_sample_text_for_runtime=false`.
+
+Allowed oracle use:
+
+- scene taxonomy
+- craft tags
+- director rule tags
+- camera / motion anchors
+- negative drift tags
+- compact sample summary
+- expected prompt oracle
+- expected row oracle
+
+Forbidden runtime or artifact use:
+
+- raw `sample_text`
+- raw `smoke_extracts`
+- sample character names
+- sample props
+- sample places
+- sample worldview
+- raw KB rows
+- raw prompt body
+- `source_register`
+- overlay JSON
+
+Formal 403 runner evidence must keep `sample_text_absent=true`,
+`raw_kb_rows_absent=true`, `source_sample_id_absent=true`,
+`sample_entity_marker_absent=true`, and `prompt_text_boundary_passed=true`.
+
 关键节点提醒：请立即刷新线程标签、锚点提交、工作树状态和边界说明。

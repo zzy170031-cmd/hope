@@ -216,3 +216,40 @@ Formal import remains blocked pending external human signoff, source/IP review e
 ### Runtime / Gate Usage Status
 
 Runtime usage, 16-case usage, 403 usage, packaging usage, and release-gate usage are all forbidden for this draft. The preflight state is not gate evidence and does not authorize runtime prompt consumption.
+
+## Formal 403 Boundary
+
+This draft may support formal 403 only as a sanitized structure oracle after a
+controller gate explicitly accepts that use. It remains `qa_only=true`,
+`reference_only=true`, `not_source_of_truth=true`,
+`raw_sample_text_for_runtime=false`, and `formal_import_allowed=false`.
+
+Allowed oracle use is limited to scene taxonomy reference, duration-profile
+reference, expected prompt oracle, expected row oracle, and forbidden drift
+tags. The KB crosswalk remains `candidate_not_exact_join`; it is not a KB rule
+ID and must not be reported as an exact KB join.
+
+Forbidden in runtime prompts, generated rows, logs, chat, and QA artifacts:
+`sample_text`, storyboard row raw prose, raw `smoke_extracts`,
+`source_sample_id`, sample character names, sample props, sample places, sample
+worldview, raw KB rows, `source_register`, and overlay JSON.
+
+## Scene Rewrite Contract Inheritance
+
+Runtime and QA use of the 21 scene types must follow
+`docs/hope-scene-type-rewrite-contract.md`.
+
+The 21 reference samples remain structure-only. They may inform scene taxonomy,
+duration profiles, craft tags, director-rule tags, negative drift guards, and
+compact sample summaries, but they must not provide raw prose or sample facts to
+the user story body.
+
+Duration profiles are guidance for every product target duration, not a closed
+set of sample rewrites. Current fixed values (`5`, `10`, `15`, `30`, `45`,
+`60`) and future positive fixed values must be normalized into narrative
+capacity bands. QA must fail if a scene/duration switch only changes stored
+fields while the visible story body does not change expression or capacity.
+
+Every scene type must use the same rule-pack mechanism. QA samples such as
+`热血战斗 -> 场域追逐` are targeted probes only; they are not implementation
+branches and do not authorize hard-coded scene-pair handling.

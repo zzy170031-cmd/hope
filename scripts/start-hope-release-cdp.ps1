@@ -3,7 +3,7 @@ param(
   [int]$Port = 9224,
   [string]$EnvFile = "C:\Users\Administrator\.codex\.sandbox-secrets\hope-qwen.env",
   [string]$Provider = "qwen",
-  [string]$Model = "qwen-plus-2025-07-28",
+  [string]$Model = "qwen3.6-plus",
   [string]$ExpectedTargetUrl = "http://tauri.localhost/#/workbench",
   [int]$WaitSeconds = 12,
   [int]$StopWaitSeconds = 10,
@@ -28,14 +28,8 @@ $script:LastHopeWebView2QueryError = $null
 $script:ApplicationEventBaseline = Get-Date
 $script:HopeWebView2HardenedBrowserArgs = "--no-first-run --no-default-browser-check --disable-background-networking --disable-component-update --disable-domain-reliability --disable-sync --disable-gpu --disable-gpu-compositing --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --metrics-recording-only --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,OptimizationHints,AutofillServerCommunication,CertificateTransparencyComponentUpdater"
 $AllowedQwenTextModels = @(
-  "qwen-plus-2025-07-28",
   "qwen3.6-plus",
-  "qwen3.6-plus-2026-04-02",
-  "qwen3.6-max-preview",
-  "qwen3-max-2026-01-23",
-  "qwen3.6-flash",
-  "qwen-plus-2025-12-01",
-  "qwen-plus"
+  "qwen3.6-plus-2026-04-02"
 )
 
 function Convert-ResultJson {
@@ -252,24 +246,51 @@ function Get-ProxyEnvPresence {
   $httpProxyPresent = Test-ProcessEnvPresent -Name "HTTP_PROXY"
   $httpsProxyPresent = Test-ProcessEnvPresent -Name "HTTPS_PROXY"
   $allProxyPresent = Test-ProcessEnvPresent -Name "ALL_PROXY"
+  $noProxyPresent = Test-ProcessEnvPresent -Name "NO_PROXY"
+  $lowerHttpProxyPresent = Test-ProcessEnvPresent -Name "http_proxy"
+  $lowerHttpsProxyPresent = Test-ProcessEnvPresent -Name "https_proxy"
+  $lowerAllProxyPresent = Test-ProcessEnvPresent -Name "all_proxy"
+  $lowerNoProxyPresent = Test-ProcessEnvPresent -Name "no_proxy"
+  $uppercaseProxyPresent = [bool]($httpProxyPresent -or $httpsProxyPresent -or $allProxyPresent)
+  $lowercaseProxyPresent = [bool]($lowerHttpProxyPresent -or $lowerHttpsProxyPresent -or $lowerAllProxyPresent)
   [ordered]@{
-    http_proxy_present = [bool]$httpProxyPresent
-    https_proxy_present = [bool]$httpsProxyPresent
-    all_proxy_present = [bool]$allProxyPresent
-    no_proxy_present = [bool](Test-ProcessEnvPresent -Name "NO_PROXY")
-    process_env_proxy_present = [bool]($httpProxyPresent -or $httpsProxyPresent -or $allProxyPresent)
+    http_proxy_present = [bool]($httpProxyPresent -or $lowerHttpProxyPresent)
+    https_proxy_present = [bool]($httpsProxyPresent -or $lowerHttpsProxyPresent)
+    all_proxy_present = [bool]($allProxyPresent -or $lowerAllProxyPresent)
+    no_proxy_present = [bool]($noProxyPresent -or $lowerNoProxyPresent)
+    uppercase_proxy_present = $uppercaseProxyPresent
+    lowercase_proxy_present = $lowercaseProxyPresent
+    process_env_proxy_present = [bool]($uppercaseProxyPresent -or $lowercaseProxyPresent)
     raw_values_redacted = $true
   }
 }
 
+function Test-NoProxyLoopbackOnly {
+  $values = @(
+    [Environment]::GetEnvironmentVariable("NO_PROXY", "Process"),
+    [Environment]::GetEnvironmentVariable("no_proxy", "Process")
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  if ($values.Count -eq 0) {
+    return $true
+  }
+  $allowed = @("localhost", "127.0.0.1", "::1")
+  $entries = @(
+    $values |
+      ForEach-Object { $_.Split(",") } |
+      ForEach-Object { $_.Trim().ToLowerInvariant() } |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  )
+  if ($entries.Count -eq 0) {
+    return $true
+  }
+  @($entries | Where-Object { $allowed -notcontains $_ }).Count -eq 0
+}
+
 function Clear-QaProxyEnv {
-  foreach ($name in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) {
+  foreach ($name in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy")) {
     [Environment]::SetEnvironmentVariable($name, $null, "Process")
     Remove-Item -LiteralPath ("Env:{0}" -f $name) -ErrorAction SilentlyContinue
   }
-  $localBypass = "localhost,127.0.0.1,::1"
-  [Environment]::SetEnvironmentVariable("NO_PROXY", $localBypass, "Process")
-  $env:NO_PROXY = $localBypass
 }
 
 function Get-SanitizedLaunchArgs {
@@ -697,6 +718,9 @@ function Get-HopeWebView2Processes {
             has_remote_debugging_port = $remoteDebuggingPorts.Count -gt 0
             remote_debugging_ports = $remoteDebuggingPorts
             has_no_first_run = $commandLine.Contains("--no-first-run")
+            has_no_default_browser_check = $commandLine.Contains("--no-default-browser-check")
+            has_remote_allow_tauri_localhost = $commandLine.Contains("--remote-allow-origins=http://tauri.localhost")
+            has_disable_web_ooui_features = $commandLine.Contains("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection")
             has_disable_background_networking = $commandLine.Contains("--disable-background-networking")
             has_disable_component_update = $commandLine.Contains("--disable-component-update")
             has_disable_gpu = $commandLine.Contains("--disable-gpu")
@@ -974,6 +998,10 @@ function Get-LaunchDiagnosticEvidence {
       webview2_additional_browser_args_line = $null
       webview2_user_data_folder_line = $null
       diagnostic_log_path_line = $null
+      app_process_env_proxy_present = $null
+      app_process_env_proxy_present_line = $null
+      app_process_no_proxy_loopback_only = $null
+      app_process_no_proxy_loopback_only_line = $null
       last_line = $null
       lines_tail = @()
     }
@@ -1007,6 +1035,10 @@ function Get-LaunchDiagnosticEvidence {
     webview2_additional_browser_args_line = @($lines | Where-Object { $_ -like "*webview2_additional_browser_args=*" -or $_ -like "*webview2_additional_browser_args_runtime=*" } | Select-Object -Last 1)
     webview2_user_data_folder_line = @($lines | Where-Object { $_ -like "*webview2_user_data_folder=*" -or $_ -like "*webview2_user_data_folder_runtime=*" } | Select-Object -Last 1)
     diagnostic_log_path_line = @($lines | Where-Object { $_ -like "*diagnostic_log_path=*" } | Select-Object -First 1)
+    app_process_env_proxy_present = @($lines | Where-Object { $_ -like "*app_process_env_proxy_present=true*" }).Count -gt 0
+    app_process_env_proxy_present_line = @($lines | Where-Object { $_ -like "*app_process_env_proxy_present=*" } | Select-Object -Last 1)
+    app_process_no_proxy_loopback_only = @($lines | Where-Object { $_ -like "*app_process_no_proxy_loopback_only=true*" }).Count -gt 0
+    app_process_no_proxy_loopback_only_line = @($lines | Where-Object { $_ -like "*app_process_no_proxy_loopback_only=*" } | Select-Object -Last 1)
     last_line = if ($lines.Count -gt 0) { $lines[-1] } else { $null }
     lines_tail = @($lines | Select-Object -Last 20)
   }
@@ -1081,16 +1113,52 @@ function Get-WebView2ProfileStageEvidence {
 function Get-WebView2ProcessQueryCapability {
   try {
     $processes = @(Get-CimInstance Win32_Process -Filter "name='msedgewebview2.exe'" -ErrorAction Stop)
+    $hopeProcesses = @(
+      $processes |
+        Where-Object {
+          $_.CommandLine -like "*--webview-exe-name=hope-app.exe*" -or
+          $_.CommandLine -like "*\hope-webview2-cdp\*"
+        }
+    )
+    $nonHopeProcesses = @(
+      $processes |
+        Where-Object {
+          -not (
+            $_.CommandLine -like "*--webview-exe-name=hope-app.exe*" -or
+            $_.CommandLine -like "*\hope-webview2-cdp\*"
+          )
+        }
+    )
+    $nonHopeOwners = @(
+      $nonHopeProcesses |
+        ForEach-Object {
+          $commandLine = [string]$_.CommandLine
+          if ($commandLine -match '--webview-exe-name=([^\s"]+)') {
+            $matches[1]
+          } else {
+            "unknown"
+          }
+        } |
+        Sort-Object -Unique
+    )
     return [ordered]@{
       query_ok = $true
       query_error = $null
       process_count = $processes.Count
+      hope_process_count = $hopeProcesses.Count
+      non_hope_process_count = $nonHopeProcesses.Count
+      non_hope_webview_exe_names = $nonHopeOwners
+      scope = "hope-app-and-hope-webview2-profile-only"
     }
   } catch {
     return [ordered]@{
       query_ok = $false
       query_error = $_.Exception.Message
       process_count = $null
+      hope_process_count = $null
+      non_hope_process_count = $null
+      non_hope_webview_exe_names = @()
+      scope = "query-failed"
     }
   }
 }
@@ -1484,6 +1552,8 @@ function Update-LaunchResultEvidence {
   $Result.webview2_profile_stage_evidence = Get-WebView2ProfileStageEvidence -ProfileDir $ProfileDir
   $Result.webview2_process_query_capability = Get-WebView2ProcessQueryCapability
   $Result.webview2_runtime_status = Get-WebView2RuntimeStatus
+  $Result.app_process_env_proxy_present = $Result.diagnostic_log_evidence.app_process_env_proxy_present
+  $Result.no_proxy_loopback_only = $Result.diagnostic_log_evidence.app_process_no_proxy_loopback_only
   $Result.event_log_evidence = Get-LaunchEventLogEvidence -Since $Since
   $Result.events_since_script_start = Get-RelevantApplicationEvents -Since $Since
   $Result.global_diagnostic_log = $GlobalDiagnosticLog
@@ -1511,8 +1581,9 @@ $effectiveModelEnabled = if ($LaunchDiagnosticOnly) {
 }
 $effectiveProviderTimeoutSeconds = if ($QaProviderHardFail) { 120 } else { 30 }
 $proxyEnvBefore = Get-ProxyEnvPresence
+Clear-QaProxyEnv
+Set-ProcessEnvValue -Name "HOPE_QA_WEBVIEW2_PROXY_CLEARED" -Value "true"
 if ($NoProxy) {
-  Clear-QaProxyEnv
   Set-ProcessEnvValue -Name "HOPE_QA_PROXY_CLEARED" -Value "true"
   Set-ProcessEnvValue -Name "HOPE_QA_PROXY_EVIDENCE" -Value "true"
 } else {
@@ -1562,9 +1633,14 @@ $result = [ordered]@{
   qa_provider_timeout_seconds = if ($QaProviderHardFail) { $effectiveProviderTimeoutSeconds } else { $null }
   effective_provider_timeout_seconds = $effectiveProviderTimeoutSeconds
   qa_provider_timeout_env_value = $effectiveProviderTimeoutEnv
+  launcher_process_env_proxy_present_before = [bool]$proxyEnvBefore.process_env_proxy_present
   proxy_env_before = $proxyEnvBefore
   proxy_env_after = $proxyEnvAfter
   process_env_proxy_present = [bool]$proxyEnvAfter.process_env_proxy_present
+  webview2_launch_env_proxy_cleared = -not [bool]$proxyEnvAfter.process_env_proxy_present
+  webview2_proxy_cleared_in_launcher = -not [bool]$proxyEnvAfter.process_env_proxy_present
+  no_proxy_loopback_only = Test-NoProxyLoopbackOnly
+  app_process_env_proxy_present = $null
   qa_proxy_cleared_in_launcher = [bool]($NoProxy -and -not $proxyEnvAfter.process_env_proxy_present)
   webview2_argument_mode = $WebView2ArgumentMode
   api_key_present = $false
@@ -1595,6 +1671,12 @@ $result = [ordered]@{
   diagnostic_log_evidence = $null
   webview2_profile_stage_evidence = $null
   webview2_process_query_capability = $null
+  webview2_process_query_capability_after_stop = $null
+  webview2_cleanup_scope = "hope-app-and-hope-webview2-profile-only"
+  webview2_total_process_count_after_stop = $null
+  webview2_hope_process_count_after_stop = $null
+  webview2_non_hope_process_count_after_stop = $null
+  webview2_non_hope_process_owners_after_stop = @()
   webview2_runtime_status = $null
   event_log_evidence = $null
   stopped_existing_pids = @()
@@ -1678,6 +1760,7 @@ $result.exe_size = $exeItem.Length
 $result.exe_fingerprint = Get-FileFingerprint -Path $exe
 $result.exe_sha256 = $result.exe_fingerprint.sha256
 $result.build_provenance = Get-ReleaseBuildProvenance -RepoRoot $RepoRoot -ExeLastWriteTime $exeItem.LastWriteTime
+$result.webview2_process_query_capability = Get-WebView2ProcessQueryCapability
 
 if ($StopExisting -or $StopOnly) {
   $existingPids = @(Get-HopeAppProcessIds)
@@ -1691,6 +1774,11 @@ if ($StopExisting -or $StopOnly) {
   $remainingWebView2 = @(Get-HopeWebView2Processes)
   $result.webview2_query_error = $script:LastHopeWebView2QueryError
   $result.webview2_remaining_pids = @($remainingWebView2 | ForEach-Object { $_.id })
+  $result.webview2_process_query_capability_after_stop = Get-WebView2ProcessQueryCapability
+  $result.webview2_total_process_count_after_stop = $result.webview2_process_query_capability_after_stop.process_count
+  $result.webview2_hope_process_count_after_stop = $result.webview2_process_query_capability_after_stop.hope_process_count
+  $result.webview2_non_hope_process_count_after_stop = $result.webview2_process_query_capability_after_stop.non_hope_process_count
+  $result.webview2_non_hope_process_owners_after_stop = $result.webview2_process_query_capability_after_stop.non_hope_webview_exe_names
   $portStateAfterStop = Get-PortState -LocalPort $Port
   $result.port_listening = [bool]$portStateAfterStop.listening
   $result.port_released = -not [bool]$portStateAfterStop.listening
@@ -1714,13 +1802,25 @@ if ($StopExisting -or $StopOnly) {
     $remainingWebView2 = @(Get-HopeWebView2Processes)
     $result.webview2_query_error = $script:LastHopeWebView2QueryError
     $result.webview2_remaining_pids = @($remainingWebView2 | ForEach-Object { $_.id })
+    $result.webview2_process_query_capability_after_stop = Get-WebView2ProcessQueryCapability
+    $result.webview2_total_process_count_after_stop = $result.webview2_process_query_capability_after_stop.process_count
+    $result.webview2_hope_process_count_after_stop = $result.webview2_process_query_capability_after_stop.hope_process_count
+    $result.webview2_non_hope_process_count_after_stop = $result.webview2_process_query_capability_after_stop.non_hope_process_count
+    $result.webview2_non_hope_process_owners_after_stop = $result.webview2_process_query_capability_after_stop.non_hope_webview_exe_names
     $portStateAfterStopOnly = Get-PortState -LocalPort $Port
     $result.port_listening = [bool]$portStateAfterStopOnly.listening
     $result.port_released = -not [bool]$portStateAfterStopOnly.listening
     $result.port_owning_processes = $portStateAfterStopOnly.owning_processes
     $result.port_states = $portStateAfterStopOnly.states
     $result.events_since_script_start = Get-RelevantApplicationEvents -Since $script:ApplicationEventBaseline
-    $result.ok = [bool]($unlockState.unlocked -and $result.hope_app_remaining_pids.Count -eq 0 -and $result.webview2_remaining_pids.Count -eq 0 -and $result.port_released)
+    $webview2QueryOk = [bool]($result.webview2_process_query_capability -and $result.webview2_process_query_capability.query_ok)
+    $result.ok = [bool]($webview2QueryOk -and $unlockState.unlocked -and $result.hope_app_remaining_pids.Count -eq 0 -and $result.webview2_remaining_pids.Count -eq 0 -and $result.port_released)
+    if (-not $webview2QueryOk) {
+      $result.error = "WebView2 process query is unavailable; StopOnly cannot prove cleanup"
+      Write-StopOnlyCleanupArtifact -Result $result | Out-Null
+      Convert-ResultJson $result
+      exit 4
+    }
     if (-not $unlockState.unlocked) {
       $result.error = "release exe is still locked after stop-only cleanup"
       Write-StopOnlyCleanupArtifact -Result $result | Out-Null
@@ -1748,6 +1848,13 @@ if ($StopExisting -or $StopOnly) {
   }
 }
 
+if (-not $StopOnly -and [bool]$result.process_env_proxy_present) {
+  $result.error = "proxy environment was not cleared before WebView2 launch"
+  $result.events_since_script_start = Get-RelevantApplicationEvents -Since $script:ApplicationEventBaseline
+  Convert-ResultJson $result
+  exit 6
+}
+
 $unlockState = Wait-FileUnlocked -Path $exe -TimeoutSeconds $FileUnlockWaitSeconds
 $result.exe_unlocked_before_launch = [bool]$unlockState.unlocked
 $result.exe_unlocked = [bool]$unlockState.unlocked
@@ -1764,6 +1871,7 @@ $result.webview2_user_data_folder = $profileDir
 $prelaunchHopePids = @(Get-HopeAppProcessIds)
 $prelaunchWebView2 = @(Get-HopeWebView2Processes)
 $result.webview2_query_error = $script:LastHopeWebView2QueryError
+$result.webview2_process_query_capability = Get-WebView2ProcessQueryCapability
 $prelaunchPortState = Get-PortState -LocalPort $Port
 $profileState = Test-DirectoryWritable -Path $profileDir
 $profileOwnedByOldProcess = @(
@@ -1774,8 +1882,14 @@ $profileOwnedByOldProcess = @(
 $result.prelaunch_gate = [ordered]@{
   hope_app_clear = $prelaunchHopePids.Count -eq 0
   hope_app_pids = $prelaunchHopePids
+  webview2_query_ok = [bool]($result.webview2_process_query_capability -and $result.webview2_process_query_capability.query_ok)
   webview2_clear = $prelaunchWebView2.Count -eq 0
   webview2_pids = @($prelaunchWebView2 | ForEach-Object { $_.id })
+  webview2_total_process_count = $result.webview2_process_query_capability.process_count
+  webview2_hope_process_count = $result.webview2_process_query_capability.hope_process_count
+  webview2_non_hope_process_count = $result.webview2_process_query_capability.non_hope_process_count
+  webview2_non_hope_process_owners = $result.webview2_process_query_capability.non_hope_webview_exe_names
+  webview2_cleanup_scope = $result.webview2_cleanup_scope
   webview2_query_error = $script:LastHopeWebView2QueryError
   port_released = -not [bool]$prelaunchPortState.listening
   port_owning_processes = $prelaunchPortState.owning_processes
@@ -1787,7 +1901,7 @@ $result.prelaunch_gate = [ordered]@{
   user_data_folder_owned_by_old_process = $profileOwnedByOldProcess.Count -gt 0
   user_data_folder_old_process_pids = $profileOwnedByOldProcess
 }
-if (-not $result.prelaunch_gate.hope_app_clear -or -not $result.prelaunch_gate.webview2_clear -or -not $result.prelaunch_gate.port_released -or -not $result.prelaunch_gate.exe_unlocked -or -not $result.prelaunch_gate.user_data_folder_writable -or $result.prelaunch_gate.user_data_folder_owned_by_old_process) {
+if (-not $result.prelaunch_gate.webview2_query_ok -or -not $result.prelaunch_gate.hope_app_clear -or -not $result.prelaunch_gate.webview2_clear -or -not $result.prelaunch_gate.port_released -or -not $result.prelaunch_gate.exe_unlocked -or -not $result.prelaunch_gate.user_data_folder_writable -or $result.prelaunch_gate.user_data_folder_owned_by_old_process) {
   $result.hope_app_remaining_pids = $prelaunchHopePids
   $result.webview2_remaining_pids = @($prelaunchWebView2 | ForEach-Object { $_.id })
   $result.port_listening = [bool]$prelaunchPortState.listening
@@ -1795,7 +1909,11 @@ if (-not $result.prelaunch_gate.hope_app_clear -or -not $result.prelaunch_gate.w
   $result.port_owning_processes = $prelaunchPortState.owning_processes
   $result.port_states = $prelaunchPortState.states
   $result.events_since_script_start = Get-RelevantApplicationEvents -Since $script:ApplicationEventBaseline
-  $result.error = "prelaunch gate failed"
+  if (-not $result.prelaunch_gate.webview2_query_ok) {
+    $result.error = "WebView2 process query is unavailable before launch; refusing to start release shell"
+  } else {
+    $result.error = "prelaunch gate failed"
+  }
   Convert-ResultJson $result
   exit 6
 }
