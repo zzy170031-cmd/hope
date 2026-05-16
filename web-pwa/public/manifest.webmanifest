@@ -1,0 +1,17 @@
+{
+  "name": "Hope Web PWA",
+  "short_name": "Hope Web",
+  "description": "纯前端浏览器版故事正文与分镜提示词生成器。",
+  "display": "standalone",
+  "background_color": "#11211d",
+  "theme_color": "#11211d",
+  "start_url": "/",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

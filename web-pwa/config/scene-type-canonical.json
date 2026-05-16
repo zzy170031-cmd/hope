@@ -1,0 +1,23 @@
+[
+  { "value": "hot_blood_battle", "label": "热血战斗", "family": "conflict" },
+  { "value": "ensemble_performance", "label": "群像表演", "family": "performance" },
+  { "value": "emotional_dialogue", "label": "情绪对话", "family": "performance" },
+  { "value": "encounter_performance", "label": "相遇表演", "family": "performance" },
+  { "value": "field_chase", "label": "场域追逐", "family": "conflict" },
+  { "value": "spectacle_showcase", "label": "奇观展示", "family": "spectacle" },
+  { "value": "daily_healing", "label": "日常治愈", "family": "performance" },
+  { "value": "guoman_hot_blood_combat", "label": "国漫热血打斗", "family": "conflict" },
+  { "value": "guoman_ensemble_performance", "label": "国漫群像表演", "family": "performance" },
+  { "value": "ink_wuxia_combat", "label": "水墨武打", "family": "conflict" },
+  { "value": "eastern_spectacle", "label": "东方奇观", "family": "spectacle" },
+  { "value": "xianxia_action", "label": "仙侠动作", "family": "conflict" },
+  { "value": "urban_fantasy", "label": "都市奇幻", "family": "spectacle" },
+  { "value": "chinese_war_formation", "label": "国战军阵建立", "family": "epic" },
+  { "value": "weapon_highlight", "label": "武将兵器高光", "family": "conflict" },
+  { "value": "council_strategy", "label": "朝堂军帐权谋", "family": "epic" },
+  { "value": "siege_defense", "label": "多军团攻城", "family": "epic" },
+  { "value": "slg_sandbox_view", "label": "沙盘战略视口", "family": "epic" },
+  { "value": "slg_march_encirclement", "label": "行军轨迹合围", "family": "epic" },
+  { "value": "slg_city_growth", "label": "城建演进反馈", "family": "epic" },
+  { "value": "slg_battle_report", "label": "战报 UI", "family": "epic" }
+]

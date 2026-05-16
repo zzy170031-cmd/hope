@@ -1,0 +1,17 @@
+{
+  "version": "hope-web-formal403-v2",
+  "entry": [
+    { "case_id": "entry-01", "kind": "entry", "description": "browser app loads" },
+    { "case_id": "entry-02", "kind": "entry", "description": "api config ready" },
+    { "case_id": "entry-03", "kind": "entry", "description": "kb snapshot ready" },
+    { "case_id": "entry-04", "kind": "entry", "description": "export verification ready" }
+  ],
+  "fixed": {
+    "durations": [5, 10, 15, 30, 45, 60],
+    "modes": ["expand_story", "rewrite_script", "storyboard_from_body"]
+  },
+  "long": {
+    "duration": 60,
+    "mode": "expand_story"
+  }
+}
